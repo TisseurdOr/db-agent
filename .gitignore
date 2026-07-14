@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Secrets — 永远不要提交
+.env
+.env.*
+!.env.example
+
+# Local database
+db/*.db
+
+# Test / cache
+.pytest_cache/
+__pycache__/
+.DS_Store
