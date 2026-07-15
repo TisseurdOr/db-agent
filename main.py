@@ -28,7 +28,7 @@ agent.TOOL_HANDLERS = {
     "analyze_results": analyze_results,
 }
 
-SYSTEM_PROMPT = open("prompts/system_prompt.md", encoding="utf-8").read()
+# SYSTEM_PROMPT = open("prompts/system_prompt.md", encoding="utf-8").read()
 
 
 async def main():
@@ -63,7 +63,7 @@ async def main():
         result = await agent_loop(
             client=client,
             user_message=user_input,  # 简化版：只传当前消息
-            system_prompt=SYSTEM_PROMPT,
+            # system_prompt=SYSTEM_PROMPT,
         )
         print(f"\nAgent: {result}")
 

@@ -12,6 +12,14 @@ TOOL_HANDLERS = {}
 
 MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
+# system=[
+#     {
+#         "type": "text",
+#         "text": system_prompt,
+#         "cache_control": {"type": "ephemeral"}
+#     }
+# ],
+
 
 async def _run_tool(name: str, tool_input: dict) -> tuple[str, bool]:
     """执行 tool，返回 (content, is_error)。失败时不抛出，交给模型处理。"""
@@ -29,7 +37,7 @@ async def _run_tool(name: str, tool_input: dict) -> tuple[str, bool]:
 async def agent_loop(
     client: Anthropic,
     user_message: str,
-    system_prompt: str,
+    # system_prompt: str,
     max_turns: int = 10,
 ):
     """核心 Agent Loop — Observe → Think → Act → Observe..."""
@@ -41,7 +49,12 @@ async def agent_loop(
         response = client.messages.create(
             model=MODEL,
             max_tokens=1024,
-            system=system_prompt,
+            system=[
+                {
+                    "type": "text",
+                    "text": open("prompts/system_prompt.md", encoding="utf-8").read(),
+                    "cache_control": {"type": "ephemeral"}
+                }],
             messages=messages,
             tools=TOOLS,
         )
@@ -84,7 +97,9 @@ async def agent_loop(
     return "已达到最大轮次"
 
 
-async def agent_loop_streaming(client, user_message, system_prompt, max_turns=10):
+async def agent_loop_streaming(client, user_message, 
+system_prompt, 
+max_turns=10):
     messages = [{"role": "user", "content": user_message}]
 
     for turn in range(max_turns):
@@ -92,7 +107,7 @@ async def agent_loop_streaming(client, user_message, system_prompt, max_turns=10
         with client.messages.stream(
             model=MODEL,
             max_tokens=1024,
-            system=system_prompt,
+            system=system,
             messages=messages,
             tools=TOOLS,
         ) as stream:
