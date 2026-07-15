@@ -9,7 +9,7 @@ from anthropic import Anthropic
 import agent
 from agent import agent_loop
 from db.seed import init_db
-
+from streaming_agent import streaming_agent
 # 注册所有 Tool
 from tools.schema import LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, list_tables, describe_table
 from tools.query import RUN_QUERY_TOOL, run_query
@@ -28,7 +28,7 @@ agent.TOOL_HANDLERS = {
     "analyze_results": analyze_results,
 }
 
-# SYSTEM_PROMPT = open("prompts/system_prompt.md", encoding="utf-8").read()
+SYSTEM_PROMPT = open("prompts/system_prompt.md", encoding="utf-8").read()
 
 
 async def main():
@@ -60,12 +60,20 @@ async def main():
         messages_history.append({"role": "user", "content": user_input})
 
         # 调 Agent Loop
-        result = await agent_loop(
+        '''result = await agent_loop(
             client=client,
             user_message=user_input,  # 简化版：只传当前消息
             # system_prompt=SYSTEM_PROMPT,
+        )'''
+        #调 agent streaming loop
+        result = await streaming_agent(
+            client=client,
+            user_msg=user_input,
+            system_prompt=SYSTEM_PROMPT,
+            tools=agent.TOOLS,
+            handlers=agent.TOOL_HANDLERS,
         )
-        print(f"\nAgent: {result}")
+        # print(f"\nAgent: {result}")
 
         messages_history.append({"role": "assistant", "content": result})
 
