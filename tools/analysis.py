@@ -4,7 +4,9 @@ ANALYZE_RESULTS_TOOL = {
     "name": "analyze_results",
     "description": (
         "分析 run_query 返回的查询结果，生成排名、汇总和可视化建议。"
-        "在拿到查询数据后调用，帮助用业务语言向用户解释结果。"
+        "在拿到查询数据后、需要向用户解释排名或占比时调用。"
+        "返回 JSON: {title, insight, ranking: [{rank, label, value, formatted, share_pct}], "
+        "total, total_formatted, chart_suggestion}；出错时返回 error 及 available（可用列名）。"
     ),
     "input_schema": {
         "type": "object",
@@ -49,9 +51,17 @@ def analyze_results(
     # 校验列是否存在
     sample = rows[0]
     if metric_column not in sample:
-        return {"error": f"找不到数值列 '{metric_column}'", "available": list(sample.keys())}
+        return {
+            "error": f"找不到数值列 '{metric_column}'",
+            "available": list(sample.keys()),
+            "hint": "请从 available 中选一个数值列作为 metric_column 重试。",
+        }
     if label_column not in sample:
-        return {"error": f"找不到标签列 '{label_column}'", "available": list(sample.keys())}
+        return {
+            "error": f"找不到标签列 '{label_column}'",
+            "available": list(sample.keys()),
+            "hint": "请从 available 中选一个列作为 label_column 重试。",
+        }
 
     # 转成可排序的 (label, value) 列表
     items = []

@@ -4,9 +4,11 @@ from db.seed import DB_PATH
 RUN_QUERY_TOOL = {
     "name": "run_query",
     "description": (
-        "在 SQLite 数据库上执行一条只读 SELECT 查询。"
-        "只允许 SELECT 语句。返回最多 50 行结果。"
-        "复杂查询优先用 CTE (WITH 子句)。"
+        "在 SQLite 数据库上执行一条 SELECT 查询。"
+    "当你需要从数据库获取数据时使用此工具。"
+    "调用前必须先通过 describe_table 了解字段名——不要猜测。"
+    "只支持 SELECT 语句。"
+    "返回 JSON: {rows: [...], count: N, truncated: bool}"
     ),
     "input_schema": {
         "type": "object",
@@ -26,7 +28,9 @@ def run_query(sql: str) -> dict:
     if not cleaned.startswith("SELECT"):
         return {
             "error": "只允许 SELECT 查询",
-            "detail": f"检测到非 SELECT 语句"
+            "detail": "检测到非 SELECT 语句",
+            "hint": "请把语句改写为 SELECT；写操作（INSERT/UPDATE/DELETE 等）不被允许。",
+            "sql": sql,
         }
 
     conn = sqlite3.connect(DB_PATH)
@@ -34,12 +38,17 @@ def run_query(sql: str) -> dict:
     try:
         cursor = conn.execute(sql)
         rows = [dict(row) for row in cursor.fetchmany(50)]
-        conn.close()
         return {
             "rows": rows,
             "count": len(rows),
             "truncated": len(rows) >= 50
         }
     except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "sql": sql,
+            "hint": "检查表名/字段名是否正确，可先调 describe_table 确认字段后重试。",
+        }
+    finally:
         conn.close()
-        return {"error": str(e), "sql": sql}
