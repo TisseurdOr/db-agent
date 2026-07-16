@@ -25,6 +25,7 @@ load_dotenv()
 from anthropic import Anthropic
 from db.seed import init_db
 from prompts.system_prompt import build_system_prompt
+from memory.short_term_memory import ConversationManager
 
 # 注册所有 Tool —— Tool defs 和 handler 在这里绑定，
 # 传给 agent.streaming_agent() 时作为一个整体。
@@ -87,8 +88,12 @@ async def main():
         base_url=os.environ.get("ANTHROPIC_BASE_URL"),
     )
 
-    # System Prompt 用工厂函数生成——可注入 db_type, user_role 变量。
-    # Phase 3 接入后，extra_context 参数会传入 memory block + RAG 检索结果。
+    # 对话记忆管理器——最近 N 轮保留原文，更早的压缩成摘要。
+    # 摘要由 streaming_agent 每轮调用前注入 System Prompt，实现跨轮上下文记忆。
+    conversation = ConversationManager(client)
+
+    # 基础 System Prompt——只建一次（不含对话记忆）。
+    # 对话摘要在 streaming_agent 内部每轮注入，所以这里不传 extra_context。
     system_prompt = build_system_prompt(db_type="sqlite", user_role="数据分析师")
 
     print(f"数据分析 Agent 已启动（模型: {args.model}）")
@@ -99,6 +104,8 @@ async def main():
     print("  - 分析一下销售趋势")
     print("输入 'quit' 退出\n")
 
+    from agent import streaming_agent
+
     while True:
         user_input = input("\n你: ").strip()
         if user_input.lower() == "quit":
@@ -107,15 +114,31 @@ async def main():
             continue
 
         # 调统一 agent loop——streaming + cache_control + tool 结果可视化。
-        # 来自 agent.py（已合并 agent_loop + streaming_agent）。
-        from agent import streaming_agent
-        await streaming_agent(
+        # - conversation: 早期对话摘要，由 streaming_agent 每轮注入 System Prompt
+        # - history: 最近几轮原文，拼在当前消息前，让第二轮能引用第一轮结果
+        # 取 history 要在 add_message 之前——此刻 messages 只含"上一轮及更早"。
+        result = await streaming_agent(
             client=client,
             user_msg=user_input,
             system_prompt=system_prompt,
             tools=TOOLS,
             handlers=TOOL_HANDLERS,
             model=args.model,
+            conversation=conversation,
+            history=list(conversation.messages),
+        )
+
+        # 记录本轮对话——超过窗口时 ConversationManager 会自动压缩最旧的消息。
+        await conversation.add_message({"role": "user", "content": user_input})
+        await conversation.add_message({"role": "assistant", "content": result})
+
+        # 每轮打日志——观察 token 占用变化：压缩触发前 recent 持续涨，
+        # 触发后 recent 回落、summary 出现，total 曲线就能看出记忆策略在起效。
+        est = conversation.token_estimate()
+        print(
+            f"[memory] 本轮 tokens≈{est['total']} "
+            f"(原文 {est['recent']}/{est['recent_msgs']}条, "
+            f"摘要 {est['summary']}/{est['compressed_msgs']}条已压缩)"
         )
 
 

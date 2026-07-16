@@ -82,32 +82,46 @@ async def streaming_agent(
     max_turns: int = MAX_TURNS,
     temperature: float = 0.0,
     show_tool_results: bool = True,
+    conversation=None,
+    history: list = None,
 ) -> str:
     """统一的 Agent Loop——streaming + cache_control + 工具调用可视化。
 
     Args:
         client: Anthropic client（已配置 base_url + api_key）
         user_msg: 当前用户消息
-        system_prompt: System Prompt 文本（由 prompts/system_prompt.py 工厂函数生成）
+        system_prompt: System Prompt 基础文本（由 prompts/system_prompt.py 工厂函数生成，
+            不含对话记忆；对话摘要在本函数内每轮注入）
         tools: Tool definitions 列表（必传——调用方决定注册哪些 Tool）
         handlers: Tool 名 → 实现函数的映射（必传——调用方负责绑定实现）
         model: 模型名，不传则用环境变量 ANTHROPIC_MODEL 或默认 sonnet
         max_turns: 最大推理轮数，防止死循环
         temperature: Agent 场景固定 0——Tool 调用需要确定性，不能随机
         show_tool_results: 是否在终端显示 Tool 调用过程和结果摘要
+        conversation: 可选的 ConversationManager；传入后每轮调用前会把
+            conversation.build_context()（早期对话摘要）注入 System Prompt
+        history: 可选的历史消息列表（最近几轮的原文 user/assistant 消息）。
+            传入后会拼在当前 user_msg 之前，让模型看到最近对话——
+            这样第二轮问"其中..."时无需重新探索表结构。
     """
     if model is None:
         model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
 
-    messages = [{"role": "user", "content": user_msg}]
-
-    # 给 System Prompt 包 cache_control。
-    # 注意：也要给 tools 参数里的前几个 tool definition 包 cache——
-    # Anthropic SDK 会自动给 tools 列表里前 1024+ tokens 的内容加 cache。
-    # 我们只需确保 system 带了 cache_control，SDK 会处理 tools。
-    cached_system = _build_cacheable_system(system_prompt)
+    # 历史消息（最近几轮原文）+ 当前消息。history 为空时行为和以前一致。
+    messages = list(history or []) + [{"role": "user", "content": user_msg}]
 
     for turn in range(max_turns):
+        # 每轮调用前：把对话摘要注入 System Prompt，再包 cache_control。
+        # build_context() 返回早期对话的压缩摘要（无摘要时为空串）。
+        # 注意：同一次 streaming_agent 调用内 conversation 不会更新，
+        # 所以每轮注入的内容一致——对 prompt cache 友好（内容相同即命中）。
+        system_text = system_prompt
+        if conversation is not None:
+            context = conversation.build_context()
+            if context:
+                system_text = f"{system_prompt}\n\n---\n## 对话上下文\n{context}\n---"
+        cached_system = _build_cacheable_system(system_text)
+
         # 用于积累 streaming 中到达的 tool_use 和 text
         tool_use_blocks = {}   # {content_block_index: {id, name, input_str}}
         text_content = ""
