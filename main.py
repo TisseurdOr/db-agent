@@ -127,8 +127,10 @@ async def main():
         # ② 长期记忆查询.放在 streaming_agent(...) 调用外面,一轮问答只搜一次.用当前问题搜相关历史，结果准备注入
         # 搜到的 memories 怎么传进 agent——要么拼进 system_prompt,要么加个参数,这是下一步的事。
         # 读：搜相关历史（retrieve 只检索、不再生成答案）
-        memories = await long_memory.retrieve(user_input, top_k=3)
-        
+        if is_chitchat(user_input):
+            memories = []
+        else:
+            memories = await long_memory.retrieve(user_input, top_k=3)
         
         # 把检索结果拼成文字，再拼进这轮的 System Prompt
         memories_text  = "\n\n".join(m['text'] for m in memories)

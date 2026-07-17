@@ -56,15 +56,29 @@ class ChromaVectorDB:
         return hits
 
 class RAGPipeline:
-    def __init__(self, vector_db, llm_client, embed_model=None):
+    def __init__(self, vector_db, llm_client, embed_model=None, hyde_client=None, hyde_model=None):
         self.vector_db = vector_db
-        self.llm = llm_client
-        # self.embed_client = OpenAI()  # 或本地 BGE 模型
+        self.llm = llm_client  # 主 LLM（DeepSeek Anthropic）——rerank / query / HyDE 默认用它
         self.embed_client = OpenAI(
-        api_key=os.environ["EMBEDDING_API_KEY"],
-        base_url=os.environ["EMBEDDING_BASE_URL"],
+            api_key=os.environ["EMBEDDING_API_KEY"],
+            base_url=os.environ["EMBEDDING_BASE_URL"],
         )
         self.embed_model = embed_model or os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
+
+        # HyDE 默认走主 Agent 同一条 DeepSeek 链路（Anthropic 兼容）。
+        # 百炼对话模型在你账号上常报 Arrearage，embedding 能用但 chat 不行。
+        # 若以后要单独换 HyDE 提供商，传 hyde_client 或设 HYDE_USE_OPENAI=1。
+        self.hyde_use_openai = os.getenv("HYDE_USE_OPENAI", "").lower() in ("1", "true", "yes")
+        if hyde_client is not None:
+            self.hyde_client = hyde_client
+        elif self.hyde_use_openai:
+            self.hyde_client = OpenAI(
+                api_key=os.getenv("HYDE_API_KEY") or os.environ["EMBEDDING_API_KEY"],
+                base_url=os.getenv("HYDE_BASE_URL") or os.environ["EMBEDDING_BASE_URL"],
+            )
+        else:
+            self.hyde_client = None  # 用 self.llm
+        self.hyde_model = hyde_model or os.getenv("HYDE_MODEL") or os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """文本 → 向量"""
@@ -103,18 +117,40 @@ class RAGPipeline:
         return results[:top_k]
 
     async def _generate_hypothesis(self, query: str) -> str:
-        """HyDE: 生成假设性答案"""
-        logger.info("HyDE 触发: query=%r", query)
-        resp = self.llm.messages.create(
-            # model="claude-haiku-3-5",  # 便宜模型够了
-            model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
-            max_tokens=200,
-            messages=[{
-                "role": "user",
-                "content": f"请用一段话详细描述以下查询可能涉及的场景和数据。请包含具体数字、日期、类别等细节以帮助检索相关文档。查询: {query}"
-            }]
+        """HyDE: 生成假设性答案。默认走 DeepSeek（Anthropic SDK），能真正出正文。"""
+        logger.info("HyDE 触发: query=%r, model=%s, via=%s",
+                    query, self.hyde_model,
+                    "openai" if self.hyde_client is not None else "anthropic")
+        prompt = (
+            "请用一段话详细描述以下查询可能涉及的场景和数据。"
+            "请包含具体数字、日期、类别等细节以帮助检索相关文档。"
+            f"查询: {query}"
         )
-        return extract_text(resp, context="hyde")
+        try:
+            if self.hyde_client is not None:
+                # OpenAI 兼容（百炼等）——你账号上 chat 常报 Arrearage，默认不用
+                resp = self.hyde_client.chat.completions.create(
+                    model=self.hyde_model,
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = (resp.choices[0].message.content or "").strip()
+            else:
+                # DeepSeek Anthropic 兼容——主 Agent 同链路，已验证可用
+                resp = self.llm.messages.create(
+                    model=self.hyde_model,
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = extract_text(resp, context="hyde").strip()
+            if not text:
+                logger.warning("HyDE 返回空正文 (model=%s)", self.hyde_model)
+            else:
+                logger.info("HyDE 成功: 假设答案前60字=%r", text[:60])
+            return text
+        except Exception as e:
+            logger.warning("HyDE 调用失败，退回原 query: %s", e)
+            return ""
 
     async def _rerank(self, query: str, candidates: list, top_k: int) -> list:
         """简化 rerank: 用 LLM 一次打分"""
