@@ -1,3 +1,11 @@
+import os
+
+from memory.token_budget import TokenBudget
+
+# 窗口压缩用便宜快模型；默认 DeepSeek Flash（勿写死 Claude，DeepSeek endpoint 调不通）
+DEFAULT_COMPRESS_MODEL = "deepseek-v4-flash"
+
+
 class HybridWindowManager:
     """滑动窗口 + 分层摘要 + Token 预算联动。
 
@@ -7,9 +15,12 @@ class HybridWindowManager:
       Layer 2: 更早 — 对话级摘要（一段话概括）
     """
 
-    def __init__(self, client, budget: TokenBudget):
+    def __init__(self, client, budget: TokenBudget, compress_model: str | None = None):
         self.client = client
         self.budget = budget
+        self.compress_model = compress_model or os.getenv(
+            "COMPRESS_MODEL", DEFAULT_COMPRESS_MODEL
+        )
 
     async def manage(self, messages: list[dict]) -> tuple[list[dict], str]:
         """返回 (压缩后的消息列表, 注入 System Prompt 的摘要块)。"""
@@ -46,15 +57,17 @@ class HybridWindowManager:
 
     async def _compress_pair(self, messages: list[dict]) -> str:
         resp = self.client.messages.create(
-            model="claude-haiku-3-5", max_tokens=100,
-            messages=[{"role": "user", "content": f"用一句话总结（中文）: {str(messages)[:500]}"}]
+            model=self.compress_model,
+            max_tokens=100,
+            messages=[{"role": "user", "content": f"用一句话总结（中文）: {str(messages)[:500]}"}],
         )
         return resp.content[0].text.strip()
 
     async def _compress_to_summary(self, messages: list[dict]) -> str:
         resp = self.client.messages.create(
-            model="claude-haiku-3-5", max_tokens=300,
+            model=self.compress_model,
+            max_tokens=300,
             system="请用中文提炼对话要点，保留关键决策、数据、偏好。200 字符内。",
-            messages=[{"role": "user", "content": str(messages)[:3000]}]
+            messages=[{"role": "user", "content": str(messages)[:3000]}],
         )
         return resp.content[0].text.strip()

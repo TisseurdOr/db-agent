@@ -22,7 +22,8 @@ RUN_QUERY_TOOL = {
     }
 }
 
-def run_query(sql: str) -> dict:
+# 解决方案: Tool 层主动截断 + 结构化摘要
+def run_query(sql: str, max_rows: int = 50) -> dict:
     # 安全：只允许 SELECT（防 SQL 注入 + 防误删数据）
     cleaned = sql.strip().upper()
     if not cleaned.startswith("SELECT"):
@@ -35,13 +36,20 @@ def run_query(sql: str) -> dict:
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # 让结果可以用列名访问
+    """执行 SELECT 查询，自动截断大结果集。"""
     try:
         cursor = conn.execute(sql)
-        rows = [dict(row) for row in cursor.fetchmany(50)]
+        rows = [dict(row) for row in cursor.fetchmany(max_rows + 1)]
+        truncated = len(rows) > max_rows
+        #滑动窗口截断超长tools结果
+        rows = rows[:max_rows] if truncated else rows
         return {
             "rows": rows,
             "count": len(rows),
-            "truncated": len(rows) >= 50
+            "truncated": truncated,
+            "hint": f"结果已截断，仅显示前 {max_rows} 行。如需更多数据，请用 WHERE 或 LIMIT 缩小范围。" if truncated else None,
+            # 不返回所有 1000 行——返回摘要 + 前 50 行
+            "summary": generate_summary(rows) if truncated else None,
         }
     except Exception as e:
         return {
@@ -52,3 +60,19 @@ def run_query(sql: str) -> dict:
         }
     finally:
         conn.close()
+#不调 LLM，用 Python 算
+def generate_summary(rows: list) -> str:
+    """对查询结果做统计摘要——零 API 成本。"""
+    if not rows:
+        return "空结果"
+    cols = list(rows[0].keys())
+    numeric_cols = [
+        c for c in cols
+        if all(isinstance(r.get(c), (int, float)) for r in rows if r.get(c) is not None)
+    ]
+    parts = [f"共 {len(rows)} 行, {len(cols)} 列"]
+    for c in numeric_cols[:3]:  # 最多 3 个数值列
+        vals = [r[c] for r in rows if r.get(c) is not None]
+        if vals:
+            parts.append(f"{c}: avg={sum(vals)/len(vals):.1f} min={min(vals)} max={max(vals)}")
+    return " | ".join(parts)

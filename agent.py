@@ -18,6 +18,9 @@ import json
 import os
 from anthropic import Anthropic, APIStatusError
 from memory.vector_store import VectorMemory
+from memory.token_budget import TokenBudget
+from memory.hybrid_window_manager import HybridWindowManager
+
 # 不从模块级拿 TOOLS / TOOL_HANDLERS——tools 和 handlers 一律由调用方显式传入。
 # 好处：
 #   1. 不依赖全局可变状态——调用方传什么就用什么，不会因为 import 顺序出错
@@ -85,6 +88,8 @@ async def streaming_agent(
     conversation=None,
     history: list = None,
     vector_memory: VectorMemory = None,
+    budget : TokenBudget = None,
+    window_manager: HybridWindowManager = None,
 ) -> str:
     """统一的 Agent Loop——streaming + cache_control + 工具调用可视化。
 
@@ -107,28 +112,50 @@ async def streaming_agent(
     """
     if model is None:
         model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+    #----TOKEN BUDGET--初始化
+    if budget is None:
+        budget = TokenBudget(
+            max_tokens=int(os.getenv("TOKEN_BUDGET_MAX", "32000")),
+            warn_threshold=float(os.getenv("TOKEN_BUDGET_WARN", "0.7")),
+        ) 
+    budget.set_fixed_costs(system_prompt, tools)
+
+    if window_manager is None:
+        window_manager = HybridWindowManager(
+            client=client,
+            budget=budget,
+        )
 
     # 历史消息（最近几轮原文）+ 当前消息。history 为空时行为和以前一致。
     messages = list(history or []) + [{"role": "user", "content": user_msg}]
 
+    #agent调用开始
     for turn in range(max_turns):
+        # ---TOKEN BUDGET--每轮开始: 检查预算（与参照写法一致）
+        if budget.should_compress(messages):
+            messages, context_block = await window_manager.manage(messages)
+            # 把上下文块注入到本轮 system prompt
+            full_system_prompt = system_prompt + f"\n\n[历史对话摘要]\n{context_block}"
+        else:
+            full_system_prompt = system_prompt
+
         # 每轮调用前：把对话摘要注入 System Prompt，再包 cache_control。
         # build_context() 返回早期对话的压缩摘要（无摘要时为空串）。
         # 注意：同一次 streaming_agent 调用内 conversation 不会更新，
         # 所以每轮注入的内容一致——对 prompt cache 友好（内容相同即命中）。
-        system_text = system_prompt
         if conversation is not None:
-            context = conversation.build_context()
-            if context:
-                system_text = f"{system_prompt}\n\n---\n## 对话上下文\n{context}\n---"
-        cached_system = _build_cacheable_system(system_text)
+            short_term_summary = conversation.build_context()
+            if short_term_summary:
+                full_system_prompt += f"\n\n---\n## 短期记忆\n{short_term_summary}\n---"
+
+        print(f"[Turn {turn+1}] {budget.summary(messages)}")
+        cached_system = _build_cacheable_system(full_system_prompt)
 
         # 用于积累 streaming 中到达的 tool_use 和 text
         tool_use_blocks = {}   # {content_block_index: {id, name, input_str}}
         text_content = ""
 
-        # temperature=0 的理由：Agent 选 Tool 必须确定。
-        # temperature > 0 时模型可能随机选一个不存在的 Tool，
+        # temperature=0 的理由：Agent 选 Tool 必须确定。temperature > 0 时模型可能随机选一个不存在的 Tool，
         # 或者把本该调 run_query 的请求直接编一个回答——这在 Agent 场景不可接受。
         with client.messages.stream(
             model=model,
@@ -214,6 +241,11 @@ async def streaming_agent(
         # 以 user 角色发送。顺序不对会报 400。
         messages.append({"role": "user", "content": tool_results})
 
+        # TOKEN BUDGET每轮结束: 如果 tool 结果太大，截断
+        for tr in tool_results:
+            if len(str(tr)) > 3000:
+                tr["content"] = str(tr["content"])[:3000] + "...(truncated)"
+ 
     return "已达到最大轮次"
 
 
@@ -235,14 +267,14 @@ async def agent_loop(
         model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
 
     messages = [{"role": "user", "content": user_message}]
-    cached_system = _build_cacheable_system(system_prompt)
+    cacheable_system_blocks = _build_cacheable_system(system_prompt)
 
     for turn in range(max_turns):
         response = client.messages.create(
             model=model,
             max_tokens=4096,
             temperature=temperature,
-            system=cached_system,
+            system=cacheable_system_blocks,
             messages=messages,
             tools=tools,
         )

@@ -43,6 +43,7 @@ class TokenBudget:
 
     def should_compress(self, messages: list[dict]) -> bool:
         """是否该触发压缩。"""
+        
         used = self.current_usage(messages) + self.system_prompt_tokens + self.tool_defs_tokens
         return used > self.max_tokens * self.warn_threshold
 
