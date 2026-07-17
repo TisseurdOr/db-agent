@@ -1,59 +1,14 @@
-import numpy as np
+# memory/long_term_memory.py — RAG 检索增强层
+#
+# 向量库（ChromaDB）已抽到 memory/vector_store.VectorMemory。
+# 本文件只负责：embedding + HyDE + rerank + 对话读写编排。
+# 依赖 vector_db 提供：add(...) / search(query_vec, ...) —— VectorMemory 已对齐。
+
 from openai import OpenAI  # 用 OpenAI embedding（最方便）
 import uuid
-import chromadb
 import os
 from utils.llm import extract_text, logger  # 安全取文字 + 共享日志器
 
-class ChromaVectorDB:
-    """把 ChromaDB 包成 RAGPipeline 期望的 .add() / .search() 接口。
-
-    为什么要这层适配器：
-    - RAGPipeline 里用的是 self.vector_db.search(query_vec, top_k, filters)
-    - 但 ChromaDB 原生方法叫 .query()，参数名也不同（query_embeddings/n_results/where）
-    - 用适配器把「统一接口」翻译成「ChromaDB 的调用」，RAGPipeline 就不用改
-    """
-
-    def __init__(self, persist_dir="memory/chroma_db", collection_name="conversations"):
-        # PersistentClient = 落盘，重启不丢；cosine = 文本相似度常用距离
-        self.client = chromadb.PersistentClient(path=persist_dir)
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name,
-            metadata={"hnsw:space": "cosine"},
-        )
-
-    def add(self, ids, documents, embeddings, metadatas=None):
-        """写入：向量 + 原文 + 元数据。"""
-        self.collection.add(
-            ids=ids,
-            documents=documents,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
-        logger.info("向量库写入: %d 条, 库中共 %d 条", len(ids), self.collection.count())
-
-    def search(self, query_vec, top_k=5, filters=None):
-        """检索：翻译成 ChromaDB 的 query()，返回 RAGPipeline 要的 {text, score} 列表。"""
-        count = self.collection.count()
-        if count == 0:            # 空库直接返回，别让 query 报错
-            logger.info("向量检索: 库为空，跳过")
-            return []
-        res = self.collection.query(
-            query_embeddings=[query_vec],       # 用现成向量（模式B）
-            n_results=min(top_k, count),        # 别超过库里总数
-            where=filters,                      # None 表示不过滤
-        )
-        # query 支持多条查询，返回嵌套 list，取第 0 条
-        docs = res["documents"][0]
-        dists = res["distances"][0]
-        metas = res["metadatas"][0]
-        # 余弦距离越小越像 → 换成 0~1 的 score，rerank/query 用得上
-        hits = [
-            {"text": d, "score": round(1 - dist, 3), "metadata": m}
-            for d, dist, m in zip(docs, dists, metas)
-        ]
-        logger.info("向量检索: 请求 top_k=%d, 命中 %d 条", top_k, len(hits))
-        return hits
 
 class RAGPipeline:
     def __init__(self, vector_db, llm_client, embed_model=None):
@@ -61,20 +16,23 @@ class RAGPipeline:
         self.llm = llm_client
         # self.embed_client = OpenAI()  # 或本地 BGE 模型
         self.embed_client = OpenAI(
-        api_key=os.environ["EMBEDDING_API_KEY"],
-        base_url=os.environ["EMBEDDING_BASE_URL"],
+            api_key=os.environ["EMBEDDING_API_KEY"],
+            base_url=os.environ["EMBEDDING_BASE_URL"],
         )
         self.embed_model = embed_model or os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
-
+    '''
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """文本 → 向量"""
         resp = self.embed_client.embeddings.create(
             model=self.embed_model, input=texts
         )
         vecs = [d.embedding for d in resp.data]
-        logger.info("embedding: model=%s, %d 条文本 -> %d 维", self.embed_model, len(texts), len(vecs[0]) if vecs else 0)
+        logger.info(
+            "embedding: model=%s, %d 条文本 -> %d 维",
+            self.embed_model, len(texts), len(vecs[0]) if vecs else 0,
+        )
         return vecs
-
+    '''
     async def retrieve(self, query: str, top_k: int = 5,
                        filters: dict = None) -> list[dict]:
         """检索 + 可选 HyDE + 可选 rerank"""
@@ -111,7 +69,11 @@ class RAGPipeline:
             max_tokens=200,
             messages=[{
                 "role": "user",
-                "content": f"请用一段话详细描述以下查询可能涉及的场景和数据。请包含具体数字、日期、类别等细节以帮助检索相关文档。查询: {query}"
+                "content": (
+                    "请用一段话详细描述以下查询可能涉及的场景和数据。"
+                    "请包含具体数字、日期、类别等细节以帮助检索相关文档。"
+                    f"查询: {query}"
+                ),
             }]
         )
         return extract_text(resp, context="hyde")
@@ -128,7 +90,10 @@ class RAGPipeline:
             max_tokens=50,
             messages=[{
                 "role": "user",
-                "content": f"从以下文档片段中选出与查询最相关的{top_k}个。只输出编号，如 3,7,12。查询: {query}\n\n{pairs}"
+                "content": (
+                    f"从以下文档片段中选出与查询最相关的{top_k}个。"
+                    f"只输出编号，如 3,7,12。查询: {query}\n\n{pairs}"
+                ),
             }]
         )
         # 解析编号，返回对应 candidates
@@ -137,6 +102,7 @@ class RAGPipeline:
             return [candidates[i] for i in indices if i < len(candidates)]
         except (ValueError, IndexError):
             return candidates[:top_k]  # fallback
+
     async def add_conversation(self, question: str, answer: str, metadata: dict = None):
         """把一轮问答存进长期记忆：拼文字 → embedding → 存向量库。"""
         logger.info("写入长期记忆: 问=%r", question[:40])
@@ -148,7 +114,8 @@ class RAGPipeline:
             embeddings=[vector],                        # 算好的向量
             metadatas=[metadata or {"type": "conversation"}],
         )
-    async def query_conversation(self, question: str, top_k: int = 5) -> dict:
+
+    async def query_conversation(self, question: str, top_k: int = 5) -> list[dict]:
         """查询长期记忆：拼文字 → embedding → 向量检索"""
         vector = (await self.embed([question]))[0]
         results = self.vector_db.search(vector, top_k=top_k)

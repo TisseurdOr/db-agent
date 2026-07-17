@@ -26,7 +26,8 @@ from anthropic import Anthropic
 from db.seed import init_db
 from prompts.system_prompt import build_system_prompt
 from memory.short_term_memory import ConversationManager
-from memory.long_term_memory import RAGPipeline, ChromaVectorDB# 注册所有 Tool —— Tool defs 和 handler 在这里绑定，
+from memory.vector_store import VectorMemory
+# 注册所有 Tool —— Tool defs 和 handler 在这里绑定，
 # 传给 agent.streaming_agent() 时作为一个整体。
 # 好处：测试时可以传 mock handler，main.py 传真实 handler，agent.py 不感知。
 from tools.schema import (
@@ -91,14 +92,9 @@ async def main():
     # 摘要由 streaming_agent 每轮调用前注入 System Prompt，实现跨轮上下文记忆。
     conversation = ConversationManager(client)
 
-    #① 长期记忆——每轮对话 embedding 落盘 ChromaDB，跨会话可按语义找回。
-    # ① 长期记忆——ChromaDB 存对话向量，跨会话按语义找回。
-    vector_db = ChromaVectorDB()
-    long_memory = RAGPipeline(vector_db=vector_db, llm_client=client)
-
-    # 基础 System Prompt——只建一次（不含对话记忆）。
-    # 对话摘要在 streaming_agent 内部每轮注入，所以这里不传 extra_context。
-    system_prompt = build_system_prompt(db_type="sqlite", user_role="数据分析师")
+    # 长期记忆：VectorMemory（remember / recall）。
+    # 课程要求：每轮先 recall(user_query)，把结果注入 System Prompt。
+    vector_memory = VectorMemory(collection_name="conversations")
 
     print(f"数据分析 Agent 已启动（模型: {args.model}）")
     print("试试这些：")
@@ -124,17 +120,19 @@ async def main():
         if not user_input:
             continue
 
-        # ② 长期记忆查询.放在 streaming_agent(...) 调用外面,一轮问答只搜一次.用当前问题搜相关历史，结果准备注入
-        # 搜到的 memories 怎么传进 agent——要么拼进 system_prompt,要么加个参数,这是下一步的事。
-        # 读：搜相关历史（retrieve 只检索、不再生成答案）
-        memories = await long_memory.retrieve(user_input, top_k=3)
-        
-        
-        # 把检索结果拼成文字，再拼进这轮的 System Prompt
-        memories_text  = "\n\n".join(m['text'] for m in memories)
-        turn_prompt = system_prompt
-        if memories_text:
-            turn_prompt = f"{system_prompt}\n\n[历史对话]\n{memories_text}\n---"
+        # 记忆检索：对话开始时先 recall，再把结果注入本轮 System Prompt。
+        # 闲聊跳过，避免无意义 embedding。
+        memories = (
+            [] if is_chitchat(user_input)
+            else vector_memory.recall(user_input, top_k=3)
+        )
+        memories_text = "\n\n".join(m["text"] for m in memories)
+        turn_prompt = build_system_prompt(
+            db_type="sqlite",
+            user_role="数据分析师",
+            extra_context=f"[历史对话]\n{memories_text}" if memories_text else "",
+        )
+
         # 调统一 agent loop——streaming + cache_control + tool 结果可视化。
         # - conversation: 早期对话摘要，由 streaming_agent 每轮注入 System Prompt
         # - history: 最近几轮原文，拼在当前消息前，让第二轮能引用第一轮结果
@@ -153,8 +151,11 @@ async def main():
         # 记录本轮对话——超过窗口时 ConversationManager 会自动压缩最旧的消息。
         await conversation.add_message({"role": "user", "content": user_input})
         await conversation.add_message({"role": "assistant", "content": result})
-        # ③ 写：把这轮问答 embedding 存进长期记忆
-        await long_memory.add_conversation(user_input, result)
+        # 写：用 remember（带 user_id），才能被上面的 recall 找回。
+        vector_memory.remember(
+            content=f"问: {user_input}\n答: {result}",
+            memory_type="conversation",
+        )
         # 每轮打日志——观察 token 占用变化：压缩触发前 recent 持续涨，
         # 触发后 recent 回落、summary 出现，total 曲线就能看出记忆策略在起效。
         est = conversation.token_estimate()

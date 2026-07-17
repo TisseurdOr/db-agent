@@ -52,6 +52,8 @@ def build_system_prompt(
 # Layer 3: Workflow（工作流程）
 
 ## 标准流程
+0. 记忆检索：每轮对话开始前，系统已用语义检索把相关历史注入下方「额外上下文」。
+   若有历史对话，优先参考再回答；没有则按正常流程处理。
 1. 如果用户的问题涉及具体数据，先调 get_db_schema_summary 了解整体结构
 2. 如果不确定某张表的字段，调 describe_table 确认——绝对不要猜字段名
 3. 写 SQL，调 run_query 执行

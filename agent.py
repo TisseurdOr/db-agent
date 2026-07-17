@@ -17,7 +17,7 @@ import inspect
 import json
 import os
 from anthropic import Anthropic, APIStatusError
-
+from memory.vector_store import VectorMemory
 # 不从模块级拿 TOOLS / TOOL_HANDLERS——tools 和 handlers 一律由调用方显式传入。
 # 好处：
 #   1. 不依赖全局可变状态——调用方传什么就用什么，不会因为 import 顺序出错
@@ -84,6 +84,7 @@ async def streaming_agent(
     show_tool_results: bool = True,
     conversation=None,
     history: list = None,
+    vector_memory: VectorMemory = None,
 ) -> str:
     """统一的 Agent Loop——streaming + cache_control + 工具调用可视化。
 
@@ -174,9 +175,10 @@ async def streaming_agent(
         # final_msg.content 里每个 block 的 .input 已经是完整的 Python dict，
         # 不需要再手动解析 JSON（SDK 在 stream 结束后帮我们 parse 了）
         tool_uses = [b for b in final_msg.content if b.type == "tool_use"]
-
+        
         if not tool_uses:
             print()  # 换行——streaming 输出后收尾
+            vector_memory.remember(f"用户: {user_msg}\n助手: {text_content}") if vector_memory else None
             return text_content
 
         # 显示 Tool 完整参数（JSON 格式，一行，中文不转义）

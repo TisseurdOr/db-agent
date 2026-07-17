@@ -15,6 +15,9 @@
 5. [`KeyError: 'answer'`（拼接历史对话时）](#5-keyerror-answer)
 6. [`KeyError: 'ANTHROPIC_API_KEY'`](#6-keyerror-anthropic_api_key)
 7. [`pip install` 装了包却还是 ModuleNotFound / uv sync 后消失](#7-pip-install-装了包却还是-modulenotfound)
+8. [向量维度不匹配 `expecting dimension of 1024, got 2560`](#8-向量维度不匹配-expecting-dimension-of-1024-got-2560)
+9. [HyDE 对问候/闲聊短句也触发，白调 LLM 拖慢响应](#9-hyde-对问候闲聊短句也触发白调-llm-拖慢响应)
+10. [`recall` 永远空：旧记忆没有 `user_id`](#10-recall-永远空旧记忆没有-user_id)：新旧数据迁移
 
 ---
 
@@ -246,6 +249,39 @@ memories = [] if _is_chitchat(user_input) else await long_memory.retrieve(user_i
 
 **涉及文件**
 `main.py`（检索前的闲聊门）、`memory/long_term_memory.py`（`retrieve` 的 HyDE 条件）
+
+---
+
+## 10. `recall` 永远空：旧记忆没有 `user_id`
+
+**现象**
+每轮 `vector_memory.recall(user_query)` 注入 System Prompt，但日志里常是
+`recall 完成: 返回 0 条`；问「上次那个……」模型找不到向量历史，转而去调
+`read_memory`（SQLite）也是空的。Chroma 里其实有十几条对话。
+
+**原因**
+两套写入路径的 metadata 不一致：
+
+| 写入方式 | metadata | `recall` 能否命中 |
+|----------|----------|-------------------|
+| 旧：`RAGPipeline.add_conversation` | `{"type": "conversation"}`，**无 `user_id`** | 否（被 where 滤掉） |
+| 新：`VectorMemory.remember` | 含 `user_id` / `memory_type` | 是 |
+
+`recall` 默认 `where={"user_id": "default"}`。旧文档没有这个字段，
+Chroma 过滤匹配不到 → 永远返回空。读用 `recall`、写曾用 `add_conversation`
+时必踩。
+
+**解决**
+1. **读侧兼容**：`recall` 带 `user_id` 过滤若 0 命中（或 Chroma 抛错），
+   自动退回不过滤再搜一次；日志会打
+   `user_id 过滤无命中，退回不过滤（兼容旧数据）`。
+2. **写侧统一**：新对话用 `remember()`（带 `user_id`），不要再用
+   `add_conversation` 写同一 collection，避免继续制造无 `user_id` 的脏数据。
+3. （可选）清库重建：删掉 `memory/chroma_db/` 后只走 `remember`，元数据一致。
+
+**涉及文件**
+`memory/vector_store.py`（`recall`）、`main.py`（`remember` / `recall`）、
+`memory/long_term_memory.py`（旧 `add_conversation`）
 
 ---
 
