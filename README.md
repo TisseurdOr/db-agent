@@ -104,9 +104,44 @@ db-agent/
 - **为什么不用 LangChain？** 先理解底层 Agent Loop（Observe → Think → Act）。Phase 4 引入 LangGraph 做多 Agent 编排。
 - **为什么只允许 SELECT？** 安全考量。SQL 白名单校验 + 只读限制，防止 LLM 生成 DROP/UPDATE。
 - **为什么用 SQLite？** 零配置。生产环境换 PostgreSQL 改连接串即可。
-- **为什么不用 Haiku 而用 DeepSeek？** DeepSeek API 兼容 Anthropic SDK，价格是 Haiku 的 ~1/10，Tool Use 能力足够。国内访问延迟更低。
 - **为什么用 @tool 装饰器而不是手写 JSON Schema？** 手写 schema 每个 Tool ~30 行，改参数名要同步改 3 处。装饰器从 type hints + docstring 自动生成，~8 行一个 Tool，零重复。
 - **为什么 System Prompt 用 Python 函数而不是 .md 文件？** 可注入 db_type、user_role、extra_context（Phase 3 memory block 注入点），MD 文件做不到变量替换。
+
+## 目前实现的功能
+1.agent记忆系统：
+memory三层记忆模型
+┌─────────────────────────────────────────────────────┐
+│                  Working Memory                      │
+│           当前这一轮的"草稿纸"                          │
+│    变量、中间推理、Tool 返回结果、scratchpad            │
+├─────────────────────────────────────────────────────┤
+│                 Short-term Memory                     │
+│           当前会话的"聊天记录"                           │
+│    messages 数组、上下文窗口内的历史                     │
+│    容量: 受 context window 限制（200K tokens）         │
+├─────────────────────────────────────────────────────┤
+│                  Long-term Memory                   │
+│           跨会话的"知识库 + 用户档案"                    │
+│    向量库 + 结构化存储 + 知识图谱                        │
+│    容量: 近乎无限（按需检索）                            │
+└─────────────────────────────────────────────────────┘
+
+
+
+第一层 Working Memory，是推理过程中的临时状态，用 CoT 和 Tool 结果摘要来确保模型推理不被打断。
+
+第二层 Short-term Memory，就是对话历史。关键问题是 200K窗口看起来大但多轮 Tool 调用很快就满了。
+使用用混合策略：
+最近 10 轮保留原文，更早的用千问压缩成摘要，超过窗口 → 压缩最旧的一半，注入到System Prompt 的上下文块里。成本很低。
+
+第三层 Long-term Memory，分两条线。结构化数据（用户偏好、实体关系）走 SQLite——写操作确定、查操作精确。
+非结构化对话走向量库——存 conversation embedding，用户下次说'上次那个分析'时语义匹配找回来。
+选型依据：结构化数据不需要向量检索——精确匹配更快更准。
+向量检索只用在语义模糊的自然语言回忆场景。"
+
+2.RAG
+(1) 知识时效——LLM 训练数据有截止日期；(2) 幻觉——没资料时 LLM 会编，有资料时能引用。
+RAG
 
 ## 示例
 

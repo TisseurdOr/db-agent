@@ -178,7 +178,7 @@ async def streaming_agent(
         
         if not tool_uses:
             print()  # 换行——streaming 输出后收尾
-            vector_memory.remember(f"用户: {user_msg}\n助手: {text_content}") if vector_memory else None
+            # vector_memory.remember(f"用户: {user_msg}\n助手: {text_content}") if vector_memory else None
             return text_content
 
         # 显示 Tool 完整参数（JSON 格式，一行，中文不转义）
