@@ -18,6 +18,10 @@
 8. [向量维度不匹配 `expecting dimension of 1024, got 2560`](#8-向量维度不匹配-expecting-dimension-of-1024-got-2560)
 9. [HyDE 对问候/闲聊短句也触发，白调 LLM 拖慢响应](#9-hyde-对问候闲聊短句也触发白调-llm-拖慢响应)
 10. [`recall` 永远空：旧记忆没有 `user_id`](#10-recall-永远空旧记忆没有-user_id)：新旧数据迁移
+11. [Agent Loop 首轮 `UnboundLocalError: context_block`](#11-agent-loop-首轮-unboundlocalerror-context_block)
+12. [`hybrid_window_manager` middle 层切片丢失消息（7~13 条时）](#12-hybrid_window_manager-middle-层切片丢失消息713-条时)
+13. [Tool 结果截断在 `messages.append` 之后执行](#13-tool-结果截断在-messagesappend-之后执行)
+14. [Token 预算和 ConversationManager 同时往 System Prompt 注摘要](#14-token-预算和-conversationmanager-同时往-system-prompt-注摘要)
 
 ---
 
@@ -43,7 +47,7 @@ text = extract_text(resp, context="hyde")   # 取不到会记日志并返回 ""
 ```
 
 **涉及文件**
-`utils/llm.py`、`memory/long_term_memory.py`、`memory/short_term_memory.py`
+`utils/llm.py`、`memory/long_term_memory.py`、`memory/short_term_memory.py`、`memory/hybrid_window_manager.py`
 
 ---
 
@@ -282,6 +286,130 @@ Chroma 过滤匹配不到 → 永远返回空。读用 `recall`、写曾用 `add
 **涉及文件**
 `memory/vector_store.py`（`recall`）、`main.py`（`remember` / `recall`）、
 `memory/long_term_memory.py`（旧 `add_conversation`）
+
+---
+
+## 11. Agent Loop 首轮 `UnboundLocalError: context_block`
+
+**现象**
+```
+UnboundLocalError: cannot access local variable 'context_block'
+```
+启动 Agent 后第一条消息就崩。堆栈指向 `if conversation is not None and not context_block:`。
+
+**原因**
+`streaming_agent` 的 for 循环里，`context_block` 只在 `budget.should_compress()` 返回 True
+时才被赋值（`messages, context_block = await window_manager.manage(...)`）。
+首轮消息量少，`should_compress` 为 False → `context_block` 从未赋值 →
+执行到 `not context_block` 时 Python 报 `UnboundLocalError`。
+
+**解决**
+循环前初始化 `context_block = ""`：
+```python
+context_block = ""  # token 预算未触发时为空
+for turn in range(max_turns):
+    if budget.should_compress(messages):
+        messages, context_block = await window_manager.manage(messages)
+        ...
+    # 现在 else 分支里 context_block 已有默认值 ""
+```
+
+**涉及文件**
+`agent.py`（`streaming_agent`）
+
+---
+
+## 12. `hybrid_window_manager` middle 层切片丢失消息（7~13 条时）
+
+**现象**
+对话消息总数在 7~13 条之间时，触发压缩后早期消息丢失——模型丢失上下文。
+
+**原因**
+`HybridWindowManager.manage()` 的 middle 层切片有 bug：
+```python
+# 原代码（有 bug）
+middle = messages[6:-6]  # 10 条消息时 → [6:4] → 空列表！
+```
+`messages[6:-6]` 在消息数 < 14 时，start (6) > end (len-6) → 返回空列表，
+导致第 0~5 条消息既不进入 layer0 也不进入 middle，直接被丢弃。
+
+message 数 = 10 时：layer0 取 [4:10]，middle 本该取 [0:4]，实际取到 []。
+
+**解决**
+用 `[:-6]`（"倒数第 6 条之前的所有"）替代 `[6:-6]`（"从第 6 条到倒数第 6 条"）：
+```python
+if len(messages) > 14:
+    middle = messages[-14:-6]
+elif len(messages) > 6:
+    middle = messages[:-6]   # ← 修复：取最后 6 条之前的所有消息
+else:
+    middle = []
+```
+
+**涉及文件**
+`memory/hybrid_window_manager.py`（`manage`）
+
+---
+
+## 13. Tool 结果截断在 `messages.append` 之后执行
+
+**现象**
+代码 review 时发现 Tool 结果的大文本截断写在 `messages.append(...)` 之后——
+读代码的人会怀疑"这截断生效了吗？"
+
+**原因**
+```python
+# 原代码顺序（阅读上像 bug）
+messages.append({"role": "user", "content": tool_results})   # 先加
+for tr in tool_results:                                       # 后截断
+    if len(str(tr)) > 3000:
+        tr["content"] = str(tr["content"])[:3000] + "..."
+```
+因为 `tool_results` 是同一个 list 引用，所以 append 后的修改在 list 内生效。
+功能上没 bug，但**逻辑顺序反直觉**——正确的语义是"先截断再加"，代码应该表达这个意图。
+面试 code review 环节会被追问。
+
+**解决**
+截断放在 `append` 之前，每个 Tool 结果在构造 dict 时直接截：
+```python
+for tc in tool_uses:
+    content, is_error = await _execute_tool(tc.name, tc.input, handlers)
+    if len(content) > 3000:
+        content = content[:3000] + "...(truncated)"
+    tool_results.append({...})
+messages.append({"role": "user", "content": tool_results})
+```
+同时改用 `len(content)` 而非 `len(str(tr))`——后者把 dict 的 key 也算进去了。
+
+**涉及文件**
+`agent.py`（`streaming_agent`）
+
+---
+
+## 14. Token 预算和 ConversationManager 同时往 System Prompt 注摘要
+
+**现象**
+多轮对话时 System Prompt 里出现两段相似的历史摘要：一段来自
+`HybridWindowManager.manage()`（labeled `[历史对话摘要]`），另一段来自
+`ConversationManager.build_context()`（labeled `## 短期记忆`）。内容可能重复或矛盾。
+
+**原因**
+两套压缩机制各管各的——Token 预算按 token 量触发，ConversationManager 按条数触发；
+两者没有互斥逻辑。当 token 预算已经通过 `window_manager.manage()` 裁掉旧消息、
+生成上下文块后，`conversation.build_context()` 基于的原始消息列表可能还包含已裁掉的内容，
+两段摘要的信息源不同，同时注入 System Prompt 会让模型困惑。
+
+**解决**
+加互斥：token 预算已触发压缩时（`context_block` 非空），跳过 conversation 摘要注入：
+```python
+if conversation is not None and not context_block:
+    short_term_summary = conversation.build_context()
+    ...
+```
+反之亦然——当 token 预算没触发时，conversation 的摘要正常注入，互补不重叠。
+
+**涉及文件**
+`agent.py`（`streaming_agent`）
 
 ---
 

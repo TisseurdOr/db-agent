@@ -8,45 +8,75 @@
 用户 (CLI)
     │
     ▼
-┌──────────────┐   System Prompt + 记忆上下文   ┌──────────────────┐
-│   main.py    │ ────────────────────────────► │  LLM API         │
-│ 注册 9 Tools │                               │  (DeepSeek 等)   │
-│ 记忆编排     │                               └────────▲─────────┘
-└──────┬───────┘                                        │
-       │                                                │ Think
-       ▼                                                │
-┌──────────────┐  tools=TOOLS                           │
-│  agent.py    │ ──────────────────────────────────────►│
-│ Agent Loop   │◄───────────────────────────────────────┘
-│ Observe→     │        tool_use / text
-│ Think→Act    │
-└──────┬───────┘
-       │ Act: handlers[name]
-       ▼
-┌──────────────────────────────────────────────────────────────┐
-│ tools/                                                       │
-│  schema.py    list_tables / describe_table / get_schema_summary│
-│  query.py     run_query (只读 SELECT)                         │
-│  analysis.py  analyze_results / compare_periods               │
-│  knowledge.py search_knowledge_base / save_to_memory / read_memory│
-└──────────────────────────┬───────────────────────────────────┘
-                           ▼
-              ┌─────────────────────┐
-              │ SQLite DB + 向量库   │
-              │ db/demo.db          │
-              │ memory/chroma_db/   │
-              └─────────────────────┘
-
-── 记忆系统（每轮对话自动运行）──
-       ┌────────────────────┐
-       │ ConversationManager │  短期：最近 N 轮原文 + 早期压缩摘要
-       │ (short_term_memory) │
-       └────────┬───────────┘
-                │ recall(user_query) → 注入 System Prompt
-       ┌────────▼───────────┐
-       │   VectorMemory     │  长期：ChromaDB 向量检索 + 语义匹配
-       │   (vector_store)   │
-       └────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  main.py — 记忆编排层                                            │
+│  • 每轮前: recall(user_query) → 向量检索历史记忆                  │
+│  • 每轮前: build_system_prompt(extra_context=记忆) → 注入 Prompt  │
+│  • 每轮后: remember(问答) → 写入向量库；add_message → 对话管理     │
+│  • 闲聊过滤: is_chitchat() → 跳过无意义的检索和记忆写入            │
+└────────────┬────────────────────────────────────────────────────┘
+             │ System Prompt + 记忆上下文 + Tools
+             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  agent.py — streaming agent loop                                │
+│                                                                  │
+│  ┌──────────────┐  每轮开始   ┌──────────────────┐               │
+│  │ TokenBudget   │ ─────────► │ HybridWindow     │               │
+│  │ should_compress?          │ Manager          │               │
+│  │ 70% 阈值预警  │ ◄───────── │ 3层压缩:          │               │
+│  └──────────────┘            │ L0 最近6条原文    │               │
+│                              │ L1 7-14条轻摘要   │               │
+│  ┌──────────────────┐        │ L2 更早全局摘要   │               │
+│  │ ConversationMgr  │        └──────────────────┘               │
+│  │ 最近10条原文 +    │        context_block →                    │
+│  │ 早期压缩摘要      │        注入 System Prompt                 │
+│  └──────────────────┘                                           │
+│                                                                  │
+│  Observe → Think → Act                                          │
+│       │         │                                                │
+│       │         └── tool_use ──► _execute_tool()                 │
+│       │                              │                           │
+│       │                              ▼                           │
+│       │               ┌─────────────────────────┐               │
+│       │               │ 9 Tools                  │               │
+│       │               │ schema / query /         │               │
+│       │               │ analysis / knowledge     │               │
+│       │               └──────────┬──────────────┘               │
+│       │                          │                               │
+│       │                          ▼                               │
+│       │               ┌─────────────────────┐                   │
+│       │               │ SQLite DB            │                   │
+│       │               │ db/demo.db           │                   │
+│       │               └─────────────────────┘                   │
+│       │                                                          │
+│       └── Tool 结果截断 (len > 3000 → truncate) ← token 保护     │
+└──────────────────────────────────────────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  memory/ — 三层记忆 + Token 预算                                  │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+│  │ token_budget │  │ hybrid_window    │  │ short_term       │   │
+│  │ estimate     │  │ _manager         │  │ _memory          │   │
+│  │ should_compress│ │ 3层压缩           │  │ ConversationMgr  │   │
+│  │ available    │  │ L0/L1/L2         │  │ 混合策略          │   │
+│  └──────────────┘  └──────────────────┘  └──────────────────┘   │
+│                                                                  │
+│  ┌──────────────┐  ┌──────────────────┐                         │
+│  │ vector_store │  │ long_term        │                         │
+│  │ VectorMemory │  │ _memory          │                         │
+│  │ ChromaDB     │  │ RAGPipeline      │                         │
+│  │ remember/    │  │ HyDE + Rerank    │                         │
+│  │ recall       │  │ + 对话读写        │                         │
+│  └──────┬───────┘  └──────────────────┘                         │
+│         │                                                        │
+│         ▼                                                        │
+│  ┌─────────────────────┐                                        │
+│  │ ChromaDB (向量库)    │                                        │
+│  │ memory/chroma_db/   │                                        │
+│  └─────────────────────┘                                        │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## 技术栈
@@ -116,6 +146,7 @@ uv run python main.py --model deepseek-reasoner  # 复杂查询用推理模型
 ```
 
 **Short-term Memory 细节：**
+- **跨轮上下文传递**：`main.py` 每轮调用 `streaming_agent()` 时，把最近几轮的 user/assistant 原文作为 `history` 参数传入。Agent 内部执行 `messages = list(history or []) + [{"role": "user", "content": user_msg}]`，将历史消息拼在当前消息前面。这样用户追问"其中销售部卖得最好的是哪个产品？"时，模型能直接看到上一轮的 SQL 结果，无需重新 list_tables → describe → query。
 - 最近 10 条消息保留原文，超过窗口 → 压缩最旧的一半
 - 压缩用 `compress_history()` 调 LLM 生成摘要，token 成本极低
 - 摘要合并策略：新摘要追加到已有摘要后面
@@ -142,8 +173,39 @@ uv run python main.py --model deepseek-reasoner  # 复杂查询用推理模型
 支持的能力（`memory/long_term_memory.py` 的 `RAGPipeline`）：
 - **HyDE**：短查询（< 20 字）先生成假设答案再 embedding，提高检索精度
 - **Rerank**：粗排取 top_k×3 候选 → LLM 精排取 top_k，提高准确率
-- **元数据过滤**：向量检索 + metadata where 条件，支持按 user_id、memory_type 过滤
-- **元数据过滤**：支持按 memory_type 等维度筛选，API 层预留了 user_id 参数
+- **元数据过滤**：向量检索 + metadata where 条件，支持按 user_id、memory_type 过滤；API 层预留了 user_id 参数
+
+## Token 预算与上下文管理
+
+多轮对话会撑爆上下文窗口。Token 预算 + 分层滑动窗口在 token 超限前主动压缩，而不是等 API 报 400。
+
+```
+┌──────────────────────────────────────────┐
+│  TokenBudget                             │
+│  • estimate_tokens(): 中 ~1.5 字/token   │
+│  • should_compress(): 超 70% 阈值 → 触发 │
+│  • available(): 预留 4000 output tokens   │
+│  • set_fixed_costs(): system+tools 常量   │
+└──────────┬───────────────────────────────┘
+           │ should_compress() → True
+           ▼
+┌──────────────────────────────────────────┐
+│  HybridWindowManager                     │
+│  Layer 0: 最近 6 条 — 原文不动            │
+│  Layer 1: 第 7-14 条 — 两两压缩为一句摘要  │
+│  Layer 2: 更早 — 全局摘要（≤200 字）      │
+│                                           │
+│  压缩模型: deepseek-v4-flash（轻量快）     │
+│  输出: (layer0 消息列表, context_block)    │
+└──────────┬───────────────────────────────┘
+           │ context_block
+           ▼
+      注入 System Prompt（[历史对话摘要]）
+```
+
+**互斥机制**：Token 预算触发压缩后，跳过 ConversationManager 的摘要注入——避免两套压缩机制在 System Prompt 里塞重复/矛盾的信息。
+
+**压缩安全**：`extract_text()` 统一提取 LLM 回复，兼容 DeepSeek Reasoner 等带思考模型的 `ThinkingBlock`。
 
 ## 项目结构
 
@@ -165,15 +227,19 @@ db-agent/
 │   └── knowledge.py           # search_knowledge_base, save_to_memory, read_memory
 ├── memory/
 │   ├── short_term_memory.py   # ConversationManager（混合策略对话管理）
+│   ├── token_budget.py        # TokenBudget（token 估算 + 压缩阈值）
+│   ├── hybrid_window_manager.py # HybridWindowManager（3 层滑动窗口压缩）
 │   ├── vector_store.py        # VectorMemory（ChromaDB 向量记忆）
 │   └── long_term_memory.py    # RAGPipeline（HyDE + Rerank + 检索编排）
 ├── utils/
 │   └── llm.py                 # extract_text + logger（安全取文字、共享日志）
 ├── db/
 │   └── seed.py                # SQLite 初始化 + 150+ 行示例数据
+├── docs/
+│   └── troubleshooting.md     # 错误查询手册（14 个踩坑记录）
 └── tests/
     ├── test_agent.py           # 17 个测试（12 单元 + 5 集成）
-    └── test_memory.py          # 11 个测试（向量记忆 + 对话管理）
+    └── test_memory.py          # 19 个测试（向量记忆 + 对话管理 + Token 预算 + 窗口压缩）
 ```
 
 ## 设计决策
@@ -185,6 +251,7 @@ db-agent/
 - **为什么用 @tool 装饰器而不是手写 JSON Schema？** 手写 schema 每个 Tool ~30 行，改参数名要同步改 3 处。装饰器从 type hints + docstring 自动生成，~8 行一个 Tool，零重复。
 - **为什么 System Prompt 用 Python 函数而不是 .md 文件？** 可注入 db_type、user_role、extra_context（memory 检索结果注入点），MD 文件做不到变量替换。
 - **为什么 embedding 用 DashScope 而不是 OpenAI？** qwen3.7-text-embedding 中文效果更好、更便宜（¥0.0007 vs $0.02/1K tokens），国内访问延迟更低。
+- **为什么用 Token 预算 + 滑动窗口而不是无脑全保留？** 上下文窗口有限（DeepSeek 32K），多轮 SQL 探索（list → describe → query → analyze）每轮都在涨消息量。主动压缩比等 API 报 400 更可控，且压缩用便宜模型（deepseek-v4-flash），成本几乎为零。
 
 ## 示例
 
@@ -228,7 +295,7 @@ Agent: [recall 从向量库检索到上次的对话]
 ## 测试
 
 ```bash
-uv run pytest tests/ -v               # 全部 28 个测试
+uv run pytest tests/ -v               # 全部 36 个测试
 uv run pytest tests/ -v -k "unit"     # 只跑单元测试（秒级，不需要 API）
 uv run pytest tests/ -v -k "memory"   # 只跑记忆系统测试
 uv run pytest tests/ -v -k "agent"    # 只跑集成测试（需要 API key）

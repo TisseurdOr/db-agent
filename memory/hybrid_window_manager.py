@@ -1,6 +1,7 @@
 import os
 
 from memory.token_budget import TokenBudget
+from utils.llm import extract_text  # 安全取文字——避免 ThinkingBlock 崩
 
 # 窗口压缩用便宜快模型；默认 DeepSeek Flash（勿写死 Claude，DeepSeek endpoint 调不通）
 DEFAULT_COMPRESS_MODEL = "deepseek-v4-flash"
@@ -29,7 +30,15 @@ class HybridWindowManager:
 
         # Layer 1: 保留最近 6 条原文
         layer0 = messages[-6:] if len(messages) > 6 else messages
-        middle = messages[-14:-6] if len(messages) > 14 else messages[6:-6] if len(messages) > 6 else []
+        # middle: 最后 6 条之前、第 7-14 条之间。
+        # 注意 messages[6:-6] 在 7-13 条时 start > end → 空列表、丢数据；
+        # 用 [:-6] 取"倒数第 6 条之前的所有消息"才对。
+        if len(messages) > 14:
+            middle = messages[-14:-6]
+        elif len(messages) > 6:
+            middle = messages[:-6]
+        else:
+            middle = []
         old = messages[:-14] if len(messages) > 14 else []
 
         # Layer 2: 中间层逐条压缩
@@ -61,7 +70,7 @@ class HybridWindowManager:
             max_tokens=100,
             messages=[{"role": "user", "content": f"用一句话总结（中文）: {str(messages)[:500]}"}],
         )
-        return resp.content[0].text.strip()
+        return extract_text(resp, context="compress_pair").strip()
 
     async def _compress_to_summary(self, messages: list[dict]) -> str:
         resp = self.client.messages.create(
@@ -70,4 +79,4 @@ class HybridWindowManager:
             system="请用中文提炼对话要点，保留关键决策、数据、偏好。200 字符内。",
             messages=[{"role": "user", "content": str(messages)[:3000]}],
         )
-        return resp.content[0].text.strip()
+        return extract_text(resp, context="compress_summary").strip()

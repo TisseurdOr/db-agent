@@ -86,7 +86,7 @@ class RAGPipeline:
             f"[{i}] {c['text'][:300]}" for i, c in enumerate(candidates)
         ])
         resp = self.llm.messages.create(
-            model="deepseek-chat",
+            model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
             max_tokens=50,
             messages=[{
                 "role": "user",
@@ -135,7 +135,7 @@ class RAGPipeline:
 用户问题: {user_query}"""
 
         resp = self.llm.messages.create(
-            model="claude-sonnet-4-6",
+            model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
             max_tokens=1024,
             messages=[{"role": "user", "content": augmented_prompt}],
         )

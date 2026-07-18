@@ -201,3 +201,120 @@ def test_conversation_manager_estimate_english():
     from memory.short_term_memory import ConversationManager
     tokens = ConversationManager._estimate("hello world")  # 11 chars
     assert tokens == 4  # 11 * 0.4 = 4.4 → int=4
+
+
+# ─── TokenBudget 测试（纯逻辑，不调 API）──────────────────────────
+
+
+def test_token_budget_set_fixed_costs():
+    """System Prompt + Tool Defs 固定消耗计入预算。"""
+    from memory.token_budget import TokenBudget
+    budget = TokenBudget(max_tokens=10000)
+    budget.set_fixed_costs("你是一个数据分析助手，用中文回复。", [{"name": "run_query"}])
+    assert budget.system_prompt_tokens > 0
+    assert budget.tool_defs_tokens > 0
+
+
+def test_token_budget_current_usage():
+    """消息列表的 token 估算 > 0。"""
+    from memory.token_budget import TokenBudget
+    budget = TokenBudget()
+    msgs = [{"role": "user", "content": "查一下销售数据"}]
+    assert budget.current_usage(msgs) > 0
+
+
+def test_token_budget_available():
+    """available = max_tokens - 固定消耗 - 消息消耗 - output 预留。"""
+    from memory.token_budget import TokenBudget
+    budget = TokenBudget(max_tokens=10000)
+    budget.set_fixed_costs("短 prompt", [])
+    msgs = [{"role": "user", "content": "你好"}]
+    avail = budget.available(msgs)
+    # 固定消耗 + 消息应该远小于 10000
+    assert avail > 0
+    assert avail < 10000
+
+
+def test_token_budget_should_compress_below_threshold():
+    """消息量小 → 不触发压缩。"""
+    from memory.token_budget import TokenBudget
+    budget = TokenBudget(max_tokens=100000, warn_threshold=0.7)
+    budget.set_fixed_costs("短 prompt", [])
+    msgs = [{"role": "user", "content": "你好"}]
+    assert budget.should_compress(msgs) is False
+
+
+def test_token_budget_should_compress_above_threshold():
+    """消息量超过 warn_threshold → 触发压缩。"""
+    from memory.token_budget import TokenBudget
+    # 设很小的 max_tokens + 低阈值，一条中文消息就超
+    budget = TokenBudget(max_tokens=20, warn_threshold=0.3)
+    budget.set_fixed_costs("x", [])
+    msgs = [{"role": "user", "content": "这是一条中文测试消息用于触发压缩阈值检查"}]
+    assert budget.should_compress(msgs) is True
+
+
+def test_token_budget_summary_format():
+    """summary 返回中文格式的预算摘要字符串。"""
+    from memory.token_budget import TokenBudget
+    budget = TokenBudget(max_tokens=10000)
+    budget.set_fixed_costs("system prompt text", [{"name": "t1"}])
+    msgs = [{"role": "user", "content": "测试"}]
+    s = budget.summary(msgs)
+    assert "Token Budget:" in s
+    assert "System:" in s
+    assert "Tools:" in s
+    assert "Messages:" in s
+    assert "Available:" in s
+
+
+# ─── HybridWindowManager 测试（不调 API 的路径）──────────────────
+
+
+@pytest.mark.asyncio
+async def test_window_manager_skips_when_below_threshold():
+    """预算未达压缩阈值 → manage 原样返回，不调 LLM。"""
+    from memory.token_budget import TokenBudget
+    from memory.hybrid_window_manager import HybridWindowManager
+    budget = TokenBudget(max_tokens=100000, warn_threshold=0.7)
+    budget.set_fixed_costs("短 prompt", [])
+    msgs = [
+        {"role": "user", "content": "你好"},
+        {"role": "assistant", "content": "你好，有什么可以帮你？"},
+    ]
+    wm = HybridWindowManager(client=None, budget=budget)
+    result_msgs, context = await wm.manage(msgs)
+    assert result_msgs == msgs
+    assert context == ""
+
+
+@pytest.mark.asyncio
+async def test_window_manager_layer0_preserves_recent():
+    """触发压缩时，最近 6 条原文不动。mock 掉 LLM 调用，只测分层逻辑。
+
+    20 条消息: layer0=[14:20](6条), middle=[6:14](8条→4次压缩),
+    old=[0:6](6条→全局摘要)。
+    """
+    from unittest.mock import AsyncMock
+    from memory.token_budget import TokenBudget
+    from memory.hybrid_window_manager import HybridWindowManager
+
+    budget = TokenBudget(max_tokens=50, warn_threshold=0.1)
+    budget.set_fixed_costs("x", [])
+    msgs = []
+    for i in range(20):
+        role = "user" if i % 2 == 0 else "assistant"
+        msgs.append({"role": role, "content": f"消息 {i}"})
+
+    wm = HybridWindowManager(client=None, budget=budget)
+    wm._compress_pair = AsyncMock(return_value="中间摘要")
+    wm._compress_to_summary = AsyncMock(return_value="早期摘要")
+
+    result_msgs, context = await wm.manage(msgs)
+    # 保留最近 6 条
+    assert len(result_msgs) == 6
+    assert result_msgs[-1]["content"] == "消息 19"
+    assert result_msgs[0]["content"] == "消息 14"
+    # middle + old 都有 → context 含两层
+    assert "早期摘要" in context
+    assert "中间摘要" in context

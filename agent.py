@@ -28,7 +28,7 @@ from memory.hybrid_window_manager import HybridWindowManager
 #   3. 每个 agent 实例可以用不同的 Tool 组合，互不干扰
 #
 # 模型选择优先级: 参数 > 环境变量 > 默认值
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 MAX_TURNS = 10
 
 
@@ -130,6 +130,7 @@ async def streaming_agent(
     messages = list(history or []) + [{"role": "user", "content": user_msg}]
 
     #agent调用开始
+    context_block = ""  # token 预算未触发时为空——避免 UnboundLocalError
     for turn in range(max_turns):
         # ---TOKEN BUDGET--每轮开始: 检查预算（与参照写法一致）
         if budget.should_compress(messages):
@@ -141,9 +142,9 @@ async def streaming_agent(
 
         # 每轮调用前：把对话摘要注入 System Prompt，再包 cache_control。
         # build_context() 返回早期对话的压缩摘要（无摘要时为空串）。
-        # 注意：同一次 streaming_agent 调用内 conversation 不会更新，
-        # 所以每轮注入的内容一致——对 prompt cache 友好（内容相同即命中）。
-        if conversation is not None:
+        # 注意：token 预算已触发压缩时（context_block 非空），跳过 conversation
+        # 摘要注入——避免两套压缩机制在 System Prompt 里塞重复/矛盾的信息。
+        if conversation is not None and not context_block:
             short_term_summary = conversation.build_context()
             if short_term_summary:
                 full_system_prompt += f"\n\n---\n## 短期记忆\n{short_term_summary}\n---"
@@ -229,6 +230,13 @@ async def streaming_agent(
                 summary = content[:200] + ("..." if len(content) > 200 else "")
                 print(f"   {marker} 结果: {summary}")
 
+            # 大结果集截断——Tool 返回太多行时 token 会爆炸。
+            # 放在 append 之前：截断后的小结果进入 messages，大结果不进上下文窗口。
+            # 阈值 8000：太低（如 3000）会导致模型频繁补查，反而花更多 token。
+            max_len = int(os.getenv("TOOL_RESULT_MAX_LEN", "8000"))
+            if len(content) > max_len:
+                content = content[:max_len] + "...(truncated)"
+
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tc.id,
@@ -240,11 +248,6 @@ async def streaming_agent(
         # 这是 Anthropic API 的要求——tool_result 必须跟在 assistant(tool_use) 后面，
         # 以 user 角色发送。顺序不对会报 400。
         messages.append({"role": "user", "content": tool_results})
-
-        # TOKEN BUDGET每轮结束: 如果 tool 结果太大，截断
-        for tr in tool_results:
-            if len(str(tr)) > 3000:
-                tr["content"] = str(tr["content"])[:3000] + "...(truncated)"
  
     return "已达到最大轮次"
 

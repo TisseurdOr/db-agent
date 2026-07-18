@@ -40,7 +40,7 @@ from tools.analysis import (
     ANALYZE_RESULTS_TOOL, analyze_results,
     COMPARE_PERIODS_TOOL, compare_periods,
 )
-from tools.knowledge import search_knowledge_base, save_to_memory, read_memory
+from tools.knowledge import search_knowledge_base, save_to_memory, read_memory, search_memory, set_vector_memory
 
 TOOLS = [
     LIST_TABLES_TOOL,
@@ -52,6 +52,7 @@ TOOLS = [
     search_knowledge_base.tool_schema,
     save_to_memory.tool_schema,
     read_memory.tool_schema,
+    search_memory.tool_schema,
 ]
 
 TOOL_HANDLERS = {
@@ -64,6 +65,7 @@ TOOL_HANDLERS = {
     "search_knowledge_base": search_knowledge_base,
     "save_to_memory": save_to_memory,
     "read_memory": read_memory,
+    "search_memory": search_memory,
 }
 
 
@@ -71,8 +73,8 @@ async def main():
     parser = argparse.ArgumentParser(description="自然语言数据库分析 Agent")
     parser.add_argument(
         "--model", "-m",
-        default=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-        help="模型名 (默认: claude-sonnet-4-6，简单查询可用 claude-haiku-3-5)",
+        default=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+        help="模型名 (默认: deepseek-chat，复杂查询可用 deepseek-reasoner)",
     )
     args = parser.parse_args()
 
@@ -93,8 +95,10 @@ async def main():
     conversation = ConversationManager(client)
 
     # 长期记忆：VectorMemory（remember / recall）。
-    # 课程要求：每轮先 recall(user_query)，把结果注入 System Prompt。
+    # pre-turn recall: 每轮自动注入 System Prompt 做上下文 priming
+    # search_memory Tool: Agent 可主动调用，实现 Agentic RAG
     vector_memory = VectorMemory(collection_name="conversations")
+    set_vector_memory(vector_memory)  # 注入给 search_memory Tool
 
     print(f"数据分析 Agent 已启动（模型: {args.model}）")
     print("试试这些：")

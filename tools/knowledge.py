@@ -1,4 +1,4 @@
-"""知识库检索 + 用户记忆 Tool。
+"""知识库检索 + 用户记忆 + 向量记忆 Tool。
 
 用 @tool 装饰器写的版本——对比之前手动写 JSON Schema dict 的版本：
   之前: 每个 Tool ~30 行（schema dict 25 行 + 函数 5 行），参数名改一处改三处
@@ -14,6 +14,15 @@
 
 import sqlite3
 from tools import tool
+
+# 向量记忆实例——由 main.py 注入（模块级单例，避免 Tool 参数里传对象）
+_vector_memory = None
+
+
+def set_vector_memory(vm):
+    """注入 VectorMemory 实例。main.py 初始化后调用。"""
+    global _vector_memory
+    _vector_memory = vm
 
 
 # ─── 模拟知识库文档 ───────────────────────────────────────────
@@ -147,3 +156,30 @@ def read_memory(memory_type: str = "all", limit: int = 10, user_id: str = "defau
         return {"error": True, "message": str(e)}
     finally:
         conn.close()
+
+
+@tool(description=(
+    "搜索 Agent 的长期对话记忆（向量语义检索）。"
+    "当用户提到'上次'、'之前'、'我记得'、'历史'等引用过去对话的关键词时调用。"
+    "也适合用户问模糊的问题、需要从历史中找到相关上下文时。"
+    "注意：查结构化数据（订单、员工、销售额）用 run_query；查公司政策用 search_knowledge_base。"
+    "返回 {results: [{text, score, metadata}], count}；库为空时返回空列表。"
+))
+def search_memory(query: str, top_k: int = 5,
+                  memory_type: str = None) -> dict:
+    """query: 自然语言查询，如 '上次那个销售分析'、'之前讨论过的地区数据'
+    top_k: 返回条数，默认 5
+    memory_type: conversation(对话) / preference(偏好) / None(不过滤)"""
+    if _vector_memory is None:
+        return {"results": [], "count": 0, "error": "向量记忆未初始化"}
+
+    results = _vector_memory.recall(
+        query, top_k=top_k, memory_type=memory_type,
+    )
+    return {
+        "results": [
+            {"text": r["text"], "score": r.get("score"), "metadata": r.get("metadata")}
+            for r in results
+        ],
+        "count": len(results),
+    }

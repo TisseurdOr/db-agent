@@ -10,7 +10,7 @@ Output in Chinese, under 200 characters."""
 async def compress_history(client: Anthropic, old_messages: list, model=None):
     """将旧消息压缩为一段摘要。压缩任务不需要旗舰模型，用便宜的即可。"""
     if model is None:
-        model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-3-5")
+        model = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
     text = "\n".join([
         f"{'用户' if m['role']=='user' else '助手'}: {str(m['content'])[:500]}"
         for m in old_messages
@@ -110,7 +110,7 @@ class ConversationManager:
 
         try:
             kwargs = {
-                "model": os.getenv("ANTHROPIC_MODEL", "claude-haiku-3-5"),
+                "model": os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
                 "messages": messages,
             }
             if system_text:
