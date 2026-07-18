@@ -194,10 +194,14 @@ class VectorMemory:
         return len(result["ids"]) if result["ids"] else 0
 
     def list_recent(self, user_id: str = "default", limit: int = 10) -> list[dict]:
-        """列出最近的记忆（按时间戳，不走向量检索）。"""
+        """列出最近的记忆（按时间戳降序，不走向量检索）。
+
+        注意：Chroma get(limit=N) 不是「最新 N 条」，只是任意截断 N 条。
+        所以先取出该 user 的全部记忆，再按 timestamp 排序后切片。
+        """
+        where = {"user_id": user_id} if user_id else None
         result = self.collection.get(
-            where={"user_id": user_id},
-            limit=limit,
+            where=where,
             include=["documents", "metadatas"],
         )
         memories = []
@@ -206,14 +210,13 @@ class VectorMemory:
                 memories.append({
                     "id": mem_id,
                     "text": result["documents"][i],
-                    "metadata": result["metadatas"][i],
+                    "metadata": result["metadatas"][i] or {},
                 })
-        # 按时间戳降序
         memories.sort(
             key=lambda m: m["metadata"].get("timestamp", ""),
-            reverse=True
+            reverse=True,
         )
-        return memories
+        return memories[:limit]
 
 
 # === 使用示例 ===

@@ -18,6 +18,8 @@
 import asyncio
 import argparse
 import os
+import re
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,7 +42,10 @@ from tools.analysis import (
     ANALYZE_RESULTS_TOOL, analyze_results,
     COMPARE_PERIODS_TOOL, compare_periods,
 )
-from tools.knowledge import search_knowledge_base, save_to_memory, read_memory, search_memory, set_vector_memory
+from tools.knowledge import (
+    search_knowledge_base, save_to_memory, read_memory, search_memory,
+    set_vector_memory, set_llm_client,
+)
 
 TOOLS = [
     LIST_TABLES_TOOL,
@@ -99,6 +104,7 @@ async def main():
     # search_memory Tool: Agent 可主动调用，实现 Agentic RAG
     vector_memory = VectorMemory(collection_name="conversations")
     set_vector_memory(vector_memory)  # 注入给 search_memory Tool
+    set_llm_client(client)            # Self-Query 拆解用
 
     print(f"数据分析 Agent 已启动（模型: {args.model}）")
     print("试试这些：")
@@ -113,9 +119,30 @@ async def main():
     GREETING_MARKERS = ("你好", "您好", "hi", "hello", "你是谁", "介绍下",
                     "介绍一下", "自我介绍", "在吗", "谢谢", "再见")
 
+    # 元问题——问"之前做了什么"而非问数据本身。
+    # 这类 query 和原始数据查询语义零重叠，向量检索必然失败。
+    # 解决：检索走时间倒序（list_recent），不写 remember（防污染）。
+    # 覆盖：「刚才我问了什么」「我上一个问题是什么」「刚才查了什么」等。
+    META_QUESTION_RE = re.compile(
+        r"(刚才|上次|之前|上一个).{0,8}(问了|查了|问题)|"
+        r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)"
+    )
+    # 记忆正文若本身是元问答，注入时跳过——否则「最近一条」常是污染过的元问答。
+    META_MEMORY_RE = re.compile(
+        r"^问:\s*.{0,20}(刚才|上次|之前|上一个).{0,8}(问了|查了|问题)"
+    )
+
     def is_chitchat(q: str) -> bool:
         q = q.strip().lower()
         return any(m in q for m in GREETING_MARKERS)
+
+    def is_meta_question(q: str) -> bool:
+        """检测'元问题'——问对话历史本身而非业务数据。"""
+        return bool(META_QUESTION_RE.search(q.strip()))
+
+    def is_meta_memory(text: str) -> bool:
+        """记忆是否为元问答（不应再当作「上一个业务问题」）。"""
+        return bool(META_MEMORY_RE.search((text or "").strip()))
 
     while True:
         user_input = input("\n你: ").strip()
@@ -126,15 +153,32 @@ async def main():
 
         # 记忆检索：对话开始时先 recall，再把结果注入本轮 System Prompt。
         # 闲聊跳过，避免无意义 embedding。
-        memories = (
-            [] if is_chitchat(user_input)
-            else vector_memory.recall(user_input, top_k=3)
-        )
+        # 元问题（"刚才查了什么"）走时间倒序——语义检索对这类 query 必然失败。
+        if is_chitchat(user_input):
+            memories = []
+        elif is_meta_question(user_input):
+            # 按时间倒序；丢掉元问答自身，只保留最近业务问答
+            memories = [
+                m for m in vector_memory.list_recent(limit=20)
+                if not is_meta_memory(m.get("text", ""))
+            ][:3]
+        else:
+            memories = vector_memory.recall(user_input, top_k=3)
+            # 分数阈值：相似度 < 0.3 的结果不注入，避免噪声误导模型
+            memories = [m for m in memories if m.get("score", 0) >= 0.3]
         memories_text = "\n\n".join(m["text"] for m in memories)
+        meta_hint = ""
+        if is_meta_question(user_input) and memories:
+            meta_hint = (
+                "\n[提示] 用户在问「上一次/刚才问了什么」。"
+                "请以下面时间最近的一条业务问答为准回答，不要编造更早的话题。\n"
+            )
         turn_prompt = build_system_prompt(
             db_type="sqlite",
             user_role="数据分析师",
-            extra_context=f"[历史对话]\n{memories_text}" if memories_text else "",
+            extra_context=(
+                f"{meta_hint}[历史对话]\n{memories_text}" if memories_text else ""
+            ),
         )
 
         # 调统一 agent loop——streaming + cache_control + tool 结果可视化。
@@ -155,11 +199,15 @@ async def main():
         # 记录本轮对话——超过窗口时 ConversationManager 会自动压缩最旧的消息。
         await conversation.add_message({"role": "user", "content": user_input})
         await conversation.add_message({"role": "assistant", "content": result})
-        # 写：用 remember（带 user_id），才能被上面的 recall 找回。
-        vector_memory.remember(
-            content=f"问: {user_input}\n答: {result}",
-            memory_type="conversation",
-        )
+        # 写：用 remember（带 user_id + year），才能被 recall / Self-Query 过滤找回。
+        # 元问题不写入——"刚才查了什么？→ 你查了各部门人数"这类 QA 没有
+        # 长期保存价值，写进去反而污染向量库（下次搜"刚才查了什么"先命中自己）。
+        if not is_meta_question(user_input):
+            vector_memory.remember(
+                content=f"问: {user_input}\n答: {result}",
+                memory_type="conversation",
+                metadata={"year": str(datetime.now().year)},
+            )
         # 每轮打日志——观察 token 占用变化：压缩触发前 recent 持续涨，
         # 触发后 recent 回落、summary 出现，total 曲线就能看出记忆策略在起效。
         est = conversation.token_estimate()

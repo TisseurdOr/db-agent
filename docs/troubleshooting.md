@@ -22,6 +22,7 @@
 12. [`hybrid_window_manager` middle 层切片丢失消息（7~13 条时）](#12-hybrid_window_manager-middle-层切片丢失消息713-条时)
 13. [Tool 结果截断在 `messages.append` 之后执行](#13-tool-结果截断在-messagesappend-之后执行)
 14. [Token 预算和 ConversationManager 同时往 System Prompt 注摘要](#14-token-预算和-conversationmanager-同时往-system-prompt-注摘要)
+15. [元问题（"刚才查了什么"）检索失败 + 向量库污染](#15-元问题刚才查了什么检索失败--向量库污染)
 
 ---
 
@@ -410,6 +411,62 @@ if conversation is not None and not context_block:
 
 **涉及文件**
 `agent.py`（`streaming_agent`）
+
+---
+
+## 15. 元问题（"刚才查了什么"）检索失败 + 向量库污染
+
+**现象**
+会话 1 查了"各部门员工数量"，退出重进后问"刚才查了什么？"。
+Agent 检索不到之前的对话，给出错误回答。更糟的是，这轮错误回答也被写入
+向量库——以后问同类元问题，先命中这句错的。
+
+**原因**
+连环坑：
+
+1. **recall 用当前 query 搜历史，必然失败。**
+   `recall("刚才查了什么？")` 和向量库里 "各部门员工数量" 的 embedding
+   语义零重叠——"刚才查什么"是个元问题，不是业务查询。cosine 相似度
+   极低，retrieve 返回空或无关文档。
+
+2. **remember 无过滤，错误回答被写回。**
+   每轮结束都 `remember("问: {user_input}\n答: {result}")`，
+   元问题的 QA 对也被写入。"刚才查了什么→你查了..."这类对话没有
+   长期保存价值，写进去只会污染向量库。
+
+3. **Self-Query 也救不了。**
+   元问题没有 year/memory_type 这些过滤线索，LLM 拆出来的
+   semantic_query 仍然是"刚才查了什么"，向量检索一样命中不了。
+
+**解决**
+加三道防线：
+
+1. **元问题走时间倒序，不走向量检索。** `list_recent(limit=5)` 按
+   时间戳降序返回最近记忆——"刚才"问的就是时间，不是语义：
+   ```python
+   META_MARKERS = ("刚才查了", "上次查了", "之前查了", "还记得", ...)
+
+   def is_meta_question(q: str) -> bool:
+       return any(m in q.strip().lower() for m in META_MARKERS)
+
+   if is_meta_question(user_input):
+       memories = vector_memory.list_recent(limit=5)
+   ```
+
+2. **元问题不写入 remember。** 防止污染：
+   ```python
+   if not is_meta_question(user_input):
+       vector_memory.remember(...)
+   ```
+
+3. **普通 recall 加分数阈值。** 相似度 < 0.3 的结果不注入 System Prompt，
+   避免无关噪声误导模型：
+   ```python
+   memories = [m for m in memories if m.get("score", 0) >= 0.3]
+   ```
+
+**涉及文件**
+`main.py`（`is_meta_question` + `list_recent` + `remember` 跳过 + score 阈值）
 
 ---
 

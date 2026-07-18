@@ -122,6 +122,20 @@ def test_vector_memory_list_recent(vector_mem):
 
 
 @requires_embedding
+def test_vector_memory_list_recent_not_chroma_arbitrary_limit(vector_mem):
+    """Chroma get(limit=N) 不是最新 N 条；list_recent 必须先全取再按时间截断。"""
+    import time
+    for i in range(8):
+        vector_mem.remember(content=f"记忆编号{i}", memory_type="note")
+        time.sleep(0.01)  # 保证 timestamp 严格递增
+
+    recent = vector_mem.list_recent(limit=2)
+    assert len(recent) == 2
+    assert "记忆编号7" in recent[0]["text"]
+    assert "记忆编号6" in recent[1]["text"]
+
+
+@requires_embedding
 def test_vector_memory_forget(vector_mem):
     """删除一条记忆 → count 减 1。"""
     mid = vector_mem.remember(content="这条会被删除", memory_type="note")

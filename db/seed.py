@@ -64,15 +64,14 @@ def init_db(reset: bool = False):
             created_at TEXT NOT NULL
         );
 
-        -- 用户记忆表（Phase 3 结构化记忆）
-        CREATE TABLE IF NOT EXISTS user_memory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL DEFAULT 'default',
-            memory_type TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT DEFAULT (datetime('now')),
-            access_count INTEGER DEFAULT 0
-        );
+""")
+
+    # 用户记忆表从独立 SQL 文件加载（课程 0017 要求）
+    user_memory_sql = os.path.join(os.path.dirname(__file__), "user_memory.sql")
+    with open(user_memory_sql) as f:
+        conn.executescript(f.read())
+
+    conn.executescript("""
 
         DELETE FROM orders;
         DELETE FROM employees;

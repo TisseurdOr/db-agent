@@ -15,8 +15,9 @@
 import sqlite3
 from tools import tool
 
-# 向量记忆实例——由 main.py 注入（模块级单例，避免 Tool 参数里传对象）
+# 向量记忆 / LLM——由 main.py 注入（模块级单例，避免 Tool 参数里传对象）
 _vector_memory = None
+_llm_client = None
 
 
 def set_vector_memory(vm):
@@ -25,8 +26,22 @@ def set_vector_memory(vm):
     _vector_memory = vm
 
 
+def set_llm_client(client):
+    """注入 LLM client，供 search_memory 的 Self-Query 拆解使用。"""
+    global _llm_client
+    _llm_client = client
+
+
 # ─── 模拟知识库文档 ───────────────────────────────────────────
 # Phase 3.3 换 ChromaDB 向量检索，这套文档结构不变。
+
+def _ensure_user_memory_table(conn):
+    """读取 db/user_memory.sql 确保表结构存在（课程 0017：独立 schema 文件）。"""
+    import os
+    sql_path = os.path.join(os.path.dirname(__file__), "..", "db", "user_memory.sql")
+    with open(sql_path) as f:
+        conn.executescript(f.read())
+
 
 _KNOWLEDGE_BASE = {
     "销售提成制度": (
@@ -51,6 +66,10 @@ _KNOWLEDGE_BASE = {
 
 
 # ─── Tool 定义 ────────────────────────────────────────────────
+# 关键设计意图:
+# - search_memory: 查"Agent 经历过什么"（跨会话记忆）—— Self-Query + 向量检索
+# - run_query:    查"数据库里有什么"（结构化实时数据）— tools/query.py
+# - search_knowledge_base: 查"公司知道什么"（静态知识文档）
 
 
 @tool(description=(
@@ -95,17 +114,10 @@ def save_to_memory(content: str, memory_type: str = "note", user_id: str = "defa
     """content: 要记忆的内容，完整描述方便以后检索
     memory_type: preference(偏好) / insight(洞察) / note(备注)
     user_id: 用户标识，默认 'default'"""
-    import os
     from db.seed import DB_PATH
     conn = sqlite3.connect(DB_PATH)
     try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'default', memory_type TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now','localtime')),
-                access_count INTEGER DEFAULT 0)""")
+        _ensure_user_memory_table(conn)
         cur = conn.execute(
             "INSERT INTO user_memory (user_id, memory_type, content) VALUES (?,?,?)",
             (user_id, memory_type, content))
@@ -125,18 +137,11 @@ def read_memory(memory_type: str = "all", limit: int = 10, user_id: str = "defau
     """memory_type: preference / insight / note / all（不过滤）
     limit: 返回条数，默认 10
     user_id: 用户标识，默认 'default'"""
-    import os
     from db.seed import DB_PATH
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_memory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT DEFAULT 'default', memory_type TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now','localtime')),
-                access_count INTEGER DEFAULT 0)""")
+        _ensure_user_memory_table(conn)
         if memory_type == "all":
             cur = conn.execute(
                 "SELECT * FROM user_memory WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
@@ -159,22 +164,42 @@ def read_memory(memory_type: str = "all", limit: int = 10, user_id: str = "defau
 
 
 @tool(description=(
-    "搜索 Agent 的长期对话记忆（向量语义检索）。"
+    "搜索 Agent 的长期对话记忆（Self-Query + 向量语义检索）。"
     "当用户提到'上次'、'之前'、'我记得'、'历史'等引用过去对话的关键词时调用。"
     "也适合用户问模糊的问题、需要从历史中找到相关上下文时。"
+    "内部会先拆解语义部分与过滤条件（memory_type/year），再检索。"
     "注意：查结构化数据（订单、员工、销售额）用 run_query；查公司政策用 search_knowledge_base。"
-    "返回 {results: [{text, score, metadata}], count}；库为空时返回空列表。"
+    "返回 {results: [{text, score, metadata}], count, parsed}；库为空时返回空列表。"
 ))
-def search_memory(query: str, top_k: int = 5,
-                  memory_type: str = None) -> dict:
+async def search_memory(query: str, top_k: int = 5,
+                        memory_type: str = None) -> dict:
     """query: 自然语言查询，如 '上次那个销售分析'、'之前讨论过的地区数据'
     top_k: 返回条数，默认 5
-    memory_type: conversation(对话) / preference(偏好) / None(不过滤)"""
+    memory_type: conversation(对话) / preference(偏好) / None(不过滤，由 Self-Query 抽取)"""
     if _vector_memory is None:
         return {"results": [], "count": 0, "error": "向量记忆未初始化"}
+    if _llm_client is None:
+        # 无 LLM 时退回普通 recall，保证 Tool 仍可用
+        results = _vector_memory.recall(
+            query, top_k=top_k, memory_type=memory_type,
+        )
+        return {
+            "results": [
+                {"text": r["text"], "score": r.get("score"), "metadata": r.get("metadata")}
+                for r in results
+            ],
+            "count": len(results),
+            "parsed": {"semantic_query": query, "filters": {}},
+        }
 
-    results = _vector_memory.recall(
-        query, top_k=top_k, memory_type=memory_type,
+    from rag.self_query import self_query_retrieve
+
+    results, parts = await self_query_retrieve(
+        query,
+        _vector_memory,
+        _llm_client,
+        top_k=top_k,
+        memory_type=memory_type,
     )
     return {
         "results": [
@@ -182,4 +207,5 @@ def search_memory(query: str, top_k: int = 5,
             for r in results
         ],
         "count": len(results),
+        "parsed": parts,
     }
