@@ -2,6 +2,35 @@
 
 自然语言查询数据库的 AI Agent。基于 Claude API 兼容协议，用 Agent Loop 自主探索表结构、生成 SQL、分析结果。支持三层记忆系统（工作记忆 / 短期记忆 / 长期向量记忆）和 RAG 检索增强。
 
+
+使用
+git clone https://github.com/TisseurdOr/db-agent/tree/save/langgraph-multi-agent
+cd db-agent
+uv sync                          # 安装依赖
+cp .env.example .env             # 填自己的 API key
+uv run python main.py            # DB 自动初始化
+
+## MCP配置
+找到~/Library/Application Support/Claude/claude_desktop_config.json
+加入下面代码
+把 claude_desktop_config.json 里的路径改成自己的：
+
+、、、
+{
+  "mcpServers": {
+    "db-agent": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "/你的项目路径/db-agent",
+        "python",
+        "/你的项目路径/db_server.py"
+      ]
+    }
+  },
+、、、
+
 ## 架构
 
 ```
