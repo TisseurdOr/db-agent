@@ -42,6 +42,7 @@ from tools.analysis import (
     ANALYZE_RESULTS_TOOL, analyze_results,
     COMPARE_PERIODS_TOOL, compare_periods,
 )
+from tools.chart import render_chart
 from tools.knowledge import (
     search_knowledge_base, save_to_memory, read_memory, search_memory,
     set_vector_memory, set_llm_client,
@@ -54,6 +55,7 @@ TOOLS = [
     RUN_QUERY_TOOL,
     ANALYZE_RESULTS_TOOL,
     COMPARE_PERIODS_TOOL,
+    render_chart.tool_schema,
     search_knowledge_base.tool_schema,
     save_to_memory.tool_schema,
     read_memory.tool_schema,
@@ -67,6 +69,7 @@ TOOL_HANDLERS = {
     "run_query": run_query,
     "analyze_results": analyze_results,
     "compare_periods": compare_periods,
+    "render_chart": render_chart,
     "search_knowledge_base": search_knowledge_base,
     "save_to_memory": save_to_memory,
     "read_memory": read_memory,
@@ -80,6 +83,17 @@ async def main():
         "--model", "-m",
         default=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
         help="模型名 (默认: deepseek-chat，复杂查询可用 deepseek-reasoner)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["single", "multi"],
+        default="single",
+        help="Agent 模式: single (单 Agent) / multi (多 Agent 编排)",
+    )
+    parser.add_argument(
+        "--no-dq",
+        action="store_true",
+        help="多 Agent 模式下关闭首次 DataQuality 检查",
     )
     args = parser.parse_args()
 
@@ -106,7 +120,7 @@ async def main():
     set_vector_memory(vector_memory)  # 注入给 search_memory Tool
     set_llm_client(client)            # Self-Query 拆解用
 
-    print(f"数据分析 Agent 已启动（模型: {args.model}）")
+    print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}）")
     print("试试这些：")
     print("  - 有哪些表？查一下整体结构")
     print("  - 上周哪个部门销售额最高？")
@@ -185,37 +199,42 @@ async def main():
         # - conversation: 早期对话摘要，由 streaming_agent 每轮注入 System Prompt
         # - history: 最近几轮原文，拼在当前消息前，让第二轮能引用第一轮结果
         # 取 history 要在 add_message 之前——此刻 messages 只含"上一轮及更早"。
-        result = await streaming_agent(
-            client=client,
-            user_msg=user_input,
-            system_prompt=turn_prompt,
-            tools=TOOLS,
-            handlers=TOOL_HANDLERS,
-            model=args.model,
-            conversation=conversation,
-            history=list(conversation.messages),
-        )
-
-        # 记录本轮对话——超过窗口时 ConversationManager 会自动压缩最旧的消息。
-        await conversation.add_message({"role": "user", "content": user_input})
-        await conversation.add_message({"role": "assistant", "content": result})
-        # 写：用 remember（带 user_id + year），才能被 recall / Self-Query 过滤找回。
-        # 元问题不写入——"刚才查了什么？→ 你查了各部门人数"这类 QA 没有
-        # 长期保存价值，写进去反而污染向量库（下次搜"刚才查了什么"先命中自己）。
-        if not is_meta_question(user_input):
-            vector_memory.remember(
-                content=f"问: {user_input}\n答: {result}",
-                memory_type="conversation",
-                metadata={"year": str(datetime.now().year)},
+        if args.mode == "multi":
+            from multi_agent.orchestrator import MultiAgentRunner
+            runner = MultiAgentRunner(
+                client, model=args.model,
+                enable_data_quality=not args.no_dq,
             )
-        # 每轮打日志——观察 token 占用变化：压缩触发前 recent 持续涨，
-        # 触发后 recent 回落、summary 出现，total 曲线就能看出记忆策略在起效。
-        est = conversation.token_estimate()
-        print(
-            f"[memory] 本轮 tokens≈{est['total']} "
-            f"(原文 {est['recent']}/{est['recent_msgs']}条, "
-            f"摘要 {est['summary']}/{est['compressed_msgs']}条已压缩)"
-        )
+            result = await runner.run(user_input)
+            print(f"\nAgent: {result}")
+        else:
+            result = await streaming_agent(
+                client=client,
+                user_msg=user_input,
+                system_prompt=turn_prompt,
+                tools=TOOLS,
+                handlers=TOOL_HANDLERS,
+                model=args.model,
+                conversation=conversation,
+                history=list(conversation.messages),
+            )
+
+        # 多 Agent 模式是一次性执行，不累积对话记忆
+        if args.mode != "multi":
+            await conversation.add_message({"role": "user", "content": user_input})
+            await conversation.add_message({"role": "assistant", "content": result})
+            if not is_meta_question(user_input):
+                vector_memory.remember(
+                    content=f"问: {user_input}\n答: {result}",
+                    memory_type="conversation",
+                    metadata={"year": str(datetime.now().year)},
+                )
+            est = conversation.token_estimate()
+            print(
+                f"[memory] 本轮 tokens≈{est['total']} "
+                f"(原文 {est['recent']}/{est['recent_msgs']}条, "
+                f"摘要 {est['summary']}/{est['compressed_msgs']}条已压缩)"
+            )
 
 
 if __name__ == "__main__":

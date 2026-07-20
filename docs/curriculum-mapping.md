@@ -172,7 +172,7 @@
 |---------|---------|
 | 完整记忆编排（每轮） | `main.py:132-176` — recall → 注入 → agent → add_message ×2 → remember |
 | 闲聊过滤 | `main.py:118-123` — `is_chitchat()` 跳过无意义检索 |
-| 错误手册 | `docs/troubleshooting.md` — 14 个踩坑记录 + 解决方案 |
+| 错误手册 | `docs/troubleshooting.md` — 17 个踩坑记录 + 解决方案 |
 | 综合测试 | `tests/test_memory.py` — 19 个测试 |
 
 ---

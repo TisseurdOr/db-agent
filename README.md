@@ -16,7 +16,7 @@ uv run python main.py            # DB 自动初始化
 把 claude_desktop_config.json 里的路径改成自己的：
 
 、、、
-{
+
   "mcpServers": {
     "db-agent": {
       "command": "uv",
@@ -30,6 +30,21 @@ uv run python main.py            # DB 自动初始化
     }
   },
 、、、
+
+
+## 程序入口：
+
+# 单 Agent（现有模式，默认）
+uv run python main.py
+
+# 多 Agent 编排
+uv run python main.py --mode multi
+
+# 多 Agent + 关闭首次数据质量检查
+uv run python main.py --mode multi --no-dq
+
+Multi mode 下每次 query 是独立的一次性执行——不调 recall、不写 remember、不累积对话。
+
 
 ## 架构
 
@@ -265,7 +280,7 @@ db-agent/
 ├── db/
 │   └── seed.py                # SQLite 初始化 + 150+ 行示例数据
 ├── docs/
-│   └── troubleshooting.md     # 错误查询手册（14 个踩坑记录）
+│   └── troubleshooting.md     # 错误查询手册（17 个踩坑记录）
 └── tests/
     ├── test_agent.py           # 17 个测试（12 单元 + 5 集成）
     └── test_memory.py          # 19 个测试（向量记忆 + 对话管理 + Token 预算 + 窗口压缩）
