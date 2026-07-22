@@ -81,7 +81,7 @@
 
 | 教学内容 | 代码位置 |
 |---------|---------|
-| 模型对比表 | `README.md:106-122` — deepseek-chat vs deepseek-reasoner |
+| 模型对比表 | `README.md` — deepseek-chat / v4-flash / v4-pro |
 | 单次查询成本估算 | `README.md:117-118` — ~¥0.01-0.03/次, 月成本 < ¥15 |
 | Embedding 选型 | `README.md:120-123` — qwen3.7-text-embedding, ¥0.0007/1K tokens |
 | 环境变量配置 | `.env.example` — `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` |

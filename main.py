@@ -92,7 +92,7 @@ async def main():
     parser.add_argument(
         "--model", "-m",
         default=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
-        help="模型名 (默认: deepseek-chat，复杂查询可用 deepseek-reasoner)",
+        help="模型名 (默认: deepseek-chat，也可用 deepseek-v4-flash / deepseek-v4-pro)",
     )
     parser.add_argument(
         "--mode",

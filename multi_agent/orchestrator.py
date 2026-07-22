@@ -23,10 +23,11 @@ from anthropic import Anthropic
 from multi_agent.state import MultiAgentState
 from multi_agent.agents import (
     sql_agent, analysis_agent, strategy_agent,
-    data_quality_agent, ROUTER_PROMPT,
+    data_quality_agent, ROUTER_PROMPT, route_override,
 )
 from multi_agent.base import is_agent_timeout
 from multi_agent.guardrails import guard_input, guard_output
+from multi_agent.cache import RouterCache
 from utils.llm import extract_text
 from utils.tracer import TraceContext
 
@@ -79,50 +80,75 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
 
     client = config["configurable"]["_client"]
     model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
-    # 从 state["messages"] 取最近 6 条，转成 Anthropic 格式的对话
-    recent = [m for m in state.get("messages", [])[-6:]]
-    router_msgs = []
-    for m in recent:
-        role = getattr(m, "type", None)  # LangChain 消息: 'human' = 用户, 'ai' = 助手
-        content = getattr(m, "content", "")
-        if role == "human":
-            router_msgs.append({"role": "user", "content": str(content)[:300]})
-        elif role == "ai":
-            router_msgs.append({"role": "assistant", "content": str(content)[:300]})
-    router_msgs.append({"role": "user", "content": state["query"]})
+    router_cache = config["configurable"].get("_router_cache")
 
-    resp = client.messages.create(
-        model=model,
-        max_tokens=300,
-        system=ROUTER_PROMPT,
-        messages=router_msgs,
-    )
-    # 取 Router 的 token 用量
-    router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
-    if hasattr(resp, "usage") and resp.usage:
-        router_usage["input_tokens"] = resp.usage.input_tokens or 0
-        router_usage["output_tokens"] = resp.usage.output_tokens or 0
+    # 硬规则优先：闲聊 / 元问题 / 纯制度查询不依赖 LLM（也避免脏缓存）
+    override = route_override(state["query"])
+    router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
+    cached_plan = None
 
-    text = extract_text(resp, context="router")
-    # Router 返回的 JSON 可能格式不对（混了说明文字等），兜底为直接查 SQL
-    try:
-        plan_data = json.loads(text) if text else {}
-    except json.JSONDecodeError:
-        plan_data = {"plan": [{"agent": "sql", "task": state["query"]}]}
-
-    plan = plan_data.get("plan", [])
-    if not plan:
-        # 兜底：Router 返回空 plan 但 query 不是闲聊 → 至少查 SQL
-        # 否则直接 END，用户看到的是空白回复
-        query_text = state["query"].strip()
-        if len(query_text) > 4:  # 不是 "hi" / "hello" 等短闲聊
-            plan = [{"agent": "sql", "task": query_text}]
-            span.task = "空 plan → 兜底 sql"
-        else:
-            span.task = "无需数据查询"
+    if override is not None:
+        plan = override
+        span.task = "硬规则覆盖" if plan else "无需数据查询"
+        if not plan:
             trace.finish_span(span, router_usage)
             print(trace.print_progress(span))
             return {"plan": [], "next": "done"}
+    else:
+        # 查缓存：同样 query 之前解析过，直接复用 plan，省一次 LLM 调用（~250t）
+        cached_plan = router_cache.get(state["query"]) if router_cache else None
+
+        if cached_plan is not None:
+            plan_data = {"plan": cached_plan}
+            span.task = f"缓存命中 ({router_cache.hit_rate})"
+        else:
+            # 从 state["messages"] 取最近 6 条，转成 Anthropic 格式的对话
+            recent = [m for m in state.get("messages", [])[-6:]]
+            router_msgs = []
+            for m in recent:
+                role = getattr(m, "type", None)
+                content = getattr(m, "content", "")
+                if role == "human":
+                    router_msgs.append({"role": "user", "content": str(content)[:300]})
+                elif role == "ai":
+                    router_msgs.append({"role": "assistant", "content": str(content)[:300]})
+            router_msgs.append({"role": "user", "content": state["query"]})
+
+            resp = client.messages.create(
+                model=model,
+                max_tokens=300,
+                system=ROUTER_PROMPT,
+                messages=router_msgs,
+            )
+            router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+            if hasattr(resp, "usage") and resp.usage:
+                router_usage["input_tokens"] = resp.usage.input_tokens or 0
+                router_usage["output_tokens"] = resp.usage.output_tokens or 0
+
+            text = extract_text(resp, context="router")
+            try:
+                plan_data = json.loads(text) if text else {}
+            except json.JSONDecodeError:
+                plan_data = {"plan": [{"agent": "sql", "task": state["query"]}]}
+
+        plan = plan_data.get("plan", [])
+        if not plan:
+            # 空 plan：真闲聊就结束；否则兜底 sql（避免空白回复）
+            # 注意：不要用 len>4 —— 「你好，你能做什么」长度很长但仍是闲聊
+            query_text = state["query"].strip()
+            if any(m in query_text.lower() for m in (
+                "你好", "您好", "hi", "hello", "你能做什么", "你会什么", "你是谁",
+            )):
+                span.task = "无需数据查询"
+                trace.finish_span(span, router_usage)
+                print(trace.print_progress(span))
+                return {"plan": [], "next": "done"}
+            plan = [{"agent": "sql", "task": query_text}]
+            span.task = "空 plan → 兜底 sql"
+
+    # 缓存写入：仅 LLM 路径；硬规则不写缓存（避免污染）
+    if override is None and cached_plan is None and router_cache is not None and plan:
+        router_cache.set(state["query"], plan)
 
     # DataQuality 首次注入：在 plan 最前面插入 DQ 检查，先扫库再查数。
     if state.get("_inject_dq") and not any(s["agent"] == "data_quality" for s in plan):
@@ -261,8 +287,9 @@ def _next_step(state: MultiAgentState, results: dict, current: str) -> dict:
 
     逻辑：
     1. plan 中还有没执行的 agent → 路由到下一个
-    2. plan 全执行完，且当前不是 analysis → 路由到 analysis（兜底）
-    3. 当前就是 analysis → 直接返回 final_answer
+    2. plan 里声明了 analysis 且还没跑 → 再去 analysis
+    3. 否则直接用上游结果当 final_answer（不要无脑追加 analysis）
+       —— 否则「销售部有多少员工」也会被分析师包装成「抱歉，我无法查库」
     """
     plan = state["plan"]
     executed = set(results.keys())               # 已打卡的 Agent 名
@@ -271,9 +298,18 @@ def _next_step(state: MultiAgentState, results: dict, current: str) -> dict:
     if pending:
         return {"results": results, "next": pending[0]["agent"]}
 
-    if current != "analysis":
+    plan_agents = {s["agent"] for s in plan}
+    if "analysis" in plan_agents and "analysis" not in executed:
         return {"results": results, "next": "analysis"}
-    return {"results": results, "final_answer": "\n\n".join(results.values())}
+
+    # plan 已跑完且不需要 analysis：优先用 sql/strategy 原文作答
+    answer = (
+        results.get("sql")
+        or results.get("strategy")
+        or results.get("data_quality")
+        or "\n\n".join(results.values())
+    )
+    return {"results": results, "next": "done", "final_answer": answer}
 
 
 # ── 路由函数 ──
@@ -372,6 +408,8 @@ class MultiAgentRunner:
         self.model = model
         self.enable_data_quality = enable_data_quality
         self._dq_done = False       # 首次查询后置 True，后续不再注入 DQ
+        self._dq_time = 0.0         # 上次 DQ 执行时间戳（epoch 秒）
+        self.router_cache = RouterCache(max_size=100)
         self.thread_id = thread_id
 
         db_path = Path(checkpoint_db) if checkpoint_db else CHECKPOINT_DB
@@ -384,16 +422,21 @@ class MultiAgentRunner:
         return self
 
     def _should_inject_dq(self) -> bool:
-        """DataQuality 首次注入策略：当前 session 第一条查询才返回 True。
+        """DataQuality 时效控制：首次扫描后 1 小时内跳过。
 
         关闭开关（--no-dq）→ 永远 False。
-        DQ 执行过一次后 → _dq_done 置 True → 后续永远 False。
+        首次 DQ 执行后记录时间，1 小时内不再触发。
+        超时后允许重新扫描（数据可能已变化）。
         """
         if not self.enable_data_quality:
             return False
         if self._dq_done:
-            return False
+            elapsed = time.time() - self._dq_time
+            if elapsed < 3600:    # 1 小时内跳过
+                return False
+            self._dq_done = False  # 超时，允许重新扫
         self._dq_done = True
+        self._dq_time = time.time()
         return True
 
     async def run(self, query: str, recalled_memories: str = "", conversation_summary: str = "") -> str:
@@ -422,6 +465,7 @@ class MultiAgentRunner:
                 "_client": self.client,
                 "_model": self.model,
                 "_trace": trace,
+                "_router_cache": self.router_cache,
             }
         }
         result = await self.graph.ainvoke({

@@ -144,7 +144,8 @@ uv run python main.py   # 一键启动（自动 init_db）
 可选参数：
 ```bash
 uv run python main.py --model deepseek-chat      # 默认，便宜快速
-uv run python main.py --model deepseek-reasoner  # 复杂查询用推理模型
+uv run python main.py --model deepseek-v4-flash  # 轻量快
+uv run python main.py --model deepseek-v4-pro    # 复杂查询
 ```
 
 ## 模型选型
@@ -152,7 +153,8 @@ uv run python main.py --model deepseek-reasoner  # 复杂查询用推理模型
 | 模型 | 适用场景 | 单次查询估算 |
 |------|---------|-------------|
 | `deepseek-chat`（默认） | 日常查询、Tool 调用 | ~¥0.01-0.03 |
-| `deepseek-reasoner` | 复杂多步推理 | ~¥0.05-0.15 |
+| `deepseek-v4-flash` | 轻量快、压缩/建议 | ~¥0.01-0.03 |
+| `deepseek-v4-pro` | 复杂多步推理 | ~¥0.05-0.15 |
 
 **选型依据：**
 - DeepSeek API 兼容 Anthropic SDK，零代码改动切换

@@ -19,6 +19,24 @@ def init_db(reset: bool = False):
 
     conn = sqlite3.connect(DB_PATH)
     conn.executescript("""
+        -- 权限系统表（Agent 工具层读取，不可被 Agent 查询）
+        CREATE TABLE IF NOT EXISTS agent_roles (
+            role TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            allowed_tools TEXT NOT NULL,
+            db_tables TEXT,
+            db_row_filter TEXT,
+            docs_filter TEXT,
+            sensitive_check INTEGER DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_users (
+            user_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            role TEXT NOT NULL REFERENCES agent_roles(role),
+            dept_id INTEGER
+        );
+
         CREATE TABLE IF NOT EXISTS departments (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
@@ -79,6 +97,27 @@ def init_db(reset: bool = False):
         DELETE FROM customers;
         DELETE FROM departments;
         DELETE FROM user_memory;
+        DELETE FROM agent_users;
+        DELETE FROM agent_roles;
+
+        -- agent_roles: 5 种角色
+        INSERT INTO agent_roles VALUES ('dba',     '研发DBA',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document","write_query"]', null, null, null, 0);
+        INSERT INTO agent_roles VALUES ('manager', '部门经理',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', null, '{"employees":"dept_id"}', null, 1);
+        INSERT INTO agent_roles VALUES ('analyst', '数据分析师','["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","employees","products","customers","orders"]', null, null, 1);
+        INSERT INTO agent_roles VALUES ('viewer',  '访客',      '["list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","products","customers","orders"]', null, '["产品手册","部门介绍","销售制度"]', 0);
+        INSERT INTO agent_roles VALUES ('support', '技术支持',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["products","customers","orders"]', null, '["技术文档","产品手册"]', 0);
+
+        -- agent_users: 10 个用户
+        INSERT INTO agent_users VALUES ('dba',        '研发DBA',  'dba',     3);
+        INSERT INTO agent_users VALUES ('zhoufang',   '周芳',     'manager', 1);
+        INSERT INTO agent_users VALUES ('xiaoyiming', '萧一鸣',   'manager', 2);
+        INSERT INTO agent_users VALUES ('gaoyong',    '高勇',     'manager', 3);
+        INSERT INTO agent_users VALUES ('linyi',      '林怡',     'manager', 4);
+        INSERT INTO agent_users VALUES ('liangming',  '梁明',     'manager', 5);
+        INSERT INTO agent_users VALUES ('lujie',      '卢杰',     'manager', 6);
+        INSERT INTO agent_users VALUES ('analyst',    '数据分析师','analyst', null);
+        INSERT INTO agent_users VALUES ('viewer',     '访客',     'viewer',  null);
+        INSERT INTO agent_users VALUES ('support',    '技术支持', 'support',  null);
 
         -- departments: 6 个
         INSERT INTO departments VALUES (1, '销售部', 1000000, 8);
