@@ -1,26 +1,15 @@
 """企业级 Agent 权限网关 — 统一控制数据库、文档、工具的访问权限。
 
+数据来源:
+    权限数据存储在 db/demo.db 的 agent_roles 和 agent_users 表中。
+    模块加载时自动从 DB 读取，DB 为空时 fallback 到内置默认值。
+    生产环境：改表即可生效，无需重新部署。
+
 设计原则:
     1. 不解析 SQL — 正则不可靠，交给数据库原生权限或 SQLite 限制
-    2. 资源级控制 — 表/列/文档/工具，每种资源一个过滤规则
+    2. 资源级控制 — 表/文档/工具，每种资源一个过滤规则
     3. 两层生效 — system prompt 软约束 + tool 层硬拦截
     4. 行级改写保留 — 唯一需要动 SQL 的场景是自动追加 WHERE dept_id=X
-
-权限模型:
-    role → {
-        allowed_tools:   能调哪些工具
-        db_tables:       能查哪些表 (null = 全部, ["employees", "products"] = 白名单)
-        db_row_filter:   行级过滤 ({"employees": "dept_id"}) → 自动加 WHERE
-        docs_filter:     能搜哪些文档 (null = 全部, ["sales_policy"] = 白名单)
-        sensitive_check: 是否触发敏感列 HITL 审批
-    }
-
-用户模型:
-    dba       — 研发部 DBA，全权限
-    manager   — 部门经理，本部门数据 + 全文档
-    analyst   — 数据分析师，无 salary/cost/budget 列，全文档
-    viewer    — 访客，受限表 + 受限文档
-    support   — 技术支持，只能看 products 表 + 技术文档
 
 用法:
     from multi_agent.entitlement import get_user, authorize_tool, filter_tables, rewrite_sql
@@ -31,30 +20,33 @@
     sql = rewrite_sql(user, sql)                            # 行级过滤
 """
 
+import json
+import sqlite3
+import os
 from typing import Optional
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 角色定义
+# 内置默认值（DB 为空时的 fallback）
 # ═══════════════════════════════════════════════════════════════════════════════
 
-ROLES: dict[str, dict] = {
+_DEFAULT_ROLES: dict[str, dict] = {
     "dba": {
         "name": "研发DBA",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
                           "search_knowledge_base", "read_document", "write_query"],
-        "db_tables": None,              # null = 全部
-        "db_row_filter": None,          # 不行级过滤
+        "db_tables": None,
+        "db_row_filter": None,
         "docs_filter": None,
-        "sensitive_check": False,       # 不触发 HITL
+        "sensitive_check": False,
     },
     "manager": {
         "name": "部门经理",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
                           "search_knowledge_base", "read_document"],
-        "db_tables": None,              # 所有表
-        "db_row_filter": {"employees": "dept_id"},   # 自动追加 WHERE dept_id=X
+        "db_tables": None,
+        "db_row_filter": {"employees": "dept_id"},
         "docs_filter": None,
-        "sensitive_check": True,        # 查 salary 触发 HITL
+        "sensitive_check": True,
     },
     "analyst": {
         "name": "数据分析师",
@@ -84,25 +76,102 @@ ROLES: dict[str, dict] = {
     },
 }
 
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 用户定义（每个用户绑定一个角色 + 部门）
-# ═══════════════════════════════════════════════════════════════════════════════
-
-USERS: dict[str, dict] = {
+_DEFAULT_USERS: dict[str, dict] = {
     "dba":            {"name": "研发DBA",   "role": "dba",     "dept_id": 3},
-    "zhoufang":       {"name": "周芳",      "role": "manager", "dept_id": 1},   # 销售部
-    "xiaoyiming":     {"name": "萧一鸣",    "role": "manager", "dept_id": 2},   # 市场部
-    "gaoyong":        {"name": "高勇",      "role": "manager", "dept_id": 3},   # 研发部
-    "linyi":          {"name": "林怡",      "role": "manager", "dept_id": 4},   # 财务部
-    "liangming":      {"name": "梁明",      "role": "manager", "dept_id": 5},   # 人事部
-    "lujie":          {"name": "卢杰",      "role": "manager", "dept_id": 6},   # 产品部
+    "zhoufang":       {"name": "周芳",      "role": "manager", "dept_id": 1},
+    "xiaoyiming":     {"name": "萧一鸣",    "role": "manager", "dept_id": 2},
+    "gaoyong":        {"name": "高勇",      "role": "manager", "dept_id": 3},
+    "linyi":          {"name": "林怡",      "role": "manager", "dept_id": 4},
+    "liangming":      {"name": "梁明",      "role": "manager", "dept_id": 5},
+    "lujie":          {"name": "卢杰",      "role": "manager", "dept_id": 6},
     "analyst":        {"name": "数据分析师","role": "analyst",  "dept_id": None},
     "viewer":         {"name": "访客",      "role": "viewer",   "dept_id": None},
     "support":        {"name": "技术支持",  "role": "support",  "dept_id": None},
 }
 
 _DEFAULT_USER = "analyst"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 运行时状态（从 DB 加载或 fallback 到默认值）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+ROLES: dict[str, dict] = {}
+USERS: dict[str, dict] = {}
+_db_loaded = False
+
+
+def _get_db_path() -> str:
+    return os.path.join(os.path.dirname(__file__), "..", "db", "demo.db")
+
+
+def _load_from_db() -> bool:
+    """从 agent_roles / agent_users 表加载权限数据。
+    返回 True 表示加载成功，False 表示表不存在或为空（fallback 到默认值）。
+    """
+    global ROLES, USERS, _db_loaded
+    db_path = _get_db_path()
+
+    if not os.path.exists(db_path):
+        return False
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+
+        # 加载角色
+        rows = conn.execute("SELECT * FROM agent_roles").fetchall()
+        if not rows:
+            conn.close()
+            return False
+
+        ROLES = {}
+        for r in rows:
+            ROLES[r["role"]] = {
+                "name": r["name"],
+                "allowed_tools": json.loads(r["allowed_tools"]),
+                "db_tables": json.loads(r["db_tables"]) if r["db_tables"] else None,
+                "db_row_filter": json.loads(r["db_row_filter"]) if r["db_row_filter"] else None,
+                "docs_filter": json.loads(r["docs_filter"]) if r["docs_filter"] else None,
+                "sensitive_check": bool(r["sensitive_check"]),
+            }
+
+        # 加载用户
+        rows = conn.execute("SELECT * FROM agent_users").fetchall()
+        USERS = {}
+        for r in rows:
+            USERS[r["user_id"]] = {
+                "name": r["name"],
+                "role": r["role"],
+                "dept_id": r["dept_id"],
+            }
+
+        conn.close()
+        _db_loaded = True
+        return True
+
+    except sqlite3.OperationalError:
+        # 表不存在
+        return False
+
+
+def reload():
+    """重新从 DB 加载权限数据（修改权限表后调用）。"""
+    global _db_loaded
+    ok = _load_from_db()
+    if not ok:
+        _use_defaults()
+    _db_loaded = ok
+
+
+def _use_defaults():
+    global ROLES, USERS
+    ROLES = dict(_DEFAULT_ROLES)
+    USERS = dict(_DEFAULT_USERS)
+
+
+# 模块加载时自动初始化
+if not _load_from_db():
+    _use_defaults()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
