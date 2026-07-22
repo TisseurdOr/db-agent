@@ -1,5 +1,8 @@
+import os
 import sqlite3
+
 from db.seed import DB_PATH
+from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id
 
 LIST_TABLES_TOOL = {
     "name": "list_tables",
@@ -11,18 +14,23 @@ LIST_TABLES_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {},
-        "required": []
-    }
+        "required": [],
+    },
 }
 
-def list_tables() -> dict:
+
+def list_tables(user_id: str | None = None) -> dict:
     conn = sqlite3.connect(DB_PATH)
     try:
         cursor = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
         tables = [row[0] for row in cursor.fetchall()]
-        return {"tables": tables}
+        user = get_user(resolve_user_id(user_id))
+        ent = check_entitlement(user, tool_name="list_tables", tables=tables)
+        if not ent.passed:
+            return {"error": True, "message": ent.reason}
+        return {"tables": ent.tables or []}
     except Exception as e:
         return {
             "error": str(e),
@@ -46,21 +54,22 @@ DESCRIBE_TABLE_TOOL = {
         "properties": {
             "table_name": {
                 "type": "string",
-                "description": "要查看的表名。若不确定，先调 list_tables 获取。"
+                "description": "要查看的表名。若不确定，先调 list_tables 获取。",
             }
         },
-        "required": ["table_name"]
-    }
+        "required": ["table_name"],
+    },
 }
 
-# 安全：白名单校验表名——防止通过 LLM 输出注入恶意 SQL。
-# PRAGMA table_info 虽然不接受多语句，但 table_name 来自 LLM 输出，
-# 可能包含引号或特殊字符。用 sqlite_master 先查白名单，
-# 确保表名是真实存在的标识符，而不是注入 payload。
-def describe_table(table_name: str) -> dict:
+
+def describe_table(table_name: str, user_id: str | None = None) -> dict:
+    user = get_user(resolve_user_id(user_id))
+    ent = check_entitlement(user, tool_name="describe_table", table=table_name)
+    if not ent.passed:
+        return {"error": True, "message": ent.reason}
+
     conn = sqlite3.connect(DB_PATH)
     try:
-        # 白名单校验
         valid_tables = [
             row[0] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
@@ -75,7 +84,6 @@ def describe_table(table_name: str) -> dict:
                 "columns": [],
             }
 
-        # 表名已验证在白名单内，可以安全拼接
         cursor = conn.execute(f"PRAGMA table_info('{table_name}')")
         columns = [
             {"name": row[1], "type": row[2], "nullable": not row[3]}
@@ -86,10 +94,6 @@ def describe_table(table_name: str) -> dict:
         conn.close()
 
 
-# get_db_schema_summary: 一次返回所有表和字段的摘要。
-# 为什么要这个 Tool：按 lesson 0008 的建议，如果没有这个 Tool，
-# Agent 在每次查询时要调 list_tables → 对每张表调 describe_table，
-# 浪费 3-4 轮 tool call。有了 schema_summary，一轮就拿全貌。
 GET_SCHEMA_SUMMARY_TOOL = {
     "name": "get_schema_summary",
     "description": (
@@ -106,17 +110,23 @@ GET_SCHEMA_SUMMARY_TOOL = {
 }
 
 
-def get_schema_summary() -> dict:
-    """一次性返回所有表 + 字段的摘要。"""
+def get_schema_summary(user_id: str | None = None) -> dict:
+    """一次性返回所有表 + 字段的摘要（按用户权限过滤表）。"""
     conn = sqlite3.connect(DB_PATH)
     try:
-        tables_result = []
         table_names = [
             row[0] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         ]
-        for table_name in table_names:
+        user = get_user(resolve_user_id(user_id))
+        ent = check_entitlement(user, tool_name="list_tables", tables=table_names)
+        if not ent.passed:
+            return {"error": True, "message": ent.reason}
+        allowed = ent.tables or []
+
+        tables_result = []
+        for table_name in allowed:
             cursor = conn.execute(f"PRAGMA table_info('{table_name}')")
             columns = [
                 {"name": row[1], "type": row[2], "nullable": not row[3]}

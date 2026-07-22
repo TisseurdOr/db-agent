@@ -105,7 +105,13 @@ async def main():
         action="store_true",
         help="多 Agent 模式下关闭首次 DataQuality 检查",
     )
+    parser.add_argument(
+        "--user",
+        default=os.getenv("AGENT_USER", "viewer"),
+        help="用户名 (默认: viewer，也可用 analyst / xiaoyiming ...)",
+    )
     args = parser.parse_args()
+    os.environ["AGENT_USER"] = args.user
 
     init_db()
 
@@ -130,7 +136,7 @@ async def main():
     set_vector_memory(vector_memory)  # 注入给 search_memory Tool
     set_llm_client(client)            # Self-Query 拆解用
 
-    print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}）")
+    print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}, 用户: {args.user}）")
     print("试试这些：")
     print("  - 有哪些表？查一下整体结构")
     print("  - 上周哪个部门销售额最高？")

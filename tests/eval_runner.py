@@ -36,6 +36,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
+# eval 需要查库；未显式配置时用 analyst，避免默认 viewer 无权 run_query
+os.environ.setdefault("AGENT_USER", "analyst")
 
 from anthropic import Anthropic
 

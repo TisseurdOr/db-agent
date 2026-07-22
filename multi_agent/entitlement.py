@@ -12,17 +12,22 @@
     4. 行级改写保留 — 唯一需要动 SQL 的场景是自动追加 WHERE dept_id=X
 
 用法:
-    from multi_agent.entitlement import get_user, authorize_tool, filter_tables, rewrite_sql
+    from multi_agent.entitlement import get_user, check_entitlement
 
     user = get_user("xiaoyiming")
-    passed, reason = authorize_tool(user, "run_query")     # 能不能调这个工具
-    tables = filter_tables(user, all_tables)                # 能看哪些表
-    sql = rewrite_sql(user, sql)                            # 行级过滤
+    result = check_entitlement(user, tool_name="run_query", sql="SELECT * FROM employees")
+    if not result.passed:
+        return {"error": result.reason}
+    if result.needs_approval:
+        ...  # HITL 暂停
+    sql = result.sql  # 可能已 rewrite_sql
 """
 
 import json
 import sqlite3
 import os
+import re
+from dataclasses import dataclass
 from typing import Optional
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -89,7 +94,7 @@ _DEFAULT_USERS: dict[str, dict] = {
     "support":        {"name": "技术支持",  "role": "support",  "dept_id": None},
 }
 
-_DEFAULT_USER = "analyst"
+_DEFAULT_USER = os.getenv("AGENT_DEFAULT_USER", "viewer")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 运行时状态（从 DB 加载或 fallback 到默认值）
@@ -179,12 +184,17 @@ if not _load_from_db():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def get_user(user_id: Optional[str] = None) -> dict:
-    """获取用户完整权限信息。未指定时默认 analyst。"""
+    """获取用户完整权限信息。未指定时用 AGENT_DEFAULT_USER（默认 viewer）。"""
     user = USERS.get(user_id) if user_id else None
     if not user:
         user = USERS[_DEFAULT_USER]
     role = ROLES[user["role"]]
     return {**user, "permissions": role}
+
+
+def resolve_user_id(user_id: Optional[str] = None) -> str:
+    """Tool 层统一解析当前用户 ID（CLI --user / AGENT_USER / 默认 viewer）。"""
+    return user_id or os.getenv("AGENT_USER") or os.getenv("AGENT_DEFAULT_USER", "viewer")
 
 
 def list_users() -> list[dict]:
@@ -198,6 +208,115 @@ def list_roles() -> list[dict]:
              "table_count": len(r["db_tables"]) if r["db_tables"] else "全部",
              "row_filter": r["db_row_filter"] is not None}
             for rid, r in ROLES.items()]
+
+
+# 课程 0028 别名：运行时 ROLES 即权限表（结构见 _DEFAULT_ROLES）
+ROLE_PERMISSIONS = ROLES
+
+
+@dataclass
+class EntitlementResult:
+    """check_entitlement() 统一返回结构。"""
+    passed: bool
+    reason: str = ""
+    sql: Optional[str] = None           # run_query：行级改写后的 SQL
+    tables: Optional[list[str]] = None  # list_tables：过滤后的表名
+    docs: Optional[list[dict]] = None   # search_knowledge_base：过滤后的文档
+    needs_approval: bool = False        # run_query：是否触发 HITL
+
+
+def check_entitlement(
+    user: dict,
+    *,
+    tool_name: str,
+    sql: Optional[str] = None,
+    table: Optional[str] = None,
+    tables: Optional[list[str]] = None,
+    docs: Optional[list[dict]] = None,
+) -> EntitlementResult:
+    """统一权限检查入口 — 串联工具授权 / 表级 / 行级 / 文档 / HITL。
+
+    小函数（authorize_tool、filter_tables 等）仍可直接调用；
+    Tool 层建议只调本函数，避免漏检。
+
+    Args:
+        user: get_user() 返回的完整用户对象（含 permissions）
+        tool_name: 即将调用的工具名
+        sql: run_query 的 SQL（可选，传则做表级 + 行级 + 敏感列检查）
+        table: describe_table 的单表名
+        tables: list_tables 的全量表名（传则做表级过滤）
+        docs: search_knowledge_base 的文档列表（传则做文档过滤）
+
+    Returns:
+        EntitlementResult — passed=False 时 reason 可直接返回给用户
+    """
+    ok, reason = authorize_tool(user, tool_name)
+    if not ok:
+        return EntitlementResult(passed=False, reason=reason)
+
+    if tool_name == "run_query":
+        if not sql or not sql.strip():
+            return EntitlementResult(passed=False, reason="缺少 SQL 语句。")
+        for tbl in _extract_table_names(sql):
+            ok, reason = check_table_access(user, tbl)
+            if not ok:
+                return EntitlementResult(passed=False, reason=reason)
+        rewritten = rewrite_sql(user, sql)
+        return EntitlementResult(
+            passed=True,
+            sql=rewritten,
+            needs_approval=needs_approval(user, rewritten),
+        )
+
+    if tool_name == "describe_table":
+        if not table:
+            return EntitlementResult(passed=False, reason="缺少表名。")
+        ok, reason = check_table_access(user, table)
+        if not ok:
+            return EntitlementResult(passed=False, reason=reason)
+        return EntitlementResult(passed=True)
+
+    if tool_name == "list_tables":
+        if tables is not None:
+            return EntitlementResult(passed=True, tables=filter_tables(user, tables))
+        return EntitlementResult(passed=True)
+
+    if tool_name in ("search_knowledge_base", "read_document"):
+        if docs is not None:
+            return EntitlementResult(passed=True, docs=filter_docs(user, docs))
+        return EntitlementResult(passed=True)
+
+    # write_query 等：工具授权通过即可
+    return EntitlementResult(passed=True)
+
+
+def check_entitlement_by_role(user_role: str, sql: str) -> tuple[bool, str]:
+    """课程 0028 兼容签名：按角色 + SQL 做 run_query 权限检查。"""
+    if user_role not in ROLES:
+        return False, f"未知角色: {user_role}"
+    user = _user_for_role(user_role)
+    result = check_entitlement(user, tool_name="run_query", sql=sql)
+    if not result.passed:
+        return False, result.reason
+    if result.needs_approval:
+        return False, "查询涉及敏感列，需要人工审批。"
+    return True, ""
+
+
+def _user_for_role(role: str) -> dict:
+    """构造带 permissions 的用户对象；同角色多用户时取第一个有 dept_id 的。"""
+    dept_id = None
+    name = ROLES[role]["name"]
+    if role in USERS:
+        u = USERS[role]
+        return {**u, "permissions": ROLES[role]}
+    for u in USERS.values():
+        if u["role"] == role:
+            name = u["name"]
+            if u.get("dept_id") is not None:
+                dept_id = u["dept_id"]
+                break
+    return {"name": name, "role": role, "dept_id": dept_id, "permissions": ROLES[role]}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -281,8 +400,7 @@ def rewrite_sql(user: dict, sql: str) -> str:
 
 def _extract_table_names(sql: str) -> list[str]:
     """从 SQL 提取表名——只处理 FROM/JOIN，不做完整解析。"""
-    import re
-    return re.findall(r'(?:FROM|JOIN)\s+(\w+)', sql, re.IGNORECASE)
+    return re.findall(r"(?:FROM|JOIN)\s+(\w+)", sql, re.IGNORECASE)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
