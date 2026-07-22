@@ -74,7 +74,7 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     这样 Router 能识别"刚才问了什么"等元问题——
     看到历史里上一轮问了"有哪些表"，就知道这不是数据查询。
     """
-    trace = config["configurable"]["_trace"]
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("router", "分析意图")
 
     client = config["configurable"]["_client"]
@@ -139,14 +139,14 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
 
 async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> dict:
     """DataQuality Agent: 扫一遍数据质量（NULL 比例、日期连续性、异常值）。"""
-    trace = config["configurable"]["_trace"]
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
     client = config["configurable"]["_client"]
     model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == "data_quality")
     span = trace.start_span("data_quality", task[:60])
     print(f"⏳ DataQuality: {task[:60]}...")
     result, usage = await _run_agent_with_timeout(data_quality_agent, client, task, model, span, "DataQuality")
-    trace.finish_span(span, usage)
+    trace.finish_span(span, usage, error=span.error)
     print(f"✅ DataQuality ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
     results = {**state.get("results", {}), "data_quality": result}
     return _next_step(state, results, "data_quality")
@@ -154,14 +154,14 @@ async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> d
 
 async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     """SQL Agent: 查数据库（list_tables / describe_table / run_query）。"""
-    trace = config["configurable"]["_trace"]
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
     client = config["configurable"]["_client"]
     model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == "sql")
     span = trace.start_span("sql", task[:60])
     print(f"⏳ SQL Agent: {task[:60]}...")
     result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL")
-    trace.finish_span(span, usage)
+    trace.finish_span(span, usage, error=span.error)
     print(f"✅ SQL Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
     results = {**state.get("results", {}), "sql": result}
     return _next_step(state, results, "sql")
@@ -169,14 +169,14 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
 
 async def node_strategy(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Strategy Agent: 查公司制度文档（search_knowledge_base）。"""
-    trace = config["configurable"]["_trace"]
     client = config["configurable"]["_client"]
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
     model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == "strategy")
     span = trace.start_span("strategy", task[:60])
     print(f"⏳ Strategy Agent: {task[:60]}...")
     result, usage = await _run_agent_with_timeout(strategy_agent, client, task, model, span, "Strategy")
-    trace.finish_span(span, usage)
+    trace.finish_span(span, usage, error=span.error)
     print(f"✅ Strategy Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
     results = {**state.get("results", {}), "strategy": result}
     return _next_step(state, results, "strategy")
@@ -191,7 +191,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     3. 最近对话（messages）—— Checkpointer 累积的本轮消息
     4. 中间结果（results）—— 上游 Agent 的执行输出
     """
-    trace = config["configurable"]["_trace"]
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("analysis", "综合分析")
 
     client = config["configurable"]["_client"]
@@ -215,7 +215,6 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     # Layer 4: 上游 Agent 的中间结果
     for name, text in state.get("results", {}).items():
         context_parts.append(f"[{name} Agent 结果]\n{text}")
-    context = "\n\n".join(context_parts)
 
     # 检测上游结果是否有超时——如果有，在 context 里加提示
     for name, text in state.get("results", {}).items():
@@ -232,18 +231,22 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     if is_agent_timeout(result):
         span.error = "Analysis 超过最大轮数"
         print(f"⚠️ Analysis 超过最大轮数")
-    trace.finish_span(span, usage)
     print(f"✅ Analysis Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
 
     # Layer 3 输出护栏：检查 PII 泄露、system prompt 泄露、异常输出
     passed, reason = guard_output(result)
     if not passed:
         print(f"🚫 输出护栏拦截: {reason}")
-        span.error = reason
+        # finish span before set blocked
+        trace.finish_span(span, usage, error = reason)
+        trace.set_blocked("output", reason)
+        
         return {
             "final_answer": reason,
             "messages": [AIMessage(content=reason)],
         }
+    # 处理超时情况，正常情况是NONE，超时才传参进span
+    trace.finish_span(span, usage, error=span.error)
 
     # 把最终回答写回 messages —— Checkpointer 自动持久化，
     # 下一轮 Router 和 Analysis 就能从 messages 里看到这轮说了什么。
