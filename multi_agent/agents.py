@@ -1,7 +1,7 @@
 """专业 Agent 定义: System Prompt + Tool 绑定。
 
 每个 Agent 封装为 ConfiguredAgent — prompt、tools、handlers 打包在一起。
-orchestrator.py 只需调用 agent.run(client, task) 即可。
+orchestrator.py 只需调用 result, usage = agent.run(client, task) 即可。
 """
 
 from tools.schema import (
@@ -34,6 +34,7 @@ ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划
 2. 纯政策查询（"提成怎么算"、"年假多少天"）→ 只用 strategy
 3. 需要结合数据的分析（"分析趋势给建议"、"对比后推荐策略"）→ sql + strategy + analysis
 4. 简单闲聊 → plan 为 []
+5. 对话历史相关（"刚才问了什么"、"上一个问题是什么"、"之前查了什么"）→ 只用 analysis，task 写"用户询问对话历史，请根据上下文回答"
 
 输出格式（只输出 JSON，不要其他文字）:
 {"plan": [{"agent": "sql", "task": "查华东和华南的销售额"}, {"agent": "strategy", "task": "查2026公司战略中关于区域扩展的内容"}], "combine": true}

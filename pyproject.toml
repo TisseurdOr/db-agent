@@ -6,8 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=0.116.0",
+    "aiosqlite>=0.20.0",
     "chromadb>=1.5.9",
     "langgraph>=1.2.9",
+    "langgraph-checkpoint-sqlite>=2.0.0",
     "matplotlib>=3.11.1",
     "mcp>=1.28.1",
     "numpy>=2.5.1",

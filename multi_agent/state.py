@@ -9,6 +9,17 @@ from typing import TypedDict, Annotated
 from langgraph.graph.message import add_messages
 
 
+def _merge_stats(left: dict, right: dict) -> dict:
+    """累加各节点的 token 和耗时统计。"""
+    return {
+        "input_tokens": left.get("input_tokens", 0) + right.get("input_tokens", 0),
+        "output_tokens": left.get("output_tokens", 0) + right.get("output_tokens", 0),
+        "turns": left.get("turns", 0) + right.get("turns", 0),
+        "elapsed": left.get("elapsed", 0) + right.get("elapsed", 0),
+        "nodes": left.get("nodes", []) + right.get("nodes", []),
+    }
+
+
 # ── 0020: 单 Agent ──
 
 class DBAgentState(TypedDict):
@@ -23,14 +34,19 @@ class DBAgentState(TypedDict):
 # 不作为 LangGraph state channel 被追踪（但 TypedDict 声明了才能传进去）。
 
 class MultiAgentState(TypedDict):
-    query: str          # 用户问题（invoke 时写入，只读）
-    plan: list          # Router 输出的执行计划（router 写入，其他节点读）
-    results: dict       # 各 Agent 中间结果（每个 agent 往里塞自己的结果）
-    final_answer: str   # 最终输出（analysis 写入，runner.run() 返回）
-    next: str           # 下一个节点名（_next_step 写入，edge_router 读取）
-    _client: object     # LLM client（注入，各个节点读）
-    _model: str         # 模型名（注入）
-    _inject_dq: bool    # 是否注入 DQ（注入）
+    query: str                  # 用户问题（ainvoke 时写入）
+    messages: Annotated[list, add_messages]  # 对话历史，Checkpointer 持久化
+    _recalled_memories: str     # pre-turn 向量召回的记忆
+    _conversation_summary: str  # ConversationManager 压缩的早期对话摘要
+    plan: list                  # Router 输出的执行计划
+    results: dict               # 各 Agent 中间结果
+    final_answer: str           # 最终输出（analysis 写入）
+    next: str                   # 下一个节点名（_next_step 写入，edge_router 读取）
+    _stats: Annotated[dict, _merge_stats]  # 各节点累计: input_tokens/output_tokens/turns/elapsed/nodes
+    _client: object             # ⚠️ 已废弃——现在走 configurable，不再放 state
+    _model: str                 # ⚠️ 已废弃——同上
+    _inject_dq: bool            # 是否注入 DataQuality（首轮为 True）
+
 
 
 '''
