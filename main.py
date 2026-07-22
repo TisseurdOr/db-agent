@@ -247,7 +247,20 @@ async def main():
                     recalled_memories=memories_text,
                     conversation_summary=context,
                 )
-                print(f"\nAgent: {result}")
+
+                # HITL 审批：graph 在敏感 SQL 处暂停，等待人工确认
+                if isinstance(result, dict) and result.get("__interrupt__"):
+                    interrupt_data = result["data"]
+                    print(f"\n{'='*50}")
+                    print(f"⚠️  敏感查询需要审批")
+                    print(f" 👩‍💻👨‍💻🧑‍💻用户: {interrupt_data.get('user', '?')}")
+                    print(f"  🤖SQL:  {interrupt_data.get('sql', '?')}")
+                    print(f"{'='*50}")
+                    choice = input("  是否继续执行? (y/n): ").strip().lower()
+                    result = await multi_runner.resume(approved=(choice == "y"))
+                    print(f"\nAgent: {result}")
+                else:
+                    print(f"\nAgent: {result}")
             else:
                 result = await streaming_agent(
                     client=client,

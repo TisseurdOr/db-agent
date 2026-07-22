@@ -46,12 +46,31 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
             "message": ent.reason,
         }
     if ent.needs_approval:
-        return {
-            "error": "需要管理员审批",
-            "sql": sql,
-            "message": "需要管理员审批",
-            "pending_sql": ent.sql,
-        }
+        try:
+            from langgraph.types import interrupt
+            decision = interrupt({
+                "type": "hitl_approval",
+                "tool": "run_query",
+                "sql": ent.sql,
+                "user": user["name"],
+                "role": user["role"],
+                "message": (
+                    f"敏感查询需要审批。\n"
+                    f"用户: {user['name']} ({user['role']})\n"
+                    f"SQL: {ent.sql}"
+                ),
+            })
+            if isinstance(decision, dict) and not decision.get("approved"):
+                return {"error": "用户拒绝了该查询", "sql": sql}
+            # 用户批准，继续执行
+        except (RuntimeError, ImportError):
+            # 不在 graph 上下文（测试/单 Agent 模式），返回审批标记
+            return {
+                "error": "需要管理员审批",
+                "sql": sql,
+                "message": "需要管理员审批",
+                "pending_sql": ent.sql,
+            }
 
     sql = ent.sql or sql
     conn = sqlite3.connect(DB_PATH)

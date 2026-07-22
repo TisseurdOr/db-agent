@@ -16,7 +16,8 @@ from pathlib import Path
 import aiosqlite
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.types import RunnableConfig
+from langgraph.types import RunnableConfig, Command
+from langgraph.errors import GraphInterrupt
 from langchain_core.messages import AIMessage
 from anthropic import Anthropic
 
@@ -442,6 +443,9 @@ class MultiAgentRunner:
     async def run(self, query: str, recalled_memories: str = "", conversation_summary: str = "") -> str:
         """执行一次多 Agent 查询，返回 final_answer 文本。
 
+        如果遇到 HITL 审批中断，返回 {"__interrupt__": True, "data": {...}}。
+        调用方检测到此标记后展示 SQL 给用户，确认后调 resume() 恢复执行。
+
         Args:
             query: 用户输入的自然语言问题
             recalled_memories: pre-turn 向量召回的记忆文本（main.py 预处理后传入）
@@ -458,8 +462,7 @@ class MultiAgentRunner:
             trace.save()
             return reason
 
-        # configurable: 放不可序列化的对象（client / trace）和只读配置
-        config = {
+        self._current_config = {
             "configurable": {
                 "thread_id": self.thread_id,
                 "_client": self.client,
@@ -468,7 +471,7 @@ class MultiAgentRunner:
                 "_router_cache": self.router_cache,
             }
         }
-        result = await self.graph.ainvoke({
+        state = {
             "query": query,
             "messages": [{"role": "user", "content": query}],
             "_recalled_memories": recalled_memories,
@@ -479,13 +482,46 @@ class MultiAgentRunner:
             "final_answer": "",
             "next": "",
             "_stats": {},
-        }, config=config)
+        }
+
+        try:
+            result = await self.graph.ainvoke(state, config=self._current_config)
+        except GraphInterrupt:
+            # 旧版 LangGraph: interrupt() 抛异常，graph 在敏感 SQL 处暂停
+            result = None
+
+        # 检查是否被 interrupt 暂停（新/旧版本兼容）
+        snapshot = await self.graph.aget_state(self._current_config)
+        if snapshot and snapshot.interrupts:
+            interrupt_data = snapshot.interrupts[0].value if snapshot.interrupts else {}
+            # trace 暂不存盘——等 resume() 完成后一起写
+            return {"__interrupt__": True, "data": interrupt_data}
+
+        if result is None:
+            return "抱歉，无法回答。"
 
         # 所有节点运行完，落盘 trace
         trace.finished_at = time.monotonic()
         filepath = trace.save()
         print(f"📊 {trace.summary()}  → {filepath}")
 
+        return result.get("final_answer", "抱歉，无法回答。")
+
+    async def resume(self, approved: bool) -> str:
+        """HITL 审批后恢复 graph 执行。
+
+        Args:
+            approved: True = 用户批准，继续执行敏感查询
+        """
+        trace = self._current_config["configurable"].get("_trace")
+        result = await self.graph.ainvoke(
+            Command(resume={"approved": approved}),
+            config=self._current_config,
+        )
+        if trace:
+            trace.finished_at = time.monotonic()
+            filepath = trace.save()
+            print(f"📊 {trace.summary()}  → {filepath}")
         return result.get("final_answer", "抱歉，无法回答。")
 
     async def aclose(self) -> None:

@@ -7,6 +7,7 @@ import os
 import time
 from typing import Optional
 from anthropic import Anthropic
+from langgraph.errors import GraphInterrupt
 
 
 class AgentRunError(Exception):
@@ -93,6 +94,8 @@ async def _simple_agent_run(
                         content = str(await handler(**tc.input))
                     else:
                         content = str(handler(**tc.input))
+                except GraphInterrupt:
+                    raise
                 except Exception as e:
                     content = f"Tool 执行错误: {e}"
             elapsed = time.monotonic() - t0
