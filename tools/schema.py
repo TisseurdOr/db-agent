@@ -2,7 +2,7 @@ import os
 import sqlite3
 
 from db.seed import DB_PATH
-from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id
+from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id, deny_payload
 
 LIST_TABLES_TOOL = {
     "name": "list_tables",
@@ -29,7 +29,7 @@ def list_tables(user_id: str | None = None) -> dict:
         user = get_user(resolve_user_id(user_id))
         ent = check_entitlement(user, tool_name="list_tables", tables=tables)
         if not ent.passed:
-            return {"error": True, "message": ent.reason}
+            return deny_payload(ent)
         return {"tables": ent.tables or []}
     except Exception as e:
         return {
@@ -66,7 +66,7 @@ def describe_table(table_name: str, user_id: str | None = None) -> dict:
     user = get_user(resolve_user_id(user_id))
     ent = check_entitlement(user, tool_name="describe_table", table=table_name)
     if not ent.passed:
-        return {"error": True, "message": ent.reason}
+        return deny_payload(ent)
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -122,7 +122,7 @@ def get_schema_summary(user_id: str | None = None) -> dict:
         user = get_user(resolve_user_id(user_id))
         ent = check_entitlement(user, tool_name="list_tables", tables=table_names)
         if not ent.passed:
-            return {"error": True, "message": ent.reason}
+            return deny_payload(ent)
         allowed = ent.tables or []
 
         tables_result = []

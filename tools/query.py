@@ -2,7 +2,7 @@ import os
 import sqlite3
 
 from db.seed import DB_PATH
-from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id
+from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id, deny_payload
 
 RUN_QUERY_TOOL = {
     "name": "run_query",
@@ -40,11 +40,7 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
     user = get_user(resolve_user_id(user_id))
     ent = check_entitlement(user, tool_name="run_query", sql=sql)
     if not ent.passed:
-        return {
-            "error": ent.reason,
-            "sql": sql,
-            "message": ent.reason,
-        }
+        return deny_payload(ent, sql=sql)
     if ent.needs_approval:
         try:
             from langgraph.types import interrupt

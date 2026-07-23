@@ -12,12 +12,12 @@
     4. 行级改写保留 — 唯一需要动 SQL 的场景是自动追加 WHERE dept_id=X
 
 用法:
-    from multi_agent.entitlement import get_user, check_entitlement
+    from multi_agent.entitlement import get_user, check_entitlement, deny_payload
 
     user = get_user("xiaoyiming")
     result = check_entitlement(user, tool_name="run_query", sql="SELECT * FROM employees")
     if not result.passed:
-        return {"error": result.reason}
+        return deny_payload(result)          # 统一 error / message / suggestion
     if result.needs_approval:
         ...  # HITL 暂停
     sql = result.sql  # 可能已 rewrite_sql
@@ -216,13 +216,33 @@ ROLE_PERMISSIONS = ROLES
 
 @dataclass
 class EntitlementResult:
-    """check_entitlement() 统一返回结构。"""
+    """权限检查统一返回结构（小函数与 check_entitlement 共用）。"""
     passed: bool
     reason: str = ""
+    suggestion: str = ""                # 拦截时给 Agent 的纠正建议
     sql: Optional[str] = None           # run_query：行级改写后的 SQL
     tables: Optional[list[str]] = None  # list_tables：过滤后的表名
     docs: Optional[list[dict]] = None   # search_knowledge_base：过滤后的文档
     needs_approval: bool = False        # run_query：是否触发 HITL
+
+
+def _deny(reason: str, suggestion: str = "") -> EntitlementResult:
+    return EntitlementResult(passed=False, reason=reason, suggestion=suggestion)
+
+
+def _ok(**kwargs) -> EntitlementResult:
+    return EntitlementResult(passed=True, **kwargs)
+
+
+def deny_payload(ent: EntitlementResult, **extra) -> dict:
+    """Tool 层统一拦截返回：error / message / suggestion + 可选附加字段。"""
+    payload = {
+        "error": True,
+        "message": ent.reason,
+        "suggestion": ent.suggestion,
+    }
+    payload.update(extra)
+    return payload
 
 
 def check_entitlement(
@@ -236,58 +256,42 @@ def check_entitlement(
 ) -> EntitlementResult:
     """统一权限检查入口 — 串联工具授权 / 表级 / 行级 / 文档 / HITL。
 
-    小函数（authorize_tool、filter_tables 等）仍可直接调用；
-    Tool 层建议只调本函数，避免漏检。
-
-    Args:
-        user: get_user() 返回的完整用户对象（含 permissions）
-        tool_name: 即将调用的工具名
-        sql: run_query 的 SQL（可选，传则做表级 + 行级 + 敏感列检查）
-        table: describe_table 的单表名
-        tables: list_tables 的全量表名（传则做表级过滤）
-        docs: search_knowledge_base 的文档列表（传则做文档过滤）
-
-    Returns:
-        EntitlementResult — passed=False 时 reason 可直接返回给用户
+    小函数（authorize_tool、check_table_access 等）均返回 EntitlementResult；
+    Tool 层建议只调本函数，失败时用 deny_payload(ent) 返回给 Agent。
     """
-    ok, reason = authorize_tool(user, tool_name)
-    if not ok:
-        return EntitlementResult(passed=False, reason=reason)
+    tool_check = authorize_tool(user, tool_name)
+    if not tool_check.passed:
+        return tool_check
 
     if tool_name == "run_query":
         if not sql or not sql.strip():
-            return EntitlementResult(passed=False, reason="缺少 SQL 语句。")
+            return _deny("缺少 SQL 语句。", "请提供一条 SELECT 语句。")
         for tbl in _extract_table_names(sql):
-            ok, reason = check_table_access(user, tbl)
-            if not ok:
-                return EntitlementResult(passed=False, reason=reason)
+            table_check = check_table_access(user, tbl)
+            if not table_check.passed:
+                return table_check
         rewritten = rewrite_sql(user, sql)
-        return EntitlementResult(
-            passed=True,
-            sql=rewritten,
-            needs_approval=needs_approval(user, rewritten),
-        )
+        return _ok(sql=rewritten, needs_approval=needs_approval(user, rewritten))
 
     if tool_name == "describe_table":
         if not table:
-            return EntitlementResult(passed=False, reason="缺少表名。")
-        ok, reason = check_table_access(user, table)
-        if not ok:
-            return EntitlementResult(passed=False, reason=reason)
-        return EntitlementResult(passed=True)
+            return _deny("缺少表名。", "请先 list_tables，再 describe_table。")
+        table_check = check_table_access(user, table)
+        if not table_check.passed:
+            return table_check
+        return _ok()
 
     if tool_name == "list_tables":
         if tables is not None:
-            return EntitlementResult(passed=True, tables=filter_tables(user, tables))
-        return EntitlementResult(passed=True)
+            return _ok(tables=filter_tables(user, tables))
+        return _ok()
 
     if tool_name in ("search_knowledge_base", "read_document"):
         if docs is not None:
-            return EntitlementResult(passed=True, docs=filter_docs(user, docs))
-        return EntitlementResult(passed=True)
+            return _ok(docs=filter_docs(user, docs))
+        return _ok()
 
-    # write_query 等：工具授权通过即可
-    return EntitlementResult(passed=True)
+    return _ok()
 
 
 def check_entitlement_by_role(user_role: str, sql: str) -> tuple[bool, str]:
@@ -323,13 +327,17 @@ def _user_for_role(role: str) -> dict:
 # 工具授权
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def authorize_tool(user: dict, tool_name: str) -> tuple[bool, str]:
+def authorize_tool(user: dict, tool_name: str) -> EntitlementResult:
     """检查用户能否调用此工具。Layer 2 硬拦截入口。"""
     perms = user.get("permissions", {})
     allowed = perms.get("allowed_tools", [])
     if tool_name in allowed:
-        return True, ""
-    return False, f"您的角色（{user.get('name')}）无权使用 {tool_name} 工具。"
+        return _ok()
+    tools_hint = ", ".join(allowed) if allowed else "（无）"
+    return _deny(
+        f"您的角色（{user.get('name')}）无权使用 {tool_name} 工具。",
+        f"您可用的工具: {tools_hint}。如需更多权限，请联系管理员切换账号。",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -345,15 +353,16 @@ def filter_tables(user: dict, tables: list[str]) -> list[str]:
     return [t for t in tables if t in allowed]
 
 
-def check_table_access(user: dict, table: str) -> tuple[bool, str]:
-    """表级权限：单表检查。run_query 调用前检查。"""
+def check_table_access(user: dict, table: str) -> EntitlementResult:
+    """表级权限：单表检查。run_query / describe_table 调用前检查。"""
     perms = user.get("permissions", {})
     allowed = perms.get("db_tables")
-    if allowed is None:
-        return True, ""
-    if table in allowed:
-        return True, ""
-    return False, f"您无权访问 {table} 表。（角色: {user['name']}）"
+    if allowed is None or table in allowed:
+        return _ok()
+    return _deny(
+        f"您无权访问 {table} 表。（角色: {user['name']}）",
+        f"可用的表: {', '.join(allowed)}",
+    )
 
 
 def rewrite_sql(user: dict, sql: str) -> str:
