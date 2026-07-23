@@ -1,14 +1,14 @@
-"""LangGraph 图构建 + 编译。
+"""LangGraph 图构建 + 编译（已归档，主路径请用 multi_agent/orchestrator.py）。
 
-用法:
-    from multi_agent.graph import build_graph
-    agent = build_graph(client, model, system_prompt, tools, handlers)
-    result = agent.invoke({"messages": [{"role": "user", "content": "..."}]})
+用法（仅供对照旧课）：
+    from archive.legacy_single_agent_graph.graph import build_graph
 """
 
 from langgraph.graph import StateGraph, END
-from .state import DBAgentState
-from .nodes import make_node_think, make_node_execute_tool, node_sql_review
+from multi_agent.state import DBAgentState
+from archive.legacy_single_agent_graph.nodes import (
+    make_node_think, make_node_execute_tool, node_sql_review,
+)
 
 
 def router(state: DBAgentState) -> str:

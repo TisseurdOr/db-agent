@@ -10,7 +10,7 @@
 # 设计决策：
 #   - 用 agent.streaming_agent 而非旧 streaming_agent.py：
 #     agent.py 是合并后的统一实现，有 cache_control、temperature=0、
-#     结构化错误处理、Tool 结果可视化。streaming_agent.py 是旧版本，已废弃。
+#     结构化错误处理、Tool 结果可视化。旧版 streaming_agent.py 已迁到 archive/。
 #   - System Prompt 用 Python 工厂函数而非 MD 文件：
 #     可注入 db_type, user_role, extra_context（Phase 3 memory block 注入点）。
 #   - --model 参数：支持在命令行切换模型，方便测试 Haiku vs Sonnet。

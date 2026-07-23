@@ -1,10 +1,6 @@
-"""LangGraph 节点函数 — 每个节点接收 state，返回部分更新。
+"""LangGraph 节点函数（已归档，配合 legacy graph.py）。"""
 
-不直接 import client/tools/handlers，而是通过闭包注入。
-这样测试时可以传 mock，main.py 传真实对象。
-"""
-
-from .state import DBAgentState
+from multi_agent.state import DBAgentState
 
 
 def _execute_tool(name: str, args: dict, handlers: dict) -> str:

@@ -2,6 +2,32 @@
 
 自然语言查询 SQLite 数据库的多 Agent 系统。支持单 Agent 快速问答和多 Agent 编排（Router → SQL/Strategy/DataQuality → Analysis），内置 Entitlement 权限网关、HITL 人工审批、三层记忆系统和 Eval 评估体系。
 
+## 从哪读起（导航）
+
+按**运行路径**读，不要按文件夹扫：
+
+| 优先级 | 路径 | 看什么 |
+|--------|------|--------|
+| 1 | `main.py` | CLI 入口：`--mode` / `--user`、记忆注入、HITL 交互 |
+| 2 | `agent.py` | single 模式：ReAct tool loop |
+| 2 | `multi_agent/orchestrator.py` | multi 模式：LangGraph 编排（详见 `multi_agent/README.md`） |
+| 3 | `tools/` | Agent 实际调用的能力（`query` 含权限） |
+| 3 | `multi_agent/entitlement.py` | 工具/表/行权限 + `deny_payload` |
+| 4 | `memory/` | 短期压缩 + 向量长期记忆 |
+| 5 | `tests/`、`docs/` | 评测与排障 |
+| — | `archive/` | **不在主路径**；旧实现 / WIP，见 `archive/README.md` |
+
+```text
+main.py
+  ├─ --mode single  → agent.streaming_agent → tools/*
+  └─ --mode multi   → MultiAgentRunner
+                        ├─ Router (agents.route_override + LLM)
+                        ├─ sql / strategy / data_quality
+                        └─ analysis → final_answer
+                             ↑
+                      tools/query.py ← check_entitlement
+```
+
 ## 快速开始
 
 ```bash
@@ -205,13 +231,10 @@ main.py（CLI 入口 + 记忆编排层）
     │                    └── tools/knowledge.py search_knowledge_base, save/read/search_memory
     │
     └─ multi 模式 ──► multi_agent/orchestrator.py（LangGraph 图编排）
-                         ├── multi_agent/agents.py     4 个专业 Agent 定义
-                         ├── multi_agent/base.py       轻量 Agent Loop
-                         ├── multi_agent/entitlement.py 权限网关（工具/表/行/文档 + HITL）
-                         ├── multi_agent/guardrails.py  输入/输出护栏
-                         ├── multi_agent/cache.py      Router 缓存（同 query 复用 plan）
-                         ├── multi_agent/state.py      MultiAgentState 定义
-                         └── multi_agent/subagents/    （子图重构预留）
+                         ├── agents.py / base.py / state.py
+                         ├── entitlement.py + guardrails.py
+                         └── cache.py
+                         （旧单 Agent 图、SQL 子图草稿 → 见 archive/）
     │
     └── memory/  三层记忆系统
         ├── vector_store.py       ChromaDB 向量存储（remember/recall）
@@ -229,8 +252,13 @@ db/
     ├── seed.py            表结构 + 示例数据（6 部门、40 员工、15 产品、12 客户、338 订单）
     └── user_memory.sql   用户记忆表
 
+mcp_servers/
+    └── db_server.py       MCP 暴露 list/describe/run_query（可选）
+
+archive/                   不在主路径：旧 streaming、0020 单 Agent 图、WIP 子图等
+
 tests/
-    ├── test_agent.py      44 条 Agent 集成测试
+    ├── test_agent.py      Agent 集成测试
     ├── test_memory.py     记忆系统单元测试
     ├── eval_runner.py     LLM-as-Judge 评测（Kimi 独立评测）
     └── eval_cases.py      评测用例定义

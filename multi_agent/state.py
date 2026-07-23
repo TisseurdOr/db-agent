@@ -1,8 +1,7 @@
 """LangGraph 图用的 State 定义。
 
-两个图各用自己的 State:
-- DBAgentState:  graph.py（0020 单 Agent）
-- MultiAgentState: orchestrator.py（0023 多 Agent）
+- MultiAgentState: orchestrator.py（主路径，--mode multi）
+- DBAgentState: 旧课单 Agent 图用；图代码已迁到 archive/legacy_single_agent_graph/
 """
 
 from typing import TypedDict, Annotated
