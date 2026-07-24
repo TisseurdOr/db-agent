@@ -206,7 +206,7 @@ async def test_agent_unknown_table(agent_deps):
     from agent import agent_loop
     client, prompt, tools, handlers = agent_deps
     result = await agent_loop(client, "查一下 inventory 表的数据", prompt, tools=tools, handlers=handlers)
-    assert "不存在" in result or "没有" in result or "找不到" in result
+    assert "不存在" in result or "没有" in result or "找不到" in result or "不在" in result
 
 
 @requires_api

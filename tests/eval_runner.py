@@ -164,13 +164,27 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
     except Exception as e:
         result.fail(f"Agent 执行异常: {e}")
         result.elapsed = time.time() - t0
-        return result, answer
+        return result, ""
 
     result.elapsed = time.time() - t0
+
+    # HITL interrupt: runner.run() 返回 {"__interrupt__": True, "data": {...}}
+    # eval 环境下自动批准继续执行
+    if isinstance(answer, dict) and answer.get("__interrupt__"):
+        try:
+            answer = await runner.resume(approved=True)
+        except Exception as e:
+            result.fail(f"HITL resume 异常: {e}")
+            return result, str(answer)
+
     assertions = case.assertions
 
     # 读最新 trace 获取 plan 和 token 信息
     agent_names = _parse_agents_from_trace()
+
+    # 安全转换：resume 后仍可能是 dict（边缘情况）
+    if isinstance(answer, dict):
+        answer = json.dumps(answer, ensure_ascii=False)
 
     # ── 断言检查 ──
 
@@ -251,7 +265,7 @@ def _parse_agents_from_trace() -> set[str]:
     agents = set()
     for span in trace.get("spans", []):
         node = span.get("node", "")
-        if node in ("sql", "strategy", "analysis", "data_quality"):
+        if node in ("sql", "strategy", "analysis", "data_quality", "hbase", "hive"):
             agents.add(node)
     return agents
 

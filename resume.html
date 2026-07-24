@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>简历 — 陈凯琳 | AI Agent 开发工程师</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; line-height: 1.6; color: #1a1a1a; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 24px; text-align: center; margin-bottom: 4px; }
+  .subtitle { text-align: center; color: #555; font-size: 14px; margin-bottom: 24px; }
+  .subtitle span { margin: 0 8px; }
+  h2 { font-size: 15px; border-bottom: 2px solid #1a1a1a; padding-bottom: 4px; margin: 28px 0 12px; text-transform: uppercase; letter-spacing: 1px; }
+  h3 { font-size: 14px; margin-bottom: 4px; }
+  .meta { font-size: 13px; color: #666; margin-bottom: 8px; }
+  ul { padding-left: 20px; margin-bottom: 12px; }
+  li { font-size: 13.5px; margin-bottom: 4px; }
+  p { font-size: 13.5px; margin-bottom: 6px; }
+  .tag { display: inline-block; background: #f0f0f0; padding: 1px 8px; border-radius: 3px; font-size: 12px; margin: 2px 4px 2px 0; }
+  .section-tags { margin-bottom: 10px; }
+  a { color: #1a1a1a; }
+  .two-col { display: flex; gap: 24px; }
+  .two-col > div { flex: 1; }
+  @media print { body { margin: 0; font-size: 12px; } }
+</style>
+</head>
+<body>
+
+<h1>陈凯琳</h1>
+<div class="subtitle">
+  <span>AI Agent 开发工程师</span>
+  <span>|</span>
+  <span>男 · 1997 年</span>
+  <span>|</span>
+  <span>重庆大学 · 硕士</span>
+  <span>|</span>
+  <span>3 年后端 + 大数据经验</span>
+</div>
+<div class="subtitle" style="font-size:13px;color:#888">
+  <span>📧 cailin@email.com</span>
+  <span>|</span>
+  <span>📱 138-xxxx-xxxx</span>
+  <span>|</span>
+  <span>🔗 github.com/TisseurdOr</span>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>技术能力</h2>
+
+<div class="section-tags">
+  <span class="tag">Python</span>
+  <span class="tag">Java</span>
+  <span class="tag">LangGraph</span>
+  <span class="tag">Anthropic SDK</span>
+  <span class="tag">ChromaDB</span>
+  <span class="tag">SQLite</span>
+  <span class="tag">FastAPI</span>
+  <span class="tag">Spring Boot</span>
+  <span class="tag">Spark</span>
+  <span class="tag">Hadoop</span>
+  <span class="tag">Kafka</span>
+  <span class="tag">Oracle</span>
+  <span class="tag">React</span>
+  <span class="tag">Docker</span>
+  <span class="tag">Git</span>
+  <span class="tag">Prompt Engineering</span>
+  <span class="tag">RAG</span>
+  <span class="tag">Eval (LLM-as-Judge)</span>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>AI Agent 项目</h2>
+
+<h3>db-agent — 企业级自然语言数据分析 Agent <span style="font-weight:normal;color:#888;font-size:12px">| 独立开发 | 2026.06 — 2026.07</span></h3>
+<div class="section-tags">
+  <span class="tag">Python</span>
+  <span class="tag">LangGraph</span>
+  <span class="tag">Anthropic SDK</span>
+  <span class="tag">ChromaDB</span>
+  <span class="tag">SQLite</span>
+</div>
+<ul>
+  <li>设计并实现了基于 <strong>LangGraph StateGraph</strong> 的多 Agent 编排引擎：Router 做意图分类 + 任务分派，SQL/Strategy/DataQuality 三个专业 Agent 各司其职，Analysis Agent 综合中间结果生成自然语言回答。支持单 Agent（ReAct Loop）和多 Agent 两种模式无缝切换。</li>
+  <li>构建了 <strong>6 层安全防御链</strong>：guard_input（输入护栏）→ Router（意图分流）→ System Prompt（软约束）→ Entitlement 权限网关（工具授权 + 表白名单 + 行级 WHERE 改写 + 文档过滤）→ HITL 人工审批（LangGraph 原生 interrupt）→ guard_output（输出护栏）。权限数据存 DB，生产改一行 SQL 即生效。</li>
+  <li>实现了基于 <strong>LangGraph interrupt() + Command(resume=...)</strong> 的 HITL 审批机制：Agent 检测到 salary/cost/budget 敏感列时，graph 自动暂停，CLI 展示待审批 SQL，用户确认后无缝恢复执行。</li>
+  <li>搭建了 <strong>三层记忆系统</strong>：Working Memory（单轮 Tool 调用链）+ Short-term Memory（滑动窗口 + LLM 压缩摘要）+ Long-term Memory（ChromaDB 向量检索 + user_memory 结构化表）。结合 TokenBudget + HybridWindowManager 做主动压缩，避免上下文溢出。</li>
+  <li>建立了 <strong>LLM-as-Judge Eval 体系</strong>：44 条回归测试覆盖正确性、完整性、安全性和路由准确性。用 Kimi kimi-k2.5 做独立评测模型（非被测模型，避免自评偏差），通过率 97.8%。</li>
+  <li>设计了请求级 <strong>Trace 可观测性</strong>（TraceContext + Span），记录每个 Agent 节点的耗时、token 消耗和错误信息，落盘 JSONL 方便后续分析。</li>
+</ul>
+
+<h3>fraud-agent — 反欺诈智能分析 Agent <span style="font-weight:normal;color:#888;font-size:12px">| 独立开发 | 2026.06</span></h3>
+<div class="section-tags">
+  <span class="tag">Python</span>
+  <span class="tag">LangGraph</span>
+  <span class="tag">RAG</span>
+  <span class="tag">Streamlit</span>
+</div>
+<ul>
+  <li>设计了双轨编排架构——预测轨（规则引擎 + ML 模型做欺诈检测）+ 分析轨（RAG 检索相似案例 + 生成解释报告），两条轨道并行执行后在汇总节点合并，既给出风险评分也给出可解释的判断依据。</li>
+  <li>集成 10 个 Tool（数据库查询、规则匹配、向量检索、报告生成等），用 Streamlit 搭建了交互式分析界面。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>工作经历</h2>
+
+<h3>花旗集团（Citi）<span style="font-weight:normal;color:#888;font-size:12px"> | Java 大数据开发 | 2021.07 — 2024.07</span></h3>
+<div class="section-tags">
+  <span class="tag">Java</span>
+  <span class="tag">Spring Boot</span>
+  <span class="tag">Spark</span>
+  <span class="tag">Hadoop</span>
+  <span class="tag">Kafka</span>
+  <span class="tag">Oracle</span>
+</div>
+<ul>
+  <li>负责金融数据处理平台的开发与维护，日均处理 <strong>TB 级交易数据</strong>，涉及实时流处理（Kafka → Spark Streaming）和批量离线计算（Spark → HDFS/Hadoop）。这段经历为后续做 Agent 后端的数据密集型场景打下基础。</li>
+  <li>基于 Spring Boot 构建了多个数据服务微服务，包括风险监控、合规报表、交易对账等模块，对后端系统的 <strong>权限模型、数据隔离、性能优化</strong> 有深入理解——这些能力在 Agent 项目的 Entitlement 安全设计中直接复用。</li>
+  <li>参与数据仓库 ETL 流程设计与优化，熟悉 SQL 调优和大数据量下的查询性能优化——在 db-agent 中做 Token 预算和查询结果截断时直接应用了这些经验。</li>
+</ul>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>教育背景</h2>
+
+<h3>重庆大学 <span style="font-weight:normal;color:#888;font-size:12px"> | 硕士 | 计算机相关专业 | 2019 — 2021</span></h3>
+<h3>（本科） <span style="font-weight:normal;color:#888;font-size:12px"> | 学士 | 2015 — 2019</span></h3>
+
+<!-- ═══════════════════════════════════════════════ -->
+<h2>自我评价</h2>
+
+<p>3 年企业级后端 + 大数据经验，近半年聚焦 AI Agent 开发。不是纯 Prompt 工程师——有完整的 Agent 系统设计能力（编排、安全、记忆、评估）。Java/Spring Boot 的后端功底加上对 LangGraph、RAG、Tool Design 的实操理解，能在 AI 应用团队里同时承担 Agent 逻辑和后端基础设施。</p>
+
+</body>
+</html>

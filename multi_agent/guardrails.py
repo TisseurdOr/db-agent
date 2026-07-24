@@ -39,6 +39,19 @@ INJECTION_PATTERNS = [
 # 编译一次，复用。不区分大小写。
 _INJECTION_RES = [re.compile(p, re.IGNORECASE) for p in INJECTION_PATTERNS]
 
+# 输入里直接塞写操作 SQL（注入 / 多语句）——L1 拦，不进 Agent。
+# 注意：自然语言「帮我删掉 orders 表」不拦（guard-006），留给 L2/agent 拒绝。
+_SQL_WRITE_IN_INPUT_RE = re.compile(
+    r"(?:"
+    r";\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|TRUNCATE)\b"  # 多语句注入
+    r"|"
+    r"\b(?:DROP|TRUNCATE)\s+(?:TABLE|DATABASE|INDEX)\b"      # 裸 DROP/TRUNCATE
+    r"|"
+    r"\bDELETE\s+FROM\b"                                     # DELETE FROM
+    r")",
+    re.IGNORECASE,
+)
+
 # 输入最大长度：超过这个长度大概率不是正常的数据分析问题
 MAX_INPUT_LENGTH = 2000
 
@@ -50,6 +63,7 @@ def guard_input(query: str) -> Tuple[bool, str]:
     1. 空输入
     2. 超长输入（>2000 字符）
     3. prompt injection 特征
+    4. 输入中嵌套的危险 SQL 写操作 / 多语句注入
 
     Returns:
         (True, "")  → 放行
@@ -70,6 +84,10 @@ def guard_input(query: str) -> Tuple[bool, str]:
     for i, pattern in enumerate(_INJECTION_RES):
         if pattern.search(query):
             return False, "输入包含不安全的指令模式，已被拦截。"
+
+    # 4. 原始 SQL 写操作 / 多语句注入（如 SELECT ...; DROP TABLE ...）
+    if _SQL_WRITE_IN_INPUT_RE.search(query):
+        return False, "检测到危险 SQL 写操作，已被拦截。系统只允许只读查询，不允许 DROP/DELETE 等写操作。"
 
     return True, ""
 

@@ -18,7 +18,6 @@
 import asyncio
 import argparse
 import os
-import re
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -29,6 +28,10 @@ from db.seed import init_db
 from prompts.system_prompt import build_system_prompt
 from memory.short_term_memory import ConversationManager
 from memory.vector_store import VectorMemory
+from memory.memory_controller import (
+    is_chitchat, is_meta_question, is_meta_memory,
+    should_vector_recall, should_remember,
+)
 # 注册所有 Tool —— Tool defs 和 handler 在这里绑定，
 # 传给 agent.streaming_agent() 时作为一个整体。
 # 好处：测试时可以传 mock handler，main.py 传真实 handler，agent.py 不感知。
@@ -47,6 +50,8 @@ from tools.knowledge import (
     search_knowledge_base, save_to_memory, read_memory, search_memory,
     set_vector_memory, set_llm_client,
 )
+from tools.hive import search_hive_syntax
+from tools.hbase import run_hbase, _seed_hbase_store, generate_hbase_query
 
 TOOLS = [
     LIST_TABLES_TOOL,
@@ -60,6 +65,9 @@ TOOLS = [
     save_to_memory.tool_schema,
     read_memory.tool_schema,
     search_memory.tool_schema,
+    generate_hbase_query.tool_schema,
+    search_hive_syntax.tool_schema,
+    run_hbase.tool_schema,
 ]
 
 TOOL_HANDLERS = {
@@ -74,6 +82,9 @@ TOOL_HANDLERS = {
     "save_to_memory": save_to_memory,
     "read_memory": read_memory,
     "search_memory": search_memory,
+    "generate_hbase_query": generate_hbase_query,
+    "search_hive_syntax": search_hive_syntax,
+    "run_hbase": run_hbase,
 }
 # 用户输入
 #   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
@@ -101,9 +112,9 @@ async def main():
         help="Agent 模式: single (单 Agent) / multi (多 Agent 编排)",
     )
     parser.add_argument(
-        "--no-dq",
+        "--dq",
         action="store_true",
-        help="多 Agent 模式下关闭首次 DataQuality 检查",
+        help="多 Agent 模式下开启首次 DataQuality 检查",
     )
     parser.add_argument(
         "--user",
@@ -114,6 +125,7 @@ async def main():
     os.environ["AGENT_USER"] = args.user
 
     init_db()
+    _seed_hbase_store()
 
     # Anthropic SDK 初始化——base_url 和 api_key 从 .env 读。
     # 如果用 DeepSeek 兼容 endpoint：.env 里设
@@ -146,42 +158,6 @@ async def main():
 
     from agent import streaming_agent
 
-    GREETING_MARKERS = ("你好", "您好", "hi", "hello", "你是谁", "介绍下",
-                    "介绍一下", "自我介绍", "在吗", "谢谢", "再见")
-
-    # 元问题——问"之前做了什么"而非问数据本身。
-    # 这类 query 和原始数据查询语义零重叠，向量检索必然失败。
-    # 解决：检索走时间倒序（list_recent），不写 remember（防污染）。
-    # 覆盖：「刚才我问了什么」「我上一个问题是什么」「刚才查了什么」等。
-    META_QUESTION_RE = re.compile(
-        r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问了|查了|问题|查询|语句|问了什么)|"
-        r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)|"
-        r"(第一句|最初的?问题|最开始|最初一句)|"
-        r"这[次轮场]对话"
-    )
-    # 记忆正文若本身是元问答，注入时跳过——否则「最近一条」常是污染过的元问答。
-    # 也覆盖「这次对话第一句是什么」等自指问题（旧过滤漏掉会污染 list_recent）。
-    META_MEMORY_RE = re.compile(
-        r"^问:\s*.{0,40}("
-        r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问了|查了|问题|查询|语句)|"
-        r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)|"
-        r"(第一句|最初的?问题|最开始|最初一句)|"
-        r"这[次轮场]对话"
-        r")"
-    )
-
-    def is_chitchat(q: str) -> bool:
-        q = q.strip().lower()
-        return any(m in q for m in GREETING_MARKERS)
-
-    def is_meta_question(q: str) -> bool:
-        """检测'元问题'——问对话历史本身而非业务数据。"""
-        return bool(META_QUESTION_RE.search(q.strip()))
-
-    def is_meta_memory(text: str) -> bool:
-        """记忆是否为元问答（不应再当作「上一个业务问题」）。"""
-        return bool(META_MEMORY_RE.search((text or "").strip()))
-
     # ── multi 模式：进程内只建一次 Runner ──
     # Checkpointer 靠 thread_id 识别"同一本笔记本"——
     # 每次循环都 new Runner 会导致新的 SQLite 连接和新的 thread 上下文，
@@ -192,7 +168,7 @@ async def main():
         from multi_agent.orchestrator import MultiAgentRunner
         multi_runner = await MultiAgentRunner.create(
             client, model=args.model,
-            enable_data_quality=not args.no_dq,
+            enable_data_quality=args.dq,
         )
         print(f"Checkpointer: {multi_runner.checkpoint_db}")
 
@@ -282,7 +258,7 @@ async def main():
             # 长期记忆（VectorMemory）：两种模式共用——
             #   把本轮问答写入 ChromaDB，下次相关查询时以向量召回方式注入 System Prompt。
             #   元问题（"刚才问了什么"）不写——避免污染向量库。
-            if not is_meta_question(user_input):
+            if should_remember(user_input):
                 vector_memory.remember(
                     content=f"问: {user_input}\n答: {result}",
                     memory_type="conversation",

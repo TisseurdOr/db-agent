@@ -16,6 +16,8 @@ wheels/
 
 # Local database
 db/*.db
+db/*.db-shm
+db/*.db-wal
 
 # ChromaDB 向量库（本地数据，可重新生成，不入库）
 memory/chroma_db/

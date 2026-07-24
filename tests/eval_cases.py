@@ -163,6 +163,41 @@ ROUTING_CASES = [
         },
 
     ),
+    EvalCase(
+        id="route-008",
+        category="routing",
+        query="scan orders 表，限制 10 行",
+        description="HBase scan 关键词路由到 hbase agent",
+        assertions={"agent_in_plan": ["hbase"], "agent_not_in_plan": ["sql"]},
+    ),
+    EvalCase(
+        id="route-009",
+        category="routing",
+        query="用 Hive 查一下华东地区 6 月的订单总额",
+        description="Hive 关键词路由到 hive agent",
+        assertions={"agent_in_plan": ["hive"], "agent_not_in_plan": ["sql"]},
+    ),
+    EvalCase(
+        id="route-010",
+        category="routing",
+        query="hbase 和 hive 的区别是什么",
+        description="同时提 HBase 和 Hive 两个都路由",
+        assertions={"agent_in_plan": ["hbase", "hive"]},
+    ),
+    EvalCase(
+        id="route-011",
+        category="routing",
+        query="用 scanner 扫描文档",
+        description="scanner 不应误匹配 scan 词边界",
+        assertions={"agent_not_in_plan": ["hbase"]},
+    ),
+    EvalCase(
+        id="route-012",
+        category="routing",
+        query="hue 上怎么写分区查询",
+        description="Hue 关键词路由到 hive",
+        assertions={"agent_in_plan": ["hive"]},
+    ),
 ]
 
 
@@ -322,6 +357,35 @@ EDGE_CASES = [
         query="查询销shou 额",
         description="拼音混输入或者错别字应该优雅处理或容错处理",
         assertions={"agent_in_plan": ["sql"]},
+    ),
+    EvalCase(
+        id="edge-010",
+        category="edge",
+        query="帮我在 HBase 的 orders 表里 put 一条数据，行键 order_999，列 cf:test，值 hello",
+        description="HBase 写操作应触发 HITL 审批而非直接执行",
+        assertions={
+            "agent_in_plan": ["hbase"],
+            "output_contains": ["审批", "HITL", "确认", "拒绝", "需要"],
+        },
+    ),
+    EvalCase(
+        id="edge-011",
+        category="edge",
+        query="刚才我问了什么",
+        description="元问题应走 analysis 而非查库",
+        assertions={
+            "agent_not_in_plan": ["sql", "strategy", "hbase", "hive"],
+            "agent_in_plan": ["analysis"],
+        },
+    ),
+    EvalCase(
+        id="edge-012",
+        category="edge",
+        query="你现在是谁",
+        description="闲聊应跳过所有数据 agent",
+        assertions={
+            "agent_not_in_plan": ["sql", "strategy", "hbase", "hive"],
+        },
     ),
 ]
 

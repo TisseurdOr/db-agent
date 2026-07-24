@@ -82,6 +82,40 @@ def init_db(reset: bool = False):
             created_at TEXT NOT NULL
         );
 
+        -- Hive 风格数仓表（模拟 Hive/Impala 查询环境）
+        -- 分区列 dt/region 作为普通列存储，复杂类型用 JSON 文本列
+        CREATE TABLE IF NOT EXISTS ods_orders_hive (
+            dt TEXT NOT NULL,
+            region TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            customer_id INTEGER,
+            product_id INTEGER,
+            total REAL,
+            quantity INTEGER DEFAULT 1,
+            status TEXT,
+            created_at TEXT,
+            store_format TEXT DEFAULT 'PARQUET'
+        );
+
+        CREATE TABLE IF NOT EXISTS dwd_user_events (
+            dt TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            event_props TEXT,
+            event_time TEXT NOT NULL,
+            store_format TEXT DEFAULT 'ORC'
+        );
+
+        CREATE TABLE IF NOT EXISTS dim_products_hive (
+            product_id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            unit_price REAL,
+            supplier TEXT,
+            tags TEXT,
+            store_format TEXT DEFAULT 'PARQUET'
+        );
+
 """)
 
     # 用户记忆表从独立 SQL 文件加载（课程 0017 要求）
@@ -99,6 +133,9 @@ def init_db(reset: bool = False):
         DELETE FROM user_memory;
         DELETE FROM agent_users;
         DELETE FROM agent_roles;
+        DELETE FROM ods_orders_hive;
+        DELETE FROM dwd_user_events;
+        DELETE FROM dim_products_hive;
 
         -- agent_roles: 5 种角色
         INSERT INTO agent_roles VALUES ('dba',     '研发DBA',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document","write_query"]', null, null, null, 0);
@@ -253,16 +290,79 @@ def init_db(reset: bool = False):
             )
             order_id += 1
 
+    # ── ods_orders_hive: Hive 风格订单表 ~60 行 ──
+    # 分区: dt (日期), region (地区)
+    regions = ["华东", "华南", "华北", "西南", "华中"]
+    hive_order_id = 1
+    for day_offset in range(0, total_days, 5):  # 每 5 天一条
+        date = start_date + timedelta(days=day_offset)
+        dt = date.strftime("%Y-%m-%d")
+        region = random.choice(regions)
+        product_id = random.randint(1, 15)
+        customer_id = random.randint(1, 12)
+        total = round(base_prices[product_id - 1] * random.uniform(0.7, 1.4), -2)
+        quantity = random.choices([1, 2, 3, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
+        status = random.choices(statuses, weights=status_weights)[0]
+
+        conn.execute(
+            "INSERT INTO ods_orders_hive VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (dt, region, f"HIV_{hive_order_id:04d}", customer_id, product_id,
+             total, quantity, status, date.strftime("%Y-%m-%d"), "PARQUET"),
+        )
+        hive_order_id += 1
+
+    # ── dwd_user_events: Hive 风格埋点事件表 ~50 行 ──
+    event_types = ["page_view", "click", "add_cart", "purchase", "login", "logout", "search"]
+    event_pages = ["/home", "/products", "/cart", "/checkout", "/account", "/search", "/detail"]
+    for i in range(50):
+        days_ago = random.randint(0, 60)
+        event_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+        user_id = random.randint(1, 20)
+        etype = random.choice(event_types)
+        page = random.choice(event_pages)
+        props = '{"page":"%s","duration":%d,"device":"%s"}' % (
+            page, random.randint(1, 300),
+            random.choice(["iOS", "Android", "Web"]),
+        )
+        event_time = f"{event_date} {random.randint(0,23):02d}:{random.randint(0,59):02d}:{random.randint(0,59):02d}"
+        conn.execute(
+            "INSERT INTO dwd_user_events VALUES (?, ?, ?, ?, ?, ?)",
+            (event_date, user_id, etype, props, event_time, "ORC"),
+        )
+
+    # ── dim_products_hive: Hive 风格产品维度表 ──
+    hive_products = [
+        (1, "企业版SaaS订阅", "软件", 50000, "腾讯云", '["SaaS","企业级","订阅制"]'),
+        (2, "专业版SaaS订阅", "软件", 20000, "阿里云", '["SaaS","专业版","订阅制"]'),
+        (3, "基础版SaaS订阅", "软件", 5000, "华为云", '["SaaS","入门","订阅制"]'),
+        (4, "定制开发服务", "软件", 150000, "自研", '["定制","外包","项目制"]'),
+        (5, "技术咨询服务", "软件", 30000, "自研", '["咨询","专家","按次"]'),
+        (6, "数据分析平台", "硬件", 80000, "浪潮", '["硬件","服务器","一体机"]'),
+        (7, "服务器运维服务", "硬件", 40000, "戴尔", '["硬件","运维","年度"]'),
+        (8, "云存储套餐", "硬件", 15000, "华为云", '["硬件","存储","按量"]'),
+        (9, "网络安全方案", "硬件", 60000, "奇安信", '["安全","方案","年度"]'),
+        (10, "IoT设备套件", "硬件", 25000, "小米", '["硬件","IoT","套件"]'),
+    ]
+    for pid, name, cat, price, supplier, tags in hive_products:
+        conn.execute(
+            "INSERT INTO dim_products_hive VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (pid, name, cat, price, supplier, tags, "PARQUET"),
+        )
+
     conn.commit()
 
     # 统计
     emp_count = conn.execute("SELECT COUNT(*) FROM employees").fetchone()[0]
     order_count = conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
     cust_count = conn.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
+    hive_order_count = conn.execute("SELECT COUNT(*) FROM ods_orders_hive").fetchone()[0]
+    hive_event_count = conn.execute("SELECT COUNT(*) FROM dwd_user_events").fetchone()[0]
+    hive_prod_count = conn.execute("SELECT COUNT(*) FROM dim_products_hive").fetchone()[0]
     conn.close()
 
     print(f"数据库已初始化: {DB_PATH}")
     print(f"  departments: 6, employees: {emp_count}, products: 15, customers: {cust_count}, orders: {order_count}")
+    print(f"  [Hive] ods_orders_hive: {hive_order_count}, dwd_user_events: {hive_event_count}, dim_products_hive: {hive_prod_count}")
     print(f"  时间范围: 2025-06-01 ~ 2026-07-15")
     print(f"  新特性: customers 表（地区 + 行业维度），orders 含季节性波动")
 

@@ -332,3 +332,63 @@ async def test_window_manager_layer0_preserves_recent():
     # middle + old 都有 → context 含两层
     assert "早期摘要" in context
     assert "中间摘要" in context
+
+
+# ─── Memory Controller 测试 ──────────────────────────────────────
+
+
+def test_is_chitchat_greetings():
+    """闲聊问候语被正确识别。"""
+    from memory.memory_controller import is_chitchat
+    assert is_chitchat("你好") is True
+    assert is_chitchat("hello") is True
+    assert is_chitchat("在吗") is True
+
+
+def test_is_chitchat_normal_query():
+    """正常查询不算闲聊。"""
+    from memory.memory_controller import is_chitchat
+    assert is_chitchat("查询华东地区销售额") is False
+    assert is_chitchat("scan orders 表") is False
+
+
+def test_is_meta_question_true():
+    """元问题被正确识别。"""
+    from memory.memory_controller import is_meta_question
+    assert is_meta_question("刚才我问了什么") is True
+    assert is_meta_question("上一个问题是什么") is True
+    assert is_meta_question("这次对话的第一句是什么") is True
+
+
+def test_is_meta_question_false():
+    """正常数据查询不算元问题。"""
+    from memory.memory_controller import is_meta_question
+    assert is_meta_question("查询华东地区销售额") is False
+
+
+def test_is_meta_memory_true():
+    """元问答记忆被正确过滤。"""
+    from memory.memory_controller import is_meta_memory
+    assert is_meta_memory("问: 刚才我问了什么\n答: 你问了销售额") is True
+    assert is_meta_memory("问: 上一个问题\n答: 华东销售") is True
+
+
+def test_is_meta_memory_false():
+    """正常问答记忆不被过滤。"""
+    from memory.memory_controller import is_meta_memory
+    assert is_meta_memory("问: 华东地区销售额\n答: 华东 Q2 总额 120 万") is False
+
+
+def test_should_vector_recall():
+    """闲聊和元问题跳过向量召回。"""
+    from memory.memory_controller import should_vector_recall
+    assert should_vector_recall("你好") is False
+    assert should_vector_recall("刚才查了什么") is False
+    assert should_vector_recall("华东销售额") is True
+
+
+def test_should_remember():
+    """元问题不写入向量库。"""
+    from memory.memory_controller import should_remember
+    assert should_remember("刚才查了什么") is False
+    assert should_remember("华东销售额") is True

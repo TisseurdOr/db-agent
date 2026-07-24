@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>db-agent 面试题库 — Harness 工程全知识点</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d;
+    --text: #c9d1d9; --dim: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --orange: #d2991d; --red: #f85149;
+    --purple: #a371f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.7; padding: 2rem; max-width: 900px; margin: 0 auto;
+  }
+  h1 { color: var(--accent); font-size: 1.8rem; margin-bottom: 0.25rem; }
+  h1 small { display: block; font-size: 0.9rem; color: var(--dim); font-weight: 400; margin-top: 0.25rem; }
+  h2 {
+    color: var(--purple); font-size: 1.3rem; margin: 2.5rem 0 1rem;
+    padding-bottom: 0.4rem; border-bottom: 1px solid var(--border);
+  }
+  h3 { color: var(--orange); font-size: 1rem; margin: 1.8rem 0 0.5rem; }
+
+  .question {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; margin: 1rem 0; overflow: hidden;
+  }
+  .q-header {
+    padding: 1rem 1.2rem; display: flex; justify-content: space-between;
+    align-items: flex-start; gap: 0.8rem; cursor: default;
+  }
+  .q-num {
+    color: var(--accent); font-weight: 700; font-size: 0.85rem;
+    white-space: nowrap; min-width: 3rem;
+  }
+  .q-text { flex: 1; font-size: 1rem; }
+  .q-meta { color: var(--dim); font-size: 0.8rem; margin-top: 0.3rem; }
+
+  .q-answer {
+    border-top: 1px solid var(--border); padding: 0 1.2rem;
+    max-height: 0; overflow: hidden; transition: max-height 0.4s ease, padding 0.4s ease;
+    background: rgba(63,185,80,0.03);
+  }
+  .q-answer.open {
+    max-height: 3000px; padding: 1rem 1.2rem;
+  }
+  .q-answer p { margin: 0.5rem 0; }
+  .q-answer ul, .q-answer ol { margin-left: 1.5rem; }
+  .q-answer li { margin: 0.25rem 0; }
+  .q-answer code {
+    background: rgba(88,166,255,0.1); border: 1px solid var(--border);
+    border-radius: 3px; padding: 0.1em 0.4em; font-size: 0.9em;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  .q-answer pre {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.8rem; overflow-x: auto;
+    font-size: 0.85em; margin: 0.6rem 0;
+  }
+  .q-answer pre code { background: none; border: none; padding: 0; }
+  .q-answer table {
+    width: 100%; border-collapse: collapse; margin: 0.6rem 0; font-size: 0.9em;
+  }
+  .q-answer th, .q-answer td {
+    border: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left;
+  }
+  .q-answer th { background: var(--surface); color: var(--accent); }
+
+  .btn {
+    background: var(--surface); color: var(--accent); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.35rem 0.8rem; font-size: 0.8rem; cursor: pointer;
+    white-space: nowrap; transition: background 0.15s;
+  }
+  .btn:hover { background: rgba(88,166,255,0.1); }
+  .btn.show { color: var(--green); border-color: var(--green); }
+
+  .key-point {
+    background: rgba(63,185,80,0.08); border-left: 3px solid var(--green);
+    padding: 0.6rem 0.8rem; margin: 0.8rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.9em;
+  }
+  .wrong {
+    background: rgba(248,81,73,0.08); border-left: 3px solid var(--red);
+    padding: 0.6rem 0.8rem; margin: 0.6rem 0; border-radius: 0 4px 4px 0;
+    font-size: 0.9em;
+  }
+  .wrong::before { content: '❌ 常见错误: '; color: var(--red); font-weight: 600; }
+
+  .global-toggle {
+    text-align: right; margin-bottom: 1rem; position: sticky; top: 1rem;
+    z-index: 10;
+  }
+  .global-toggle .btn {
+    font-size: 0.9rem; padding: 0.5rem 1.2rem;
+  }
+
+  .toc {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0;
+  }
+  .toc h3 { margin-top: 0; color: var(--accent); }
+  .toc ol { margin-left: 1.2rem; }
+  .toc a { color: var(--text); text-decoration: none; font-size: 0.9em; }
+  .toc a:hover { color: var(--accent); }
+  .toc .count { color: var(--dim); font-size: 0.8em; }
+
+  .score {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.5rem; margin: 2rem 0;
+    text-align: center;
+  }
+  .score .big { font-size: 2.5rem; color: var(--accent); font-weight: 700; }
+  .score .label { color: var(--dim); font-size: 0.9rem; }
+
+  .footer {
+    text-align: center; color: var(--dim); font-size: 0.85em;
+    margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border);
+  }
+
+  @media print {
+    body { background: white; color: black; }
+    .q-answer { max-height: none !important; }
+    .btn { display: none; }
+    .global-toggle { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<h1>
+  db-agent 面试题库
+  <small>Harness 工程全知识点 &nbsp;|&nbsp; 点击「显示答案」展开 &nbsp;|&nbsp; 共 35 题</small>
+</h1>
+
+<div class="global-toggle">
+  <button class="btn" onclick="toggleAll()" id="globalBtn">📋 展开全部答案</button>
+</div>
+
+<nav class="toc">
+<h3>目录</h3>
+<ol>
+  <li><a href="#s1">Harness 工程哲学</a> <span class="count">（4 题）</span></li>
+  <li><a href="#s2">Agent Loop &amp; Tool 系统</a> <span class="count">（5 题）</span></li>
+  <li><a href="#s3">记忆系统</a> <span class="count">（6 题）</span></li>
+  <li><a href="#s4">权限 &amp; 安全</a> <span class="count">（6 题）</span></li>
+  <li><a href="#s5">多 Agent 编排 &amp; Router</a> <span class="count">（5 题）</span></li>
+  <li><a href="#s6">可观测性 &amp; 测试</a> <span class="count">（5 题）</span></li>
+  <li><a href="#s7">Prompt 工程 &amp; 成本优化</a> <span class="count">（4 题）</span></li>
+</ol>
+</nav>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 1: HARNESS 哲学 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s1">一、Harness 工程哲学 <span style="color:var(--dim);font-size:0.85rem;">4 题</span></h2>
+
+<!-- Q1 -->
+<div class="question" id="q1">
+<div class="q-header">
+  <span class="q-num">Q1</span>
+  <span class="q-text"><strong>"你说你做的是 Agent，实际上做的是什么？Agent 和 Harness 的区别？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a1', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a1">
+
+<p><strong>标准回答：</strong></p>
+
+<p>"我做的是 <strong>Harness</strong>，不是 Agent。Agent = 模型 + Harness。</p>
+
+<p><strong>Agency（感知、推理、行动的能力）来自模型训练</strong>——数十亿次梯度更新学到的东西，不是我代码编出来的。<strong>Harness 是我造的</strong>——Tools（14 个）、Knowledge（制度文档、语法模板）、Permissions（5 角色 + 表级/行级隔离）。</p>
+
+<p>模型做决策，Harness 执行。模型做推理，Harness 提供上下文。模型是驾驶者，Harness 是载具。我没有训练模型，我造的是让模型在数据库领域高效工作的环境。"</p>
+
+<p><strong>Harness 公式：</strong></p>
+<pre><code>Harness = Tools + Knowledge + Observation + Action Interfaces + Permissions</code></pre>
+
+<div class="key-point">
+<strong>面试要点：</strong>不要说我"基于 harness 思想做 agent"，要说"我逆向工程了 Claude Code 的 12 个 harness 机制，落地到大数据场景"。
+</div>
+
+<div class="wrong">
+"我基于 harness 的思想做了个 agent" — 听起来 harness 只是方法论，没有拆开。
+</div>
+</div>
+</div>
+
+<!-- Q2 -->
+<div class="question" id="q2">
+<div class="q-header">
+  <span class="q-num">Q2</span>
+  <span class="q-text"><strong>"你的 harness 具体包含哪些机制？一个个列出来。"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a2', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a2">
+
+<p><strong>标准回答（13 个机制，按层次报）：</strong></p>
+
+<table>
+<tr><th>#</th><th>机制</th><th>实现</th><th>一句话</th></tr>
+<tr><td>1</td><td>Agent Loop</td><td><code>streaming_agent()</code></td><td>while + stop_reason，模型决定何时停</td></tr>
+<tr><td>2</td><td>Tool Dispatch</td><td><code>TOOL_HANDLERS</code> dict</td><td>注册模式，加 tool 不改 loop</td></tr>
+<tr><td>3</td><td>意图路由</td><td><code>router.py</code></td><td>硬规则免费 + LLM 兜底</td></tr>
+<tr><td>4</td><td>多 Agent 编排</td><td>LangGraph 6 agent</td><td>Router→SQL→Analysis 拓扑流水线</td></tr>
+<tr><td>5</td><td>权限网关</td><td><code>entitlement.py</code></td><td>5 角色 RBAC + 表级/行级 + HITL</td></tr>
+<tr><td>6</td><td>安全护栏</td><td><code>guardrails.py</code></td><td>input/sql/output 三层纯规则</td></tr>
+<tr><td>7</td><td>短期记忆</td><td><code>ConversationManager</code></td><td>滑动窗口 + LLM 压缩摘要</td></tr>
+<tr><td>8</td><td>长期记忆</td><td><code>VectorMemory</code> (ChromaDB)</td><td>embedding → 向量语义召回</td></tr>
+<tr><td>9</td><td>Token 预算</td><td><code>TokenBudget</code></td><td>发请求前就知道会不会超</td></tr>
+<tr><td>10</td><td>上下文压缩</td><td><code>HybridWindowManager</code></td><td>四层压缩（原文/中间摘要/早期/全局）</td></tr>
+<tr><td>11</td><td>可观测性</td><td><code>TraceContext</code> / <code>Span</code></td><td>每节点耗时+token 落盘 JSONL</td></tr>
+<tr><td>12</td><td>Prompt 缓存</td><td><code>cache_control: ephemeral</code></td><td>system prompt 重复部分省 ~99% 成本</td></tr>
+<tr><td>13</td><td>测试体系</td><td>smoke + unit + eval</td><td>零 LLM 冒烟 1.2 秒跑完</td></tr>
+</table>
+
+<p><strong>一句话串起来：</strong>"一个 Loop 驱动，14 个 Tool 执行，Router 分派，6 个 Agent 协作，权限+护栏双层保护，短期+长期双记忆，TokenBudget 控成本，Trace 可观测。"</p>
+</div>
+</div>
+
+<!-- Q3 -->
+<div class="question" id="q3">
+<div class="q-header">
+  <span class="q-num">Q3</span>
+  <span class="q-text"><strong>"Harness vs LangChain/AutoGPT 这类 Agent 框架的本质区别？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a3', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a3">
+<p><strong>标准回答：</strong></p>
+
+<p>"那些框架试图<strong>'编排智能'</strong>——用 if-else 分支、节点图、硬编码路由逻辑把 LLM 调用串起来。LLM 被楔在里面当美化的文本补全节点。那不是 Agent，是有个宏大妄想的 shell 脚本。</p>
+
+<p><strong>Harness 哲学相反</strong>：模型来做决策，harness 只是载具。我不编智能，我给智能提供手（Tools）和眼睛（Observation）和边界（Permissions）。</p>
+
+<p>核心区别：<strong>谁做决策</strong>。LangChain 是代码决定下一步做什么——固定的节点图。Harness 是模型决定下一步做什么——while stop_reason=='tool_use'，模型自己选 tool。"</p>
+
+<div class="key-point">
+<strong>面试要点：</strong>这不是贬低 LangChain，是说清楚架构哲学的差异。LangGraph 本身只是编排工具，db-agent 用它做的是 harness 层的编排，不是业务逻辑的 if-else。
+</div>
+</div>
+</div>
+
+<!-- Q4 -->
+<div class="question" id="q4">
+<div class="q-header">
+  <span class="q-num">Q4</span>
+  <span class="q-text"><strong>"你说 Agency 来自模型，那 harness 工程师到底做什么？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a4', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a4">
+<p>五个职责：</p>
+<ol>
+  <li><strong>实现工具</strong> — 给 Agent 双手。原子化、可组合、描述清晰。</li>
+  <li><strong>策划知识</strong> — 给 Agent 领域专长。按需加载（Skills），不前置塞入。</li>
+  <li><strong>管理上下文</strong> — 给 Agent 干净的记忆。Subagent 隔离、压缩、持久化任务。</li>
+  <li><strong>控制权限</strong> — 给 Agent 边界。沙箱化、审批、信任边界。</li>
+  <li><strong>收集任务数据</strong> — 真实部署中的感知-推理-行动轨迹，是微调下一代 Agent 的原材料。</li>
+</ol>
+<p>"你不是在编写智能。你是在构建智能栖居的世界。造好 Harness，Agent 会完成剩下的。"</p>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 2: Agent Loop & Tool -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s2">二、Agent Loop &amp; Tool 系统 <span style="color:var(--dim);font-size:0.85rem;">5 题</span></h2>
+
+<!-- Q5 -->
+<div class="question" id="q5">
+<div class="q-header">
+  <span class="q-num">Q5</span>
+  <span class="q-text"><strong>"Agent Loop 的核心代码是什么？用伪代码讲。"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a5', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a5">
+<pre><code>messages = [{"role": "user", "content": user_msg}]
+
+for turn in range(max_turns):
+    response = client.messages.create(
+        model=MODEL, system=SYSTEM,
+        messages=messages, tools=TOOLS,
+    )
+    messages.append({"role": "assistant", "content": response.content})
+
+    if response.stop_reason != "tool_use":
+        return text_content  # 模型觉得该停了
+
+    # 执行每个 tool call
+    tool_results = []
+    for block in response.content:
+        if block.type == "tool_use":
+            handler = TOOL_HANDLERS[block.name]
+            output = handler(**block.input)
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": output,
+            })
+    messages.append({"role": "user", "content": tool_results})</code></pre>
+
+<p><strong>关键设计决策：</strong></p>
+<ul>
+  <li><strong>temperature=0</strong>：Agent 选 Tool 必须确定，不能随机</li>
+  <li><strong>max_turns=10</strong>：单 Agent 模式。multi agent 里每个 agent max_turns=8</li>
+  <li><strong>结构化错误</strong>：Tool 失败不 crash，返回 <code>{"error": ..., "suggestion": ...}</code> 让模型自己纠正</li>
+  <li><strong>Tool 结果截断</strong>：超过 8000 字符截断，防止 token 爆炸</li>
+</ul>
+</div>
+</div>
+
+<!-- Q6 -->
+<div class="question" id="q6">
+<div class="q-header">
+  <span class="q-num">Q6</span>
+  <span class="q-text"><strong>"加一个新 tool 要改几处？具体步骤。"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a6', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a6">
+<p><strong>3 步，Agent Loop 零改动：</strong></p>
+
+<ol>
+  <li><strong>定义 tool schema</strong> — 在对应 <code>tools/*.py</code> 里加 dict，含 name/description/input_schema</li>
+  <li><strong>实现 handler 函数</strong> — 同一个文件里写具体逻辑</li>
+  <li><strong>注册到 dispatch map</strong> — 在 <code>main.py</code> 的 TOOLS 和 TOOL_HANDLERS 中加一条</li>
+</ol>
+
+<p>如果要让特定 Agent 也能用，再在 <code>multi_agent/agents.py</code> 的 ConfiguredAgent 中添加。</p>
+
+<p><strong>关键架构：</strong><code>streaming_agent()</code> 不依赖具体 tool——tools 和 handlers 通过参数传入：</p>
+<pre><code>async def streaming_agent(client, user_msg, system_prompt,
+                          tools, handlers, ...):  # ← 调用方传什么就用什么</code></pre>
+
+<div class="key-point">
+<strong>面试要点：</strong>"这就是 s02 的 dispatch 模式——循环不用动，新 tool 注册进 map 就行。和 Claude Code 的设计一样。"
+</div>
+</div>
+</div>
+
+<!-- Q7 -->
+<div class="question" id="q7">
+<div class="q-header">
+  <span class="q-num">Q7</span>
+  <span class="q-text"><strong>"Tool schema 必须包含哪三个字段？为什么 description 很重要？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a7', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a7">
+
+<p><strong>三个必须字段（Anthropic API 要求）：</strong></p>
+<ol>
+  <li><code>name</code> — tool 唯一标识符</li>
+  <li><code>description</code> — 告诉模型这个 tool 是干什么的、什么时候该用</li>
+  <li><code>input_schema</code> — JSON Schema 格式，含 type/properties/required</li>
+</ol>
+
+<pre><code>{
+    "name": "run_query",
+    "description": "在 SQLite 上执行一条 SELECT 查询，返回结果。只支持只读操作。",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sql": {"type": "string", "description": "要执行的 SELECT 语句"}
+        },
+        "required": ["sql"]
+    }
+}</code></pre>
+
+<p><strong>description 为什么重要：</strong>模型根据 description 决定何时调用哪个 tool。写得太模糊→模型乱调；写得太窄→模型不调。比如 <code>run_hbase</code> 的 description 叫"在本地模拟 HBase 上执行查询"，不是"执行 HBase 命令"——因为实际上跑的是模拟器。</p>
+
+<div class="key-point">
+<strong>面试要点：</strong>"你的冒烟测试 test_all_tool_schemas_valid 就是验证这三个字段和 properties/type 格式的。"
+</div>
+</div>
+</div>
+
+<!-- Q8 -->
+<div class="question" id="q8">
+<div class="q-header">
+  <span class="q-num">Q8</span>
+  <span class="q-text"><strong>"你用了 streaming 模式，为什么？和非 streaming 的区别？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a8', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a8">
+
+<p><strong>streaming 模式的好处：</strong></p>
+<ul>
+  <li><strong>用户体验</strong>：逐字输出，用户看到 Agent "在思考"，信任感来源</li>
+  <li><strong>实时 tool 调用可见</strong>：<code>🔧 run_query...</code> 调用发生时就能看到，不用等完整响应</li>
+  <li><strong>低首 token 延迟</strong>：不用等完整 response 生成完才开始展示</li>
+</ul>
+
+<p><strong>实现细节（agent.py:161-201）：</strong></p>
+<pre><code>with client.messages.stream(...) as stream:
+    for event in stream:
+        if event.type == "content_block_start":
+            # tool_use 开始 → 打印 🔧 tool_name...
+        elif event.type == "content_block_delta":
+            if delta.type == "text_delta":
+                print(delta.text, end="", flush=True)  # 逐字输出
+            elif delta.type == "input_json_delta":
+                tool_use_blocks[idx]["input"] += delta.partial_json  # 累积参数
+# stream 结束后 get_final_message() 返回完整解析好的 message</code></pre>
+
+<p><strong>保留非 streaming 版本的原因</strong>：供测试和 batch 场景使用——不需要看 streaming 输出。</p>
+</div>
+</div>
+
+<!-- Q9 -->
+<div class="question" id="q9">
+<div class="q-header">
+  <span class="q-num">Q9</span>
+  <span class="q-text"><strong>"Tool 执行出错时你怎么处理？直接抛异常吗？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a9', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a9">
+<p><strong>不抛异常。返回结构化错误给模型，让它自己纠正：</strong></p>
+
+<pre><code># agent.py: _execute_tool()
+try:
+    result = handler(**tool_input)
+    return json.dumps(result, ensure_ascii=False), False
+except Exception as e:
+    error_payload = {
+        "error": str(e),
+        "type": type(e).__name__,
+        "suggestion": "检查 Tool 参数是否正确，或尝试其他 Tool",
+    }
+    return json.dumps(error_payload, ensure_ascii=False), True</code></pre>
+
+<p><strong>为什么：</strong>SQL 写错、表不存在是正常情况。把错误信息返回给模型，让它自己改正（比如换表名、改 SQL），比直接 crash agent loop 好。这是 <strong>lesson 0008 的结构化错误返回原则</strong>。</p>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 3: 记忆系统 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s3">三、记忆系统 <span style="color:var(--dim);font-size:0.85rem;">6 题</span></h2>
+
+<!-- Q10 -->
+<div class="question" id="q10">
+<div class="q-header">
+  <span class="q-num">Q10</span>
+  <span class="q-text"><strong>"你的记忆系统整体架构是怎么样的？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a10', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a10">
+
+<p><strong>三层记忆 + 控制层：</strong></p>
+
+<pre><code>┌─────────────────────────────────────────┐
+│          TokenBudget（控制层）            │
+│  估算引擎：中文 1.5 字/token             │
+│  阈值 70% 触发压缩                       │
+└──────────────┬──────────────────────────┘
+               │
+    ┌──────────┴──────────┐
+    ▼                     ▼
+┌───────────────┐   ┌────────────────────┐
+│ 短期记忆       │   │ 长期记忆            │
+│ Conversation  │   │ VectorMemory       │
+│ Manager       │   │ (ChromaDB)         │
+│ 最近10条→原文  │   │ embedding: qwen3.7  │
+│ 超窗口→压缩    │   │ 相似度: cosine      │
+│ 注入: system   │   │ 阈值: ≥0.3          │
+│ prompt        │   │ 注入: system prompt │
+└───────┬───────┘   └─────────┬──────────┘
+        │                     │
+        └──────────┬──────────┘
+                   ▼
+        ┌─────────────────────┐
+        │HybridWindowManager  │
+        │ L0: 最近6条→原文     │
+        │ L1: 7-14条→逐条摘要  │
+        │ L2: 更早→对话级摘要   │
+        │ 与TokenBudget联动    │
+        └─────────────────────┘
+                   │
+                   ▼
+        ┌─────────────────────┐
+        │ memory_controller   │
+        │ 闲聊→跳过向量召回    │
+        │ 元问题→走时间倒序    │
+        │ 元问答→不写入向量库  │
+        └─────────────────────┘</code></pre>
+</div>
+</div>
+
+<!-- Q11 -->
+<div class="question" id="q11">
+<div class="q-header">
+  <span class="q-num">Q11</span>
+  <span class="q-text"><strong>"短期记忆的 ConversatonManager 怎么工作的？滑动窗口多大？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a11', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a11">
+
+<ul>
+  <li><strong>窗口大小</strong>：10 条消息（max_recent=10）</li>
+  <li><strong>窗口内</strong>：保留原文不动，通过 ConversationManager.messages 存着</li>
+  <li><strong>超出窗口</strong>：调 <code>compress_history()</code> 用 LLM 压缩为摘要，合并到 self.summary</li>
+  <li><strong>注入方式</strong>：<code>build_context()</code> 生成 "[早期对话摘要 - 共 N 轮]\n...\n[最近对话如下]" 注入 system prompt</li>
+  <li><strong>token 估算</strong>：<code>token_estimate()</code> 本地字符折算（中文 0.4 token/字），零 API 成本</li>
+</ul>
+
+<pre><code># 核心逻辑
+async def add_message(self, message):
+    self.messages.append(message)
+    if len(self.messages) > self.max_recent:  # 超过 10 条
+        overflow = self.messages[:-self.max_recent]
+        new_summary = await compress_history(self.client, overflow)
+        self.summary = f"{self.summary}\n{new_summary}"
+        self.messages = self.messages[-self.max_recent:]</code></pre>
+
+<div class="key-point">
+<strong>面试要点：</strong>如果面试官问"为什么用 10 不是 20"，答"经验值——太少模型缺上下文，太多 token 浪费。10 条通常覆盖最近 2-3 轮完整交互（每轮 ≈ user msg + assistant response + tool calls），足够维持对话连贯性。"
+</div>
+</div>
+</div>
+
+<!-- Q12 -->
+<div class="question" id="q12">
+<div class="q-header">
+  <span class="q-num">Q12</span>
+  <span class="q-text"><strong>"长期记忆的 VectorMemory 用的是什么技术栈？具体参数？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a12', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a12">
+
+<table>
+<tr><th>参数</th><th>值</th></tr>
+<tr><td>向量库</td><td>ChromaDB（PersistentClient，本地持久化）</td></tr>
+<tr><td>Embedding 模型</td><td><strong>qwen3.7-text-embedding</strong>（通义 DashScope，OpenAI 兼容 API）</td></tr>
+<tr><td>相似度算法</td><td><strong>cosine</strong>（余弦相似度，hnsw:space=cosine）</td></tr>
+<tr><td>注入阈值</td><td><strong>≥ 0.3</strong>（相似度低于 0.3 不注入，避免噪声）</td></tr>
+<tr><td>召回 top_k</td><td><strong>3</strong>（main.py 中 recall top_k=3）</td></tr>
+<tr><td>存储路径</td><td><code>memory/chroma_db/</code></td></tr>
+</table>
+
+<p><strong>两个入口：</strong></p>
+<ol>
+  <li><strong>自动注入</strong>：每轮对话前 <code>main.py</code> 调用 <code>recall()</code>，结果拼入 system prompt 的 extra_context</li>
+  <li><strong>Agentic RAG</strong>：Agent 可以主动调 <code>search_memory</code> tool（Self-Query 拆解后再检索）</li>
+</ol>
+
+<p><strong>写入策略：</strong>每次对话结束后 <code>remember()</code> 写入 "问:...答:..." 格式的 pair，元问题不写入（防污染）。</p>
+
+<div class="key-point">
+<strong>面试要点：</strong>"大部分 Agent 项目只有 RAG。我这套是 Agentic RAG——Agent 主动决定什么时候检索，不是系统被动注入。"
+</div>
+</div>
+</div>
+
+<!-- Q13 -->
+<div class="question" id="q13">
+<div class="q-header">
+  <span class="q-num">Q13</span>
+  <span class="q-text"><strong>"TokenBudget 怎么估算 token？为什么不用 API 的 count_tokens？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a13', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a13">
+
+<p><strong>估算公式（token_budget.py:2-9）：</strong></p>
+<pre><code>def estimate_tokens(text: str) -> int:
+    chinese_chars = sum(1 for c in text if '一' <= c <= '鿿')
+    other_chars = len(text) - chinese_chars
+    return int(chinese_chars / 1.5 + other_chars / 4)</code></pre>
+
+<ul>
+  <li>中文：~1.5 字符/token</li>
+  <li>英文/代码：~4 字符/token（~0.75 词/token）</li>
+</ul>
+
+<p><strong>为什么不全依赖 API count_tokens？</strong></p>
+<ol>
+  <li><strong>在发请求前就要知道</strong>——不能等 API 报错才知道超了（API 返回的 usage 是消费记录，你需要的是预算工具）</li>
+  <li><strong>零延迟、零成本</strong>——本地字符折算 vs 一次网络往返</li>
+  <li><strong>端点兼容性</strong>——DeepSeek 等兼容端点不一定支持 count_tokens</li>
+</ol>
+
+<p><strong>ConversationManager 也提供了一个精确版 token_count_exact()</strong>，调 Anthropic 的 count_tokens API，失败时自动降级到本地估算。</p>
+
+<p><strong>触发压缩的条件：</strong></p>
+<pre><code>def should_compress(self, messages):
+    used = self.current_usage(messages) + self.system_prompt_tokens + self.tool_defs_tokens
+    return used > self.max_tokens * 0.7  # 超过 70% 就预警</code></pre>
+</div>
+</div>
+
+<!-- Q14 -->
+<div class="question" id="q14">
+<div class="q-header">
+  <span class="q-num">Q14</span>
+  <span class="q-text"><strong>"HybridWindowManager 的四层压缩具体怎么分层？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a14', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a14">
+
+<pre><code>messages = [m1, m2, ..., m20]  # 假设 20 条消息
+
+Layer 0 (底层): 最近 6 条 → 原文不动    messages[-6:]
+Layer 1 (中层): 第 7-14 条 → 逐对压缩   messages[-14:-6] → 每 2 条用 LLM 压缩一句话
+Layer 2 (顶层): 第 15+ 条 → 全局摘要   messages[:-14] → 所有更早消息压成一段话
+
+注入 system prompt 的格式:
+  [早期对话 - 共 N 条]
+  （全局摘要）
+
+  [中间过程]:
+  - （第7-8条摘要）
+  - （第9-10条摘要）
+  - ...
+
+  (最近 6 条原文直接保留在 messages 里)</code></pre>
+
+<p><strong>为什么中间层每 2 条压缩一次？</strong></p>
+<p>单条压缩 token 浪费（每条都要调一次 LLM），全部压缩丢失细节。每 2 条一组是工程折中——保留足够粒度，控制 LLM 调用次数。</p>
+
+<p><strong>压缩模型：</strong>用便宜的 <code>deepseek-v4-flash</code>，不浪费旗舰模型 token。</p>
+</div>
+</div>
+
+<!-- Q15 -->
+<div class="question" id="q15">
+<div class="q-header">
+  <span class="q-num">Q15</span>
+  <span class="q-text"><strong>"memory_controller 的四种路由策略分别是什么？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a15', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a15">
+
+<table>
+<tr><th>场景</th><th>判断条件</th><th>记忆策略</th></tr>
+<tr><td>闲聊</td><td>"你好""谢谢""再见"</td><td>跳过向量召回（省 embedding 成本）</td></tr>
+<tr><td>元问题</td><td>"刚才问了什么""上一个问题"</td><td>走 <code>list_recent()</code> 时间倒序（语义检索对这类 query 必然失败）</td></tr>
+<tr><td>正常业务查询</td><td>其他所有</td><td>走 <code>recall()</code> 向量语义召回，相似度 ≥ 0.3 才注入</td></tr>
+<tr><td>写入时机</td><td>同上</td><td>元问答不写入向量库（防污染），业务问答写入</td></tr>
+</table>
+
+<pre><code># main.py 中的调用流程
+if is_chitchat(user_input):
+    memories = []                 # 闲聊跳过
+elif is_meta_question(user_input):
+    memories = [m for m in vm.list_recent(limit=20)
+                if not is_meta_memory(m.get("text", ""))][:3]  # 时间倒序
+else:
+    memories = vm.recall(user_input, top_k=3)
+    memories = [m for m in memories if m.get("score", 0) >= 0.3]  # 阈值过滤</code></pre>
+
+<div class="key-point">
+<strong>面试要点：</strong>"记忆路由是很多人忽略的点。'刚才问了什么'走语义检索必然失败——因为用户问的是对话历史本身，而不是历史上某个语义相似的话题。"
+</div>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 4: 权限 & 安全 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s4">四、权限 &amp; 安全 <span style="color:var(--dim);font-size:0.85rem;">6 题</span></h2>
+
+<!-- Q16 -->
+<div class="question" id="q16">
+<div class="q-header">
+  <span class="q-num">Q16</span>
+  <span class="q-text"><strong>"你的权限系统有几层？每层做什么？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a16', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a16">
+
+<p><strong>两层生效 + 一层审批：</strong></p>
+
+<table>
+<tr><th>层</th><th>位置</th><th>作用</th><th>失败后果</th></tr>
+<tr><td><strong>Layer 1 — Soft</strong></td><td>system prompt 注入</td><td><code>build_permission_context()</code> 告诉 Agent 边界，减少无效调用</td><td>Agent 仍可能尝试调越权 tool</td></tr>
+<tr><td><strong>Layer 2 — Hard</strong></td><td>tool 执行前</td><td><code>check_entitlement()</code> 门禁。过不了直接 deny</td><td>返回 error 给 Agent</td></tr>
+<tr><td><strong>HITL</strong></td><td>tool 执行中</td><td>LangGraph interrupt() 暂停等人工审批</td><td>用户点 y/n 决定</td></tr>
+</table>
+
+<p><strong>为什么做两层：</strong>Soft 层省 token——Agent 知道自己不能查 employees，就不会浪费 LLM 调用来尝试。但 Soft 层不可靠（模型可能不遵守），所以 Hard 层兜底。</p>
+</div>
+</div>
+
+<!-- Q17 -->
+<div class="question" id="q17">
+<div class="q-header">
+  <span class="q-num">Q17</span>
+  <span class="q-text"><strong>"5 种角色分别有什么权限？表级和行级隔离怎么实现的？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a17', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a17">
+
+<table>
+<tr><th>角色</th><th>可调工具</th><th>可查表</th><th>行级隔离</th><th>敏感检查</th></tr>
+<tr><td>dba</td><td>全部（含 HBase）</td><td>全部</td><td>无</td><td>否</td></tr>
+<tr><td>manager</td><td>run_query + 读工具</td><td>全部</td><td>✅ dept_id</td><td>✅ salary/cost/budget</td></tr>
+<tr><td>analyst</td><td>run_query + HBase</td><td>5 张表</td><td>无</td><td>✅</td></tr>
+<tr><td>viewer</td><td>list/describe + 读文档</td><td>4 张表（无 employees）</td><td>无</td><td>否</td></tr>
+<tr><td>support</td><td>run_query + 读文档</td><td>3 张表</td><td>无</td><td>否</td></tr>
+</table>
+
+<p><strong>表级隔离（check_table_access）：</strong>白名单检查——角色 db_tables 列表里没有的表直接拒绝。</p>
+
+<p><strong>行级隔离（rewrite_sql）：</strong>SQL 改写——自动追加 WHERE dept_id=X：</p>
+<pre><code># 萧一鸣（市场部经理 dept_id=2）
+# 原始: SELECT name, salary FROM employees ORDER BY salary DESC
+# 改写: SELECT name, salary FROM employees WHERE dept_id = 2 ORDER BY salary DESC</code></pre>
+
+<p>实现：正则提取 FROM/JOIN 表名 → 匹配 db_row_filter 规则 → 在 GROUP BY/ORDER BY/LIMIT 前插入 WHERE/AND。</p>
+
+<div class="wrong">
+"行级隔离会改数据库数据" — 不改数据，只改 SQL 文本。
+</div>
+</div>
+</div>
+
+<!-- Q18 -->
+<div class="question" id="q18">
+<div class="q-header">
+  <span class="q-num">Q18</span>
+  <span class="q-text"><strong>"HITL 审批什么场景触发？技术上怎么实现的？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a18', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a18">
+
+<p><strong>触发场景：</strong></p>
+<ul>
+  <li><strong>SQL 敏感列</strong>：salary、cost、budget（SENSITIVE_COLUMNS）+ 角色 sensitive_check=True</li>
+  <li><strong>HBase 破坏性操作</strong>：put、delete、drop、truncate（_HBASE_DESTRUCTIVE_OPS）</li>
+</ul>
+
+<p><strong>实现方式：</strong>LangGraph <code>interrupt()</code></p>
+
+<pre><code># main.py 中的中断处理
+result = await multi_runner.run(user_input, ...)
+if isinstance(result, dict) and result.get("__interrupt__"):
+    interrupt_data = result["data"]
+    print(f"⚠️ 敏感查询需要审批")
+    print(f"  用户: {interrupt_data.get('user')}")
+    print(f"  SQL:  {interrupt_data.get('sql')}")
+    choice = input("  是否继续执行? (y/n): ")
+    result = await multi_runner.resume(approved=(choice == "y"))</code></pre>
+
+<p>graph 在 run_query 节点中遇到敏感 SQL 时调 interrupt() 暂停——Checkpointer 保存当前 state → 返回给 main.py → 等用户输入 → resume() 恢复执行。</p>
+
+<div class="key-point">
+<strong>面试要点：</strong>"interrupt() 是 LangGraph 的 Human-in-the-Loop 机制——graph 暂停但不丢状态，Checkpointer 保存一切，resume 后从断点继续。"
+</div>
+</div>
+</div>
+
+<!-- Q19 -->
+<div class="question" id="q19">
+<div class="q-header">
+  <span class="q-num">Q19</span>
+  <span class="q-text"><strong>"三层 guardrails 分别检查什么？为什么用纯规则不用 LLM？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a19', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a19">
+
+<table>
+<tr><th>层</th><th>位置</th><th>检查内容</th></tr>
+<tr><td>L1 — 输入护栏</td><td>LLM 调用前</td><td>空输入、超长(&gt;2000)、prompt injection（14 个正则）、嵌套 SQL 注入</td></tr>
+<tr><td>L2 — SQL 护栏</td><td>run_query 执行前</td><td>非 SELECT 拦截、写操作关键字、多语句检测、系统表检测</td></tr>
+<tr><td>L3 — 输出护栏</td><td>Agent 输出后</td><td>空输出、超长(&gt;8000)、PII 检测（手机/身份证/邮箱/银行卡）、system prompt 泄露</td></tr>
+</table>
+
+<p><strong>为什么纯规则不用 LLM：</strong></p>
+<ol>
+  <li><strong>零延迟</strong>——正则匹配是微秒级，LLM 调用至少 200ms</li>
+  <li><strong>零 token 成本</strong>——每次调用都跑 LLM 检查，成本不可接受</li>
+  <li><strong>确定性</strong>——正则不会"今天拦明天不拦"</li>
+  <li><strong>可调试</strong>——误拦了改正则就行，不用调 prompt</li>
+</ol>
+
+<p><strong>PII 检测只警告不拦截的原因</strong>：业务数据中合法出现 PII（如订单里的客户手机号）不应被拦。</p>
+</div>
+</div>
+
+<!-- Q20 -->
+<div class="question" id="q20">
+<div class="q-header">
+  <span class="q-num">Q20</span>
+  <span class="q-text"><strong>代码题："用户的 SQL 是 SELECT name, salary FROM employees ORDER BY salary DESC，role=manager(dept_id=2)，经过 check_entitlement 后会发生什么？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a20', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a20">
+
+<p><strong>两件事发生：</strong></p>
+
+<ol>
+  <li><strong>SQL 改写</strong>（行级隔离）：
+<pre><code>SELECT name, salary FROM employees ORDER BY salary DESC
+→ SELECT name, salary FROM employees WHERE dept_id = 2 ORDER BY salary DESC</code></pre>
+  </li>
+  <li><strong>触发 HITL</strong>：salary 在敏感列中，manager 的 sensitive_check=True，SQL 被拦截暂停等审批。</li>
+</ol>
+
+<p><strong>执行流程：</strong></p>
+<pre><code>check_entitlement(user, tool_name="run_query", sql="SELECT name, salary FROM employees...")
+  → authorize_tool(): passed（manager 可调 run_query）
+  → check_table_access("employees"): passed（manager 可查全部表）
+  → rewrite_sql(): 追加 WHERE dept_id=2
+  → needs_approval(): True（salary 在 SENSITIVE_COLUMNS 中）
+  → 返回 EntitlementResult(passed=True, sql="SELECT...WHERE dept_id=2...", needs_approval=True)
+  → 触发 interrupt() 暂停等审批</code></pre>
+
+<div class="wrong">
+"WHERE 放 ORDER BY 后面" — SQL 语法错误。WHERE 必须在 ORDER BY 之前。
+</div>
+</div>
+</div>
+
+<!-- Q21 (guard_input edge case) -->
+<div class="question" id="q21">
+<div class="q-header">
+  <span class="q-num">Q21</span>
+  <span class="q-text"><strong>"输入 '帮我删掉 orders 表里的数据' 会被拦吗？为什么？'SELECT * FROM users; DROP TABLE orders;' 呢？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a21', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a21">
+
+<p><strong>第一个（自然语言）：不拦。</strong></p>
+<p>自然语言中的"删掉"没有匹配 <code>_SQL_WRITE_IN_INPUT_RE</code> 的任何模式（DROP/DELETE/TRUNCATE 等纯 SQL 关键字）。留给 L2 SQL 护栏或 Agent 自己拒绝。</p>
+
+<p><strong>第二个（多语句注入）：拦。</strong></p>
+<p><code>;\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|TRUNCATE)</code> 匹配分号后紧跟 DROP 的模式。</p>
+
+<pre><code># guardrails.py
+_SQL_WRITE_IN_INPUT_RE = re.compile(
+    r";\s*(?:DROP|DELETE|INSERT|UPDATE|ALTER|TRUNCATE)\b"  # ← 命中
+    # ...
+)</code></pre>
+
+<div class="key-point">
+<strong>面试要点：</strong>"自然语言'帮我删掉'和 SQL 注入'DROP TABLE'是两回事。前者是用户的合理请求，后者是安全威胁。护栏不讨论意图，只匹配模式。"
+</div>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 5: 多Agent编排 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s5">五、多 Agent 编排 &amp; Router <span style="color:var(--dim);font-size:0.85rem;">5 题</span></h2>
+
+<!-- Q22 -->
+<div class="question" id="q22">
+<div class="q-header">
+  <span class="q-num">Q22</span>
+  <span class="q-text"><strong>"你的 LangGraph 图拓扑是什么？节点之间怎么调度？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a22', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a22">
+
+<p><strong>图拓扑：</strong></p>
+<pre><code>__start__ → router → (条件边) → sql / strategy / hbase / hive / data_quality
+                                         │
+                                         ├→ analysis → END
+                                         └→ END (无 analysis 的 plan)</code></pre>
+
+<p><strong>调度核心（_next_step + edge_router）：</strong></p>
+<pre><code>def _next_step(state, results, current):
+    plan = state["plan"]           # Router 输出的路线图
+    executed = set(results.keys()) # 已打卡的 Agent
+    pending = [s for s in plan if s["agent"] not in executed]  # 还没执行的
+
+    if pending:
+        return {"results": results, "next": pending[0]["agent"]}  # 去下一个
+    if "analysis" in plan_agents and "analysis" not in executed:
+        return {"results": results, "next": "analysis"}
+    # plan 跑完 → 直接返回结果
+
+def edge_router(state):
+    return state.get("next") or "done"  # 读 next，LangGraph 查 targets 路由</code></pre>
+
+<p><strong>比喻：</strong>plan 是路线图，executed 是已打卡的站，_next_step 对比两者决定下一站，next 是站牌，targets 是站牌→站点的翻译。</p>
+</div>
+</div>
+
+<!-- Q23 -->
+<div class="question" id="q23">
+<div class="q-header">
+  <span class="q-num">Q23</span>
+  <span class="q-text"><strong>"Router 的硬规则和 LLM 怎么分工？为什么不全用 LLM？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a23', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a23">
+
+<p><strong>分工：硬规则优先，兜底 LLM。</strong> <code>route_override()</code> 能确定的场景不调 LLM——零 token 成本。</p>
+
+<table>
+<tr><th>场景</th><th>路由方式</th><th>原因</th></tr>
+<tr><td>"你好""谢谢" 等闲聊</td><td>硬规则 → plan=[]</td><td>不需要数据查询，LLM 可能误判</td></tr>
+<tr><td>"HBase scan orders"</td><td>硬规则 → hbase</td><td>关键字明确，100% 确定</td></tr>
+<tr><td>"Hive 建表语句"</td><td>硬规则 → hive</td><td>同上</td></tr>
+<tr><td>"提成比例是多少"</td><td>硬规则 → strategy</td><td>制度类，不需要查 SQL</td></tr>
+<tr><td>"对比华东华南销售趋势"</td><td>硬规则 → sql+analysis</td><td>对比+数据标记=确定性路由</td></tr>
+<tr><td>模糊/多意图</td><td>LLM 兜底</td><td>硬规则覆盖不了，交给模型判断</td></tr>
+</table>
+
+<p><strong>为什么不全部硬规则：</strong>自然语言无限变化。硬规则覆盖 80% 高频 case，剩下的交给 LLM。</p>
+<p><strong>为什么不全用 LLM：</strong>每次路由 ~250 token。高频闲聊全走 LLM 是浪费。LRU 缓存进一步省——同样 query 第二次直接命中缓存。</p>
+</div>
+</div>
+
+<!-- Q24 -->
+<div class="question" id="q24">
+<div class="q-header">
+  <span class="q-num">Q24</span>
+  <span class="q-text"><strong>"RouterCache 怎么做的？什么策略？命中率多少？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a24', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a24">
+
+<p><strong>实现（cache.py）：</strong></p>
+<ul>
+  <li><strong>策略</strong>：去标点、去空格、小写后精确匹配（不做模糊——安全第一）</li>
+  <li><strong>淘汰</strong>：LRU（max_size=100），超过淘汰最久未使用的</li>
+  <li><strong>统计</strong>：hits/misses 自动累计，<code>hit_rate</code> 属性返回 "15/20 (75%)"</li>
+</ul>
+
+<pre><code>def normalize(self, query: str) -> str:
+    q = re.sub(r'[^\w\s]', '', query.lower())  # 去标点
+    return ' '.join(q.split())                  # 去多余空格
+
+# 查缓存
+cached_plan = router_cache.get(state["query"])
+if cached_plan is not None:
+    plan_data = {"plan": cached_plan}
+    span.task = f"缓存命中 ({router_cache.hit_rate})"</code></pre>
+
+<p><strong>不缓存什么：</strong>硬规则命中的不写缓存（避免污染），只有 LLM 路径才写。</p>
+</div>
+</div>
+
+<!-- Q25 -->
+<div class="question" id="q25">
+<div class="q-header">
+  <span class="q-num">Q25</span>
+  <span class="q-text"><strong>"为什么 Anthropic client 不能放进 LangGraph state？你怎么解决的？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a25', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a25">
+
+<p><strong>问题：</strong>Anthropic SDK 的 client 对象不能 JSON 序列化。如果放进 state，Checkpointer 写盘时会崩：<code>TypeError: Type is not msgpack serializable</code>。</p>
+
+<p><strong>解决方案：configurable 通道。</strong></p>
+
+<pre><code># langgraph 专门留给"不可序列化对象"的通道
+config = {
+    "configurable": {
+        "thread_id": "default-session",
+        "_client": client,        # ← 不可序列化对象放这里
+        "_model": "deepseek-chat",
+        "_trace": trace,
+        "_router_cache": router_cache,
+    }
+}
+
+# 节点函数从 config 取，不存 state
+async def node_sql(state, config):
+    client = config["configurable"]["_client"]   # ← 从 configurable 取
+    model = config["configurable"].get("_model")</code></pre>
+
+<p><strong>configurable 的特点</strong>：随每次调用注入节点，但不被 Checkpointer 持久化。专为运行时对象设计。</p>
+</div>
+</div>
+
+<!-- Q26 -->
+<div class="question" id="q26">
+<div class="q-header">
+  <span class="q-num">Q26</span>
+  <span class="q-text"><strong>"你的 6 个 Agent 是怎么分工的？各自有哪些 tool？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a26', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a26">
+
+<table>
+<tr><th>Agent</th><th>职责</th><th>Tool 数量</th><th>核心 Tool</th></tr>
+<tr><td>sql</td><td>查数据库</td><td>3</td><td>list_tables, describe_table, run_query</td></tr>
+<tr><td>analysis</td><td>分析数据 + 可视化</td><td>3</td><td>analyze_results, compare_periods, render_chart</td></tr>
+<tr><td>strategy</td><td>查公司制度文档</td><td>1</td><td>search_knowledge_base</td></tr>
+<tr><td>hbase</td><td>HBase Shell 命令 + 查询</td><td>3</td><td>generate_hbase_query, run_hbase, search_knowledge_base</td></tr>
+<tr><td>hive</td><td>Hive/Impala 查询</td><td>5</td><td>list_tables, describe_table, run_query, search_hive_syntax, search_knowledge_base</td></tr>
+<tr><td>data_quality</td><td>数据质量扫描</td><td>3</td><td>list_tables, describe_table, run_query</td></tr>
+</table>
+
+<p><strong>设计原则：</strong>每个 Agent 只做一件事，不越界。SQL Agent 不会分析数据，Analysis Agent 不会写 SQL。这是从 learn-claude-code s04 subagent 学到的——独立 messages[]，上下文隔离。</p>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 6: 可观测性 & 测试 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s6">六、可观测性 &amp; 测试 <span style="color:var(--dim);font-size:0.85rem;">5 题</span></h2>
+
+<!-- Q27 -->
+<div class="question" id="q27">
+<div class="q-header">
+  <span class="q-num">Q27</span>
+  <span class="q-text"><strong>"TraceContext 是怎么工作的？为什么用 JSONL？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a27', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a27">
+
+<p><strong>TraceContext 概念（借鉴 OpenTelemetry）：</strong></p>
+<ul>
+  <li><strong>Trace</strong>：一次完整查询 = 用户输入 → 最终回答</li>
+  <li><strong>Span</strong>：Trace 里的一个操作单元 = 一个节点（router/sql/analysis）</li>
+</ul>
+
+<p><strong>每个 Span 记录：</strong>node（哪个节点）、task（做了什么）、elapsed（耗时）、input_tokens、output_tokens、turns（多少轮 tool 调用）、error（是否超时）</p>
+
+<p><strong>为什么用 JSONL：</strong></p>
+<ol>
+  <li><strong>append-only</strong>：每次 save 追加一行，不需要锁</li>
+  <li><strong>按天分文件</strong>：<code>logs/traces/2026-07-24.jsonl</code></li>
+  <li><strong>CLI 查看</strong>：<code>python -m utils.tracer --today</code> / <code>--last 3</code></li>
+  <li><strong>无需数据库</strong>：不会被连接管理、ORM 拖累</li>
+</ol>
+
+<pre><code># 使用方式
+trace = TraceContext(query="查华东销售额")
+span = trace.start_span("router", "分析意图")
+# ... 节点执行 ...
+trace.finish_span(span, usage={"input_tokens": 100, "output_tokens": 50})
+trace.save()  # 追加到今天的 JSONL</code></pre>
+</div>
+</div>
+
+<!-- Q28 -->
+<div class="question" id="q28">
+<div class="q-header">
+  <span class="q-num">Q28</span>
+  <span class="q-text"><strong>"你的测试分几层？每层测什么？成本多少？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a28', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a28">
+
+<table>
+<tr><th>层级</th><th>文件</th><th>条数</th><th>LLM 调用</th><th>耗时</th><th>测什么</th></tr>
+<tr><td><strong>L1 冒烟</strong></td><td>test_harness_smoke.py</td><td>46 条</td><td>零</td><td>~1.2s</td><td>模块编译、tool schema 合法、handler 配线、agent 配置、graph 编译</td></tr>
+<tr><td><strong>L2 单元</strong></td><td>test_*.py</td><td>~113 条</td><td>零</td><td>~5s</td><td>各模块隔离测试（HBase、Memory、Agent 集成）</td></tr>
+<tr><td><strong>L3 Eval</strong></td><td>eval_runner.py</td><td>36 条</td><td>有</td><td>分钟级</td><td>端到端回答质量</td></tr>
+<tr><td><strong>L3+ Judge</strong></td><td>--judge</td><td>36 条</td><td>有</td><td>分钟级</td><td>LLM-as-Judge 自动打分</td></tr>
+</table>
+
+<p><strong>冒烟测试的设计理念：</strong>每次 commit 必跑，验证 harness 线路是通的——所有模块能 import、所有 tool schema 合法、所有 handler 已配线、graph 能编译。不测业务逻辑，只测 harness 完整性。零 API 成本。</p>
+
+<div class="key-point">
+<strong>面试要点：</strong>"46 条冒烟 1.2 秒跑完，每次 commit 自动触发。如果冒烟不过，说明 harness 的线路断了——跟 Agent 回答质量无关。"
+</div>
+</div>
+</div>
+
+<!-- Q29 -->
+<div class="question" id="q29">
+<div class="q-header">
+  <span class="q-num">Q29</span>
+  <span class="q-text"><strong>"eval_runner 怎么做的？LLM-as-Judge 怎么打分？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a29', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a29">
+
+<p><strong>两种模式：</strong></p>
+<ul>
+  <li><strong>--fast</strong>：只跑 guardrail 用例（6 条，零 LLM）——验证护栏拦截是否正常</li>
+  <li><strong>--full</strong>：跑全类别（36 条）——覆盖 SQL 查询、制度检索、HBase/Hive 语法、对比分析等</li>
+  <li><strong>--judge</strong>：LLM-as-Judge 打分——用一个独立的 LLM 调用评判回答质量</li>
+</ul>
+
+<p><strong>Eval 用例结构（eval_cases.py）：</strong></p>
+<pre><code>{
+    "id": "sql-001",
+    "category": "sql",
+    "query": "销售部有多少员工？",
+    "expected_keywords": ["员工", "销售"],  # 回答必须含这些词
+    "forbidden_keywords": ["无法", "抱歉"],  # 回答不能含这些词
+}</code></pre>
+
+<p>--judge 模式：把 Agent 的回答 + 预期标准发给另一个 LLM，让它打分（1-5）并给出理由。用于回归检测——新改动是否降低了回答质量。</p>
+</div>
+</div>
+
+<!-- Q30 -->
+<div class="question" id="q30">
+<div class="q-header">
+  <span class="q-num">Q30</span>
+  <span class="q-text"><strong>"test_harness_smoke 的 46 条测试覆盖了哪些模块？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a30', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a30">
+
+<p><strong>10 个验证类别：</strong></p>
+<table>
+<tr><th>类别</th><th>测试数</th><th>验证内容</th></tr>
+<tr><td>1. 模块编译</td><td>21 条</td><td>21 个 harness 模块全部能 import</td></tr>
+<tr><td>2. Tool schema 合法</td><td>2 条</td><td>每个 tool 有 name/description/input_schema；无重名</td></tr>
+<tr><td>3. Handler 配线</td><td>1 条</td><td>tool 和 handler 一一对应，无孤立</td></tr>
+<tr><td>4. Agent 配线</td><td>4 条</td><td>每个 agent 有 name/prompt；tools/handlers 一致；核心 tool 存在</td></tr>
+<tr><td>5. Router 标记</td><td>2 条</td><td>标记常量非空；HBase scan 正则可编译</td></tr>
+<tr><td>6. Guardrails</td><td>5 条</td><td>input/sql/output 可调用；拦截 prompt injection；不拦自然语言</td></tr>
+<tr><td>7. HITL</td><td>3 条</td><td>SQL/HBase 审批函数存在；destructive ops 全覆盖</td></tr>
+<tr><td>8. Memory controller</td><td>1 条</td><td>5 个公共函数齐全</td></tr>
+<tr><td>9. Graph 编译</td><td>1 条</td><td>LangGraph 图能成功编译，核心节点已注册</td></tr>
+<tr><td>10. Entitlement</td><td>3 条</td><td>角色数据加载；get_user 返回正确；permission context 生成</td></tr>
+<tr><td>11. Handler 可调用</td><td>1 条</td><td>所有 handler 可调用</td></tr>
+<tr><td>12. Memory 系统</td><td>2 条</td><td>ConversationManager/VectorMemory/TokenBudget 可实例化</td></tr>
+</table>
+
+<p><strong>为什么叫"冒烟"：</strong>就像电路板的通电测试——冒烟了说明接错了。这 46 条测试不通，项目根本跑不起来。</p>
+</div>
+</div>
+
+<!-- Q31 -->
+<div class="question" id="q31">
+<div class="q-header">
+  <span class="q-num">Q31</span>
+  <span class="q-text"><strong>"你代码里到处都有 _ 前缀的变量（_client, _model, _inject_dq），什么意思？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a31', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a31">
+
+<p><strong>约定：_ 前缀 = "不应被 LangGraph Checkpointer 持久化"。</strong></p>
+
+<ul>
+  <li><code>_client</code>：Anthropic SDK 对象，不可序列化</li>
+  <li><code>_model</code>：模型名字符串</li>
+  <li><code>_inject_dq</code>：是否注入 DataQuality（首轮 True，后续 False）</li>
+  <li><code>_recalled_memories</code>：pre-turn 向量召回结果（每轮重新算，不需持久化）</li>
+  <li><code>_conversation_summary</code>：每次都重新构建，不需持久化</li>
+  <li><code>_stats</code>：运行时累计统计</li>
+  <li><code>_trace</code>：TraceContext 对象</li>
+</ul>
+
+<p><strong>本质上 _client 和 _model 已经废弃</strong>——现在走 configurable 通道（Q25）。但它们还在 TypedDict 定义里声明着以保持兼容。</p>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SECTION 7: Prompt & 成本 -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<h2 id="s7">七、Prompt 工程 &amp; 成本优化 <span style="color:var(--dim);font-size:0.85rem;">4 题</span></h2>
+
+<!-- Q32 -->
+<div class="question" id="q32">
+<div class="q-header">
+  <span class="q-num">Q32</span>
+  <span class="q-text"><strong>"cache_control 是怎么用的？省了多少成本？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a32', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a32">
+
+<p><strong>原理：</strong></p>
+<p>每轮 agent loop 都重复发送同样的 System Prompt + Tool Defs。Anthropic 的 prompt caching 让这些重复内容只按 cache hit 计费：</p>
+
+<ul>
+  <li><strong>Cache miss</strong>：$3/M tokens（正常价格）</li>
+  <li><strong>Cache hit</strong>：~$0.014/M tokens</li>
+  <li><strong>节省</strong>：~99.5% 的 system prompt 成本</li>
+</ul>
+
+<p><strong>实现（agent.py:58-75）：</strong></p>
+<pre><code>def _build_cacheable_system(system_text: str) -> list[dict]:
+    return [{
+        "type": "text",
+        "text": system_text,
+        "cache_control": {"type": "ephemeral"},  # ← 5 分钟 TTL
+    }]
+
+# 调用时
+cached_system = _build_cacheable_system(full_system_prompt)
+response = client.messages.create(
+    system=cached_system,  # ← 注意：传 list[dict] 而非 str
+    messages=messages, tools=tools, ...
+)</code></pre>
+
+<p><strong>限制：</strong>必须标记至少 1024 tokens 才能触发缓存。System Prompt + Tool Defs 通常 1500-2500 tokens，刚好符合。ephemeral 类型 TTL 5 分钟，适合交互式对话场景。</p>
+
+<div class="key-point">
+<strong>面试要点：</strong>"这是 Anthropic SDK 原生特性，一行 cache_control 标记就行。DeepSeek 兼容端点不一定支持，但代码结构不受影响——不支持就是正常计费而已。"
+</div>
+</div>
+</div>
+
+<!-- Q33 -->
+<div class="question" id="q33">
+<div class="q-header">
+  <span class="q-num">Q33</span>
+  <span class="q-text"><strong>"你的 system prompt 是怎么生成的？为什么要用工厂函数而不是 MD 文件？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a33', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a33">
+
+<p><strong>用 Python 工厂函数 build_system_prompt()，不是静态 MD 文件：</strong></p>
+
+<pre><code>def build_system_prompt(db_type="sqlite", user_role="数据分析师", extra_context=""):
+    prompt = f"""你是 {db_type} 数据库分析 Agent。
+    当前角色: {user_role}
+    可用工具: list_tables, describe_table, run_query, ..."""
+
+    if extra_context:
+        prompt += f"\n\n[上下文]\n{extra_context}"  # ← 记忆注入点
+    return prompt</code></pre>
+
+<p><strong>为什么用工厂函数：</strong></p>
+<ol>
+  <li><strong>动态注入</strong>：db_type、user_role、向量记忆、权限声明——每个请求不同，MD 做不到</li>
+  <li><strong>多 Agent 复用</strong>：LangGraph 的每个 Agent 有自己的 system prompt（在 agents.py 中定义），但都走同一个工厂模式</li>
+  <li><strong>测试友好</strong>：传不同参数就能模拟不同场景，不需要读写文件</li>
+</ol>
+
+<p>这是 learn-claude-code <strong>s05 Skill Loading</strong> 的等价实现——不是把知识全塞 system prompt，而是按需注入。</p>
+</div>
+</div>
+
+<!-- Q34 -->
+<div class="question" id="q34">
+<div class="q-header">
+  <span class="q-num">Q34</span>
+  <span class="q-text"><strong>"LangGraph Checkpointer 存什么？为什么用 AsyncSqliteSaver？"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a34', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a34">
+
+<p><strong>Checkpointer 存什么：</strong></p>
+<p>图每执行完一个节点，自动把完整 state（query、messages、plan、results、final_answer 等）序列化到 SQLite。同一 thread_id 的后续调用从这个文件恢复——messages 累积、results 保留。</p>
+
+<p><strong>为什么用 AsyncSqliteSaver：</strong></p>
+<ul>
+  <li>Graph.ainvoke 走 async checkpoint API——同步版不兼容</li>
+  <li>开发用 SQLite（零配置）；生产可换 PostgresSaver</li>
+  <li>必须用 <code>await MultiAgentRunner.create()</code> 工厂方法——AsyncSqliteSaver 需要 await 初始化连接和建表，__init__ 是同步的做不到</li>
+</ul>
+
+<pre><code># 状态持久化流程
+runner.run(query, thread_id="session-123")
+  → graph.ainvoke(state, config)  # 执行节点
+  → Checkpointer 自动存 state 到 db/agent_state.db
+  → runner.run(query2, thread_id="session-123")  # 同一会话
+  → Checkpointer 恢复上次 state（messages 完整历史）</code></pre>
+
+<p><strong>存什么，不存什么：</strong>messages（对话历史）存，plan/results/final_answer 存，_ 前缀字段（_client/_model/_trace）不存。</p>
+</div>
+</div>
+
+<!-- Q35 -->
+<div class="question" id="q35">
+<div class="q-header">
+  <span class="q-num">Q35</span>
+  <span class="q-text"><strong>"你项目里有哪些设计上的 trade-off？面试官最爱问这个。"</strong></span>
+  <button class="btn" onclick="toggleAnswer('a35', this)">显示答案</button>
+</div>
+<div class="q-answer" id="a35">
+
+<p><strong>至少能讲 5 个 trade-off：</strong></p>
+
+<table>
+<tr><th>Trade-off</th><th>选择</th><th>为什么</th></tr>
+<tr><td>LangGraph orchestrator vs 去中心化邮箱</td><td>当前用 LangGraph</td><td>流水线任务（Router→SQL→Analysis）拓扑清晰。探索式协作更适合邮箱。harness 改造计划就是加 team 模式做对比。</td></tr>
+<tr><td>Token 估算 vs API 精确计数</td><td>本地估算为主</td><td>在发请求前就要知道会不会超——不能等 API 报错。精确版 token_count_exact 作为补充，失败降级到估算。</td></tr>
+<tr><td>纯规则护栏 vs LLM 护栏</td><td>纯规则</td><td>零延迟、零 token、确定性。误拦可以调正则，漏拦比误拦更危险。</td></tr>
+<tr><td>SQL 改写 vs 数据库 RLS</td><td>SQL 改写（演示层）</td><td>生产环境应该用数据库原生 RLS Policy。正则改写只处理简单情况，复杂 SQL（子查询、JOIN、CTE）会失效。</td></tr>
+<tr><td>Streaming vs 非 streaming</td><td>两个版本都保留</td><td>交互走 streaming（用户体验），测试走非 streaming（不需要看输出）。</td></tr>
+<tr><td>ChromaDB vs Pinecone/Weaviate</td><td>ChromaDB 本地</td><td>零配置、零成本、本地持久化。开发阶段不需要分布式向量库。生产换 Pinecone 只需改 VectorMemory 的 client 初始化。</td></tr>
+</table>
+
+<div class="key-point">
+<strong>面试要点：</strong>说 trade-off 的关键是给出"为什么这么选"——不是"我只会这个"，而是"在当前约束下这是最优解"。
+</div>
+</div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════ -->
+<!-- SCORE CARD -->
+<!-- ══════════════════════════════════════════════════════════════ -->
+<div class="score">
+  <p class="label">题库总计</p>
+  <p class="big">35 题</p>
+  <p class="label">覆盖 7 大领域 &nbsp;|&nbsp; Harness 哲学 / Agent Loop / 记忆系统 / 权限安全 / 多Agent编排 / 可观测性 / Prompt工程</p>
+  <p style="color:var(--dim);margin-top:0.5rem;">点击每题「显示答案」按钮展开 &nbsp;|&nbsp; 顶部按钮一键展开/收起全部</p>
+</div>
+
+<div class="footer">
+  <p>db-agent 面试题库 &nbsp;|&nbsp; 2026-07-24</p>
+  <p>复习方法：先看题 → 尝试口答 → 展开答案对照 → 标注遗漏点 → 下次重点复习</p>
+</div>
+
+<script>
+function toggleAnswer(id, btn) {
+  const el = document.getElementById(id);
+  const isOpen = el.classList.contains('open');
+  el.classList.toggle('open');
+  if (btn) {
+    btn.textContent = isOpen ? '显示答案' : '隐藏答案';
+    btn.classList.toggle('show', !isOpen);
+  }
+  updateGlobalBtn();
+}
+
+function toggleAll() {
+  const all = document.querySelectorAll('.q-answer');
+  const anyClosed = Array.from(all).some(el => !el.classList.contains('open'));
+  const buttons = document.querySelectorAll('.q-header .btn');
+
+  all.forEach((el, i) => {
+    if (anyClosed) { el.classList.add('open'); }
+    else { el.classList.remove('open'); }
+  });
+  buttons.forEach((btn, i) => {
+    btn.textContent = anyClosed ? '隐藏答案' : '显示答案';
+    if (anyClosed) btn.classList.add('show');
+    else btn.classList.remove('show');
+  });
+  updateGlobalBtn();
+}
+
+function updateGlobalBtn() {
+  const all = document.querySelectorAll('.q-answer');
+  const anyClosed = Array.from(all).some(el => !el.classList.contains('open'));
+  const btn = document.getElementById('globalBtn');
+  btn.textContent = anyClosed ? '📋 展开全部答案' : '📋 收起全部答案';
+}
+</script>
+
+</body>
+</html>

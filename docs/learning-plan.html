@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>db-agent Harness 改造 — 3天×16小时作战计划</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d2991d;
+    --red: #f85149;
+    --purple: #a371f7;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    line-height: 1.7; padding: 2rem;
+    max-width: 960px; margin: 0 auto;
+  }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 0.25rem; }
+  h1 small { font-size: 1rem; color: var(--dim); font-weight: 400; display: block; margin-top: 0.25rem; }
+  h2 {
+    font-size: 1.35rem; color: var(--purple); margin: 2.5rem 0 1rem;
+    padding-bottom: 0.4rem; border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 1.1rem; color: var(--orange); margin: 1.8rem 0 0.6rem; }
+  h4 { font-size: 0.95rem; color: var(--green); margin: 1.2rem 0 0.4rem; }
+  p { margin: 0.5rem 0; }
+  ul, ol { margin: 0.5rem 0 0.5rem 1.5rem; }
+  li { margin: 0.25rem 0; }
+  code {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 0.15em 0.4em; font-size: 0.9em;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 1rem; overflow-x: auto;
+    font-size: 0.85em; line-height: 1.5; margin: 0.8rem 0;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  blockquote {
+    border-left: 3px solid var(--accent); padding: 0.5rem 1rem;
+    margin: 1rem 0; background: var(--surface); border-radius: 0 6px 6px 0;
+    color: var(--dim);
+  }
+  table {
+    width: 100%; border-collapse: collapse; margin: 1rem 0;
+  }
+  th, td {
+    border: 1px solid var(--border); padding: 0.5rem 0.75rem;
+    text-align: left; font-size: 0.9em;
+  }
+  th { background: var(--surface); color: var(--accent); }
+  tr:nth-child(even) { background: var(--surface); }
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 1.5rem 0; }
+  .toc h3 { margin-top: 0; color: var(--accent); }
+  .toc ol { margin-left: 1.2rem; }
+  .toc a { color: var(--text); text-decoration: none; }
+  .toc a:hover { color: var(--accent); text-decoration: underline; }
+  .checklist { list-style: none; margin-left: 0; }
+  .checklist li { padding: 0.3rem 0; }
+  .checklist li::before { content: '☐ '; color: var(--dim); margin-right: 0.4rem; }
+  .checklist li.done::before { content: '☑ '; color: var(--green); }
+  .badge {
+    display: inline-block; padding: 0.15em 0.5em; border-radius: 10px;
+    font-size: 0.8em; font-weight: 600; margin-right: 0.3rem;
+  }
+  .badge-new { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-code { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .badge-test { background: rgba(163,113,247,0.15); color: var(--purple); }
+  .badge-doc { background: rgba(210,153,29,0.15); color: var(--orange); }
+  .divider { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  .footer { text-align: center; color: var(--dim); font-size: 0.85em; margin-top: 3rem; }
+  .highlight-box {
+    border-left: 4px solid var(--green); padding: 0.8rem 1rem;
+    background: rgba(63,185,80,0.06); border-radius: 0 6px 6px 0; margin: 1rem 0;
+  }
+  strong { color: #e6edf3; }
+</style>
+</head>
+<body>
+
+<h1>
+  db-agent Harness 改造
+  <small>3 天 × 16 小时作战计划 &nbsp;|&nbsp; 总计 48 小时</small>
+</h1>
+
+<blockquote>
+  <strong>目标：</strong>给 db-agent 补全 s08–s11 四个 harness 机制，实现去中心化多 Agent 协作。<br>
+  <strong>原则：</strong>不改现有代码，每次只加一个文件，每个 commit 可独立跑通。<br>
+  <strong>产出：</strong>面试级项目 + HARENSS.md 讲稿 + benchmark 数据 + 模拟面试逐字稿。
+</blockquote>
+
+<!-- ─────────────────── TOC ─────────────────── -->
+<nav class="toc">
+<h3>目录</h3>
+<ol>
+  <li><a href="#prep">出发前：3 个原则</a></li>
+  <li><a href="#day1">Day 1（16h）：s08 后台任务 + s09 去中心化邮箱</a></li>
+  <li><a href="#day2">Day 2（16h）：s10 团队协议 + s11 自主认领 Agent + CLI</a></li>
+  <li><a href="#day3">Day 3（16h）：测试体系 + 文档 + 面试模拟</a></li>
+  <li><a href="#overview">三天总览</a></li>
+  <li><a href="#checklist">最终 Check List</a></li>
+</ol>
+</nav>
+
+<!-- ─────────────────── PREP ─────────────────── -->
+<h2 id="prep">出发前：3 个原则</h2>
+
+<ol>
+  <li><strong>不改现有代码</strong> — 每个新机制独立文件，通过 <code>--mode team</code> 入口接入。现有 single/multi 模式零影响。</li>
+  <li><strong>每个 commit 可跑</strong> — 不攒代码。写完一个机制 → 跑通 → commit。</li>
+  <li><strong>代码即讲稿</strong> — 每写完一步，在 HARNESS.md 里写 3 句"面试怎么讲这段话"。</li>
+</ol>
+
+<hr class="divider">
+
+<!-- ═══════════════════ DAY 1 ═══════════════════ -->
+<h2 id="day1">Day 1（16h）：s08 后台任务 + s09 去中心化邮箱</h2>
+
+<h3>上午段（8h）：s08 Background Tasks</h3>
+
+<h4>Hour 1（08:00–09:00）<span class="badge badge-code">精读</span></h4>
+<p><strong>目标：</strong>完全理解 learn-claude-code 的 BackgroundManager 实现。</p>
+<ol>
+  <li>打开 <code>agents/s_full.py</code>，精读第 328–360 行（<code>BackgroundManager</code> 类）</li>
+  <li>手写笔记回答：
+    <ul>
+      <li><code>run()</code> 为什么返回 task_id 而不是等结果？</li>
+      <li><code>_exec()</code> 为什么用 <code>daemon=True</code>？</li>
+      <li><code>drain()</code> 为什么用 <code>get_nowait()</code> 而不是 <code>get()</code>？</li>
+      <li><code>notifications</code> 为什么是 <code>Queue</code> 而不是 list？</li>
+    </ul>
+  </li>
+  <li>读 <code>docs/zh/s08-background-tasks.md</code> 心智模型文档</li>
+</ol>
+<p><strong>产出：</strong>手写 4 个问题 + 答案。</p>
+
+<h4>Hour 2（09:00–10:00）<span class="badge badge-doc">设计</span></h4>
+<p><strong>目标：</strong>画数据流图，确认接口。</p>
+<ol>
+  <li>回答设计问题并写入代码注释：
+    <ul>
+      <li>db-agent 里什么操作需要后台执行？（Hive 慢查询、HBase 全表 scan）</li>
+      <li>超时设多少？（Hive 查询 30s–300s，设 600s）</li>
+      <li>通知注入到哪里？（注入 streaming_agent 的 messages）</li>
+      <li>最多几个并发？（设 10）</li>
+    </ul>
+  </li>
+  <li>画数据流：
+    <pre><code>Agent 调 background_run(sql)
+  → BackgroundManager 开线程执行
+  → 结果进 Queue
+  → 下一轮 agent loop 开始前 drain()
+  → 完成通知注入 messages
+  → Agent 读到结果，继续处理</code></pre>
+  </li>
+</ol>
+<p><strong>产出：</strong>设计决策写在注释里。</p>
+
+<h4>Hour 3（10:00–11:00）<span class="badge badge-code">骨架</span></h4>
+<p><strong>目标：</strong>创建文件 + 写类定义 + docstring。</p>
+<pre><code>touch /Users/cailin/junior-to-senior/db-agent/multi_agent/background.py</code></pre>
+<p>写类骨架：<code>BackgroundManager</code> 含 <code>__init__</code>、<code>run()</code>、<code>_exec()</code>、<code>check()</code>、<code>drain()</code> 方法签名 + docstring。</p>
+<p><strong>产出：</strong>文件创建完毕，骨架 + docstring 写在文件里。</p>
+
+<h4>Hour 4（11:00–12:00）<span class="badge badge-code">实现</span></h4>
+<p><strong>目标：</strong>实现 <code>run()</code> + <code>_exec()</code>。</p>
+<ul>
+  <li><code>run()</code>：生成 uuid[:8] 作 task_id，并发控制（max 10），开 daemon 线程</li>
+  <li><code>_exec()</code>：subprocess.run 执行命令，完成后写 notifications Queue</li>
+  <li>异常处理：TimeoutExpired → status=timeout，Exception → status=error</li>
+</ul>
+<p><strong>产出：</strong><code>run()</code> + <code>_exec()</code> 写完。</p>
+
+<h4>Hour 5（12:00–13:00）<span class="badge badge-code">实现</span></h4>
+<p><strong>目标：</strong>实现 <code>check()</code> + <code>drain()</code>。</p>
+<ul>
+  <li><code>check(task_id)</code>：查单个或列全部</li>
+  <li><code>drain()</code>：非阻塞取全部通知（while not empty → get_nowait）</li>
+</ul>
+<p><strong>产出：</strong>BackgroundManager 类完成。</p>
+
+<h4>Hour 6（13:00–14:00）<span class="badge badge-code">集成</span></h4>
+<p><strong>目标：</strong>修改 <code>streaming_agent()</code>，每轮 LLM 调用前 drain 后台通知。</p>
+<p>在 <code>agent.py</code> 的 <code>streaming_agent()</code> 签名加参数 <code>bg_manager=None</code>，在 for 循环顶部加入 drain 逻辑。默认 None 时跳过，保持向后兼容。</p>
+<p><strong>产出：</strong>Agent loop 能感知后台任务完成。</p>
+
+<h4>Hour 7（14:00–15:00）<span class="badge badge-code">Tool</span></h4>
+<p><strong>目标：</strong>写 <code>background_run</code> 和 <code>check_background</code> 的 tool schema + handler。</p>
+<p>在 <code>background.py</code> 末尾追加 <code>BACKGROUND_RUN_TOOL</code> 和 <code>CHECK_BACKGROUND_TOOL</code> schema 定义。</p>
+<p><strong>产出：</strong>tool 定义完成。</p>
+
+<h4>Hour 8（15:00–16:00）<span class="badge badge-test">测试 + Commit</span></h4>
+<p><strong>目标：</strong>5 条冒烟测试全绿。</p>
+<pre><code>touch tests/test_background.py
+uv run pytest tests/test_background.py -v</code></pre>
+<table>
+  <tr><th>测试</th><th>验证点</th></tr>
+  <tr><td>test_run_and_check</td><td>提交任务 → 等待完成 → check 返回 completed</td></tr>
+  <tr><td>test_drain_notifications</td><td>完成后 drain 返回 1 条通知</td></tr>
+  <tr><td>test_drain_clears_queue</td><td>第二次 drain 为空</td></tr>
+  <tr><td>test_check_unknown_task</td><td>查不存在的 task_id 返回 "Unknown"</td></tr>
+  <tr><td>test_concurrent_limit</td><td>超过 max_concurrent 返回 Error</td></tr>
+</table>
+<div class="highlight-box">
+  <strong>Commit 1：</strong><code>feat: s08 background tasks — daemon 线程 + Queue 通知 + 冒烟测试</code>
+</div>
+
+<!-- ── Day 1 下午 ── -->
+<h3>下午段（8h）：s09 去中心化 Agent 邮箱</h3>
+
+<h4>Hour 9（16:00–17:00）<span class="badge badge-code">精读</span></h4>
+<p><strong>目标：</strong>理解 MessageBus 设计。</p>
+<ol>
+  <li>精读 <code>s_full.py</code> 第 363–390 行（<code>MessageBus</code> 类）</li>
+  <li>关键问题：
+    <ul>
+      <li>为什么用 JSONL 而不是 SQLite？（atomic append，无需连接管理）</li>
+      <li><code>read_inbox()</code> 为什么读完后清空？（consume-and-clear 语义）</li>
+      <li><code>broadcast()</code> 为什么排除 sender？</li>
+    </ul>
+  </li>
+</ol>
+<p><strong>产出：</strong>手写笔记。</p>
+
+<h4>Hour 10（17:00–18:00）<span class="badge badge-code">骨架</span></h4>
+<pre><code>touch /Users/cailin/junior-to-senior/db-agent/multi_agent/mailbox.py</code></pre>
+<p>写类骨架：<code>MessageBus</code> 含 <code>send()</code>、<code>read_inbox()</code>、<code>broadcast()</code>，消息类型常量，docstring 解释与 LangGraph orchestrator 的本质区别。</p>
+<p><strong>产出：</strong>mailbox.py 骨架 + docstring。</p>
+
+<h4>Hour 11（18:00–19:00）<span class="badge badge-code">实现</span></h4>
+<p><strong>目标：</strong>实现 <code>send()</code> + <code>read_inbox()</code>。</p>
+<ul>
+  <li><code>send()</code>：JSONL append 到 <code>.team/inbox/{to}.jsonl</code></li>
+  <li><code>read_inbox()</code>：读全部行 → 解析 JSON → 清空文件</li>
+</ul>
+<p><strong>产出：</strong>send + read_inbox 完成。</p>
+
+<h4>Hour 12（19:00–20:00）<span class="badge badge-code">实现 + 测试</span></h4>
+<p><strong>目标：</strong>实现 <code>broadcast()</code> + 5 条冒烟测试。</p>
+<pre><code>touch tests/test_mailbox.py
+uv run pytest tests/test_mailbox.py -v</code></pre>
+<table>
+  <tr><th>测试</th><th>验证点</th></tr>
+  <tr><td>test_send_and_read</td><td>发消息 → 收件人读到</td></tr>
+  <tr><td>test_read_clears_inbox</td><td>读后清空，再读为空</td></tr>
+  <tr><td>test_broadcast_excludes_sender</td><td>广播不给自己发</td></tr>
+  <tr><td>test_multiple_messages</td><td>多条消息顺序读取</td></tr>
+  <tr><td>test_invalid_message_type</td><td>非法类型返回 Error</td></tr>
+</table>
+<div class="highlight-box">
+  <strong>Commit 2：</strong><code>feat: s09 agent mailbox — JSONL 文件邮箱 + send/read/broadcast + 冒烟测试</code>
+</div>
+
+<h4>Hour 13–14（20:00–22:00）<span class="badge badge-doc">设计</span></h4>
+<p><strong>目标：</strong>精读 TeammateManager（s_full.py:398-541），设计 db-agent 版。</p>
+<ol>
+  <li>理解 teammate 生命周期：<code>spawn → working → idle → shutdown</code></li>
+  <li>设计 db-agent 的 Agent 配置表：
+    <pre><code>TEAM_CONFIG = {
+    "sql":      {"role": "SQL 查询专家", "tools": [...]},
+    "analysis": {"role": "数据分析师",   "tools": [...]},
+    "strategy": {"role": "战略分析",     "tools": [...]},
+    "hbase":    {"role": "HBase 专家",   "tools": [...]},
+    "hive":     {"role": "Hive 专家",    "tools": [...]},
+}</code></pre>
+  </li>
+  <li>画数据流：用户问题 → lead 创建 task → Agent 自主认领 → 邮箱通信 → 汇总结果</li>
+</ol>
+<p><strong>产出：</strong>设计文档 + 数据流图。</p>
+
+<h4>Hour 15–16（22:00–24:00）<span class="badge badge-doc">回顾</span></h4>
+<p><strong>目标：</strong>巩固 Day 1 所学。</p>
+<ol>
+  <li>在 HARNESS.md 末尾追加 Day 1 学习笔记（含面试 3 句话）</li>
+  <li>跑全量测试确认无回归：<code>uv run pytest tests/ -v --tb=short</code></li>
+  <li>Commit</li>
+</ol>
+<p><strong>产出：</strong>Day 1 完成，两个文件 + 10 条测试 + commit。</p>
+
+<hr class="divider">
+
+<!-- ═══════════════════ DAY 2 ═══════════════════ -->
+<h2 id="day2">Day 2（16h）：s10 团队协议 + s11 自主认领 Agent + CLI 集成</h2>
+
+<h3>上午段（8h）：s10 团队协议</h3>
+
+<h4>Hour 1（08:00–09:00）<span class="badge badge-code">精读</span></h4>
+<p><strong>目标：</strong>理解两个 FSM（有限状态机）。</p>
+<ol>
+  <li>精读 <code>s_full.py</code> 第 393–573 行（shutdown_requests, plan_requests, handle 函数）</li>
+  <li>画关机协议 FSM：
+    <pre><code>lead 发 shutdown_request → teammate inbox
+  → teammate 读 inbox，发现 shutdown_request
+  → teammate status=shutdown，退出 loop
+  → lead 读到 status=shutdown，确认</code></pre>
+  </li>
+  <li>画计划审批 FSM：
+    <pre><code>teammate 发 plan → lead inbox
+  → lead 调 plan_approval(request_id, approve=True/False)
+  → MessageBus 回传 plan_approval_response
+  → teammate 读审批结果，执行或放弃</code></pre>
+  </li>
+  <li>定义 db-agent 专属消息类型：<code>data_request</code>、<code>data_response</code></li>
+</ol>
+<p><strong>产出：</strong>协议 FSM 图 + 消息类型定义。</p>
+
+<h4>Hour 2（09:00–10:00）<span class="badge badge-code">实现</span></h4>
+<p><strong>目标：</strong>在 <code>mailbox.py</code> 追加 <code>TeamProtocols</code> 类。</p>
+<ul>
+  <li><code>request_shutdown(requester, target)</code> → 发关机请求</li>
+  <li><code>confirm_shutdown(name, request_id)</code> → 确认关机</li>
+  <li><code>submit_plan(name, plan)</code> → 提交计划</li>
+  <li><code>approve_plan(request_id, approve, feedback)</code> → 审批计划</li>
+</ul>
+<p><strong>产出：</strong>TeamProtocols 类完成。</p>
+
+<h4>Hour 3（10:00–11:00）<span class="badge badge-test">测试</span></h4>
+<pre><code>touch tests/test_protocols.py
+uv run pytest tests/test_protocols.py -v</code></pre>
+<table>
+  <tr><th>测试</th><th>验证点</th></tr>
+  <tr><td>test_shutdown_handshake</td><td>lead 发关机 → teammate 收到 → 确认 → lead 收到确认</td></tr>
+  <tr><td>test_plan_approval</td><td>teammate 提交计划 → lead 批准 → teammate 收到 approved</td></tr>
+  <tr><td>test_reject_plan</td><td>teammate 提交计划 → lead 拒绝 → teammate 收到 rejected</td></tr>
+</table>
+<p><strong>产出：</strong>3 条协议测试全绿。</p>
+
+<h4>Hour 4–5（11:00–13:00）<span class="badge badge-doc">设计</span></h4>
+<p><strong>目标：</strong>精读 TeammateManager._loop()，设计 db-agent 版自主 Agent 状态机。</p>
+<ol>
+  <li>精读 <code>s_full.py</code> 第 441–530 行</li>
+  <li>画状态转换图：
+    <pre><code>       spawn()
+          │
+          ▼
+┌─→ WORKING ◀──────────────┐
+│   │                       │
+│   │ idle_requested?       │ 有消息/任务
+│   ▼                       │
+│  IDLE                     │
+│   │                       │
+│   │ poll inbox + taskboard│
+│   │                       │
+│   ├── 有消息 → resume ────┘
+│   ├── 有任务 → claim → resume
+│   └── 超时 60s → SHUTDOWN
+│
+└── shutdown_request 在任何阶段读到 → SHUTDOWN</code></pre>
+  </li>
+  <li>回答设计问题：轮询间隔为何 5s？空闲超时为何 60s？为何 sleep() 而非 Event？</li>
+</ol>
+<p><strong>产出：</strong>状态图 + 设计笔记。</p>
+
+<h4>Hour 6–7（13:00–15:00）<span class="badge badge-code">实现</span></h4>
+<pre><code>touch /Users/cailin/junior-to-senior/db-agent/multi_agent/autonomous_agent.py</code></pre>
+<p><strong>目标：</strong>实现 <code>AutonomousAgent</code> 类。</p>
+<ul>
+  <li>构造函数：name → AGENT_REGISTRY → 取 ConfiguredAgent</li>
+  <li><code>start(initial_task)</code>：开 daemon 线程跑 <code>_loop()</code></li>
+  <li><code>_loop()</code>：WORKING (tool loop, max 50 轮) → IDLE (poll inbox + taskboard) → SHUTDOWN</li>
+  <li><code>_find_unclaimed_tasks()</code>：扫描 .tasks/ 目录</li>
+  <li><code>stop()</code>：设 _stop_flag</li>
+</ul>
+<p><strong>产出：</strong>AutonomousAgent 类完成。</p>
+
+<h4>Hour 8（15:00–16:00）<span class="badge badge-code">集成</span></h4>
+<p><strong>目标：</strong>在 <code>main.py</code> 加 <code>--mode team</code> 入口。</p>
+<ol>
+  <li><code>args.mode</code> 加 <code>"team"</code> 选项</li>
+  <li>team 模式主循环：创建 MessageBus → TaskManager → 3 个 AutonomousAgent → start → 轮询结果</li>
+</ol>
+<p><strong>产出：</strong><code>python main.py --mode team</code> 能启动三个 Agent 线程。</p>
+
+<!-- ── Day 2 下午 ── -->
+<h3>下午段（8h）：s10 收尾 + s11 深入 + 回顾</h3>
+
+<h4>Hour 9–10（16:00–18:00）<span class="badge badge-code">元 Tool</span></h4>
+<p><strong>目标：</strong>给每个 Agent 追加通信 tool。</p>
+<table>
+  <tr><th>Tool</th><th>作用</th></tr>
+  <tr><td><code>send_message</code></td><td>发消息给其他 Agent</td></tr>
+  <tr><td><code>idle</code></td><td>主动进入空闲</td></tr>
+  <tr><td><code>claim_task</code></td><td>手动认领任务</td></tr>
+  <tr><td><code>background_run</code></td><td>慢操作丢后台</td></tr>
+  <tr><td><code>check_background</code></td><td>查后台任务状态</td></tr>
+</table>
+<p>这些 tool schema 在 <code>autonomous_agent.py</code> 定义，自动追加到 agent_config.tools。</p>
+<p><strong>产出：</strong>Agent 能通信、空闲、认领任务。</p>
+
+<h4>Hour 11–12（18:00–20:00）<span class="badge badge-test">端到端</span></h4>
+<p><strong>目标：</strong>三个 Agent 协作完成真实任务。</p>
+<ol>
+  <li>用户问："对比华东和华南的销售趋势"</li>
+  <li>预期流程：lead 创建 task → sql_agent 认领华东 → sql_agent 认领华南 → analysis_agent 收结果 → 分析 + 图表 → 返回</li>
+  <li>实际跑一遍，看日志</li>
+</ol>
+<p><strong>产出：</strong>端到端能跑通。</p>
+
+<h4>Hour 13–14（20:00–22:00）<span class="badge badge-code">Task System</span></h4>
+<p><strong>目标：</strong>从 learn-claude-code s07 移植 TaskManager。</p>
+<pre><code>touch /Users/cailin/junior-to-senior/db-agent/multi_agent/task_system.py</code></pre>
+<p>实现：<code>create()</code>、<code>get()</code>、<code>update()</code>（含自动解除 blockedBy）、<code>list_all()</code>、<code>claim()</code>。文件持久化到 <code>.tasks/task_N.json</code>。</p>
+<p><strong>产出：</strong>task_system.py + 5 条冒烟测试。</p>
+
+<h4>Hour 15–16（22:00–24:00）<span class="badge badge-doc">回顾</span></h4>
+<ol>
+  <li>HARNESS.md 追加 Day 2 笔记</li>
+  <li>全量测试 + Commit：
+    <pre><code>git add multi_agent/autonomous_agent.py multi_agent/task_system.py \
+        multi_agent/mailbox.py main.py
+git commit -m "feat: s10 team protocols + s11 autonomous agents + task system"</code></pre>
+  </li>
+</ol>
+<p><strong>产出：</strong>Day 2 完成。</p>
+
+<hr class="divider">
+
+<!-- ═══════════════════ DAY 3 ═══════════════════ -->
+<h2 id="day3">Day 3（16h）：测试体系 + 文档 + 面试模拟</h2>
+
+<h3>上午段（8h）：完整测试 + Benchmark</h3>
+
+<h4>Hour 1–2（08:00–10:00）<span class="badge badge-test">冒烟测试</span></h4>
+<p><strong>目标：</strong>15 条零 LLM 冒烟测试。</p>
+<pre><code>touch tests/test_team_smoke.py</code></pre>
+<table>
+  <tr><th>模块</th><th>测试数</th><th>验证点</th></tr>
+  <tr><td>BackgroundManager</td><td>5</td><td>提交/完成/超时/并发/drain</td></tr>
+  <tr><td>MessageBus</td><td>5</td><td>发/收/清空/广播/非法类型</td></tr>
+  <tr><td>TeamProtocols</td><td>3</td><td>关机握手/批准/拒绝</td></tr>
+  <tr><td>TaskManager</td><td>5</td><td>创建/获取/更新/依赖解除/认领</td></tr>
+  <tr><td>AutonomousAgent</td><td>2</td><td>构造函数/注册表完整性</td></tr>
+</table>
+<pre><code>uv run pytest tests/test_team_smoke.py -v  # 目标：&lt; 2 秒，全部绿</code></pre>
+<p><strong>产出：</strong>15 条冒烟测试全绿。</p>
+
+<h4>Hour 3–4（10:00–12:00）<span class="badge badge-test">Benchmark</span></h4>
+<p><strong>目标：</strong>采集真实性能数据。</p>
+<pre><code>mkdir benchmarks
+touch benchmarks/run_bench.py</code></pre>
+<table>
+  <tr><th>指标</th><th>怎么测</th><th>目标值</th></tr>
+  <tr><td>上下文压缩率</td><td>HybridWindowManager 压缩前后 token 对比</td><td>压缩至 ~15–20%</td></tr>
+  <tr><td>TokenBudget 触发频率</td><td>多轮对话中 should_compress() 返回 True 的次数</td><td>&gt; 32K tokens 时触发</td></tr>
+  <tr><td>后台任务通知延迟</td><td>background_run → drain 时间差</td><td>&lt; 100ms</td></tr>
+  <tr><td>Mailbox 写入延迟</td><td>100 次 send() 的平均耗时</td><td>&lt; 1ms/msg</td></tr>
+  <tr><td>冒烟测试数</td><td>总测试条数</td><td>&gt; 30 条</td></tr>
+</table>
+<p><strong>产出：</strong><code>benchmarks/results.md</code> 有真实数字。</p>
+
+<h4>Hour 5–6（12:00–14:00）<span class="badge badge-test">全量回归</span></h4>
+<pre><code>uv run pytest tests/ -v --tb=short 2>&1 | tee benchmarks/test_output.txt</code></pre>
+<p>确认 single/multi 模式无回归，所有原有测试通过。</p>
+<p><strong>产出：</strong>全量测试通过 + 无回归。</p>
+
+<h4>Hour 7–8（14:00–16:00）<span class="badge badge-test">记忆系统 Benchmark</span></h4>
+<table>
+  <tr><th>指标</th><th>怎么测</th></tr>
+  <tr><td>向量召回精度</td><td>存 20 条对话 → recall 5 条 → 人工评相关度</td></tr>
+  <tr><td>TokenBudget 节省</td><td>对比有/无压缩的累计 token 消耗</td></tr>
+  <tr><td>压缩延时</td><td>HybridWindowManager 一轮压缩耗时</td></tr>
+  <tr><td>短期记忆命中率</td><td>10 轮对话中 build_context() 返回非空的比例</td></tr>
+</table>
+<p><strong>产出：</strong><code>benchmarks/memory_results.md</code>。</p>
+
+<!-- ── Day 3 下午 ── -->
+<h3>下午段（8h）：HARNESS 文档重写 + 面试模拟</h3>
+
+<h4>Hour 9–10（16:00–18:00）<span class="badge badge-doc">文档</span></h4>
+<p><strong>目标：</strong>把 HARNESS.md 从"项目文档"升级为"面试讲稿"。</p>
+<p>追加内容：</p>
+<ul>
+  <li>Harness 机制全覆盖表（s01–s11 + Memory + Permissions + Observation）</li>
+  <li>三种协作模式对比表（single vs multi vs team）</li>
+  <li>面试追问预判（4 个常见追问 + 标准回答）</li>
+  <li>LangGraph vs Mailbox 的架构决策记录</li>
+</ul>
+<p><strong>产出：</strong>HARNESS.md 升级为面试讲稿。</p>
+
+<h4>Hour 11–12（18:00–20:00）<span class="badge badge-doc">逐字稿</span></h4>
+<p><strong>目标：</strong>准备 3 分钟自我介绍 + 常见追问的逐字回答。</p>
+<p>新建 <code>docs/interview_script.md</code>，包含：</p>
+<ul>
+  <li>3 分钟自我介绍（开场白 + 技术亮点 + 个人特色）</li>
+  <li>6 个常见追问的标准回答（为什么不做编程 Agent / LangGraph vs team / harness vs LangChain / 测试策略 / 最难的 bug / 下一步计划）</li>
+</ul>
+<p><strong>产出：</strong>面试逐字稿。</p>
+
+<h4>Hour 13–14（20:00–22:00）<span class="badge badge-doc">模拟</span></h4>
+<p><strong>目标：</strong>跟 AI 对话练习 + 录音自检。</p>
+<ol>
+  <li>用 Claude Code 模拟面试官，针对 harness 架构追问 5 轮</li>
+  <li>手机录音讲一遍 3 分钟自我介绍，听回放找问题</li>
+  <li>准备白板图（harness 架构全景），30 秒画完</li>
+  <li>至少录 3 遍，修正口头禅和含糊表述</li>
+</ol>
+<p><strong>产出：</strong>至少 3 遍录音 + 白板图。</p>
+
+<h4>Hour 15（22:00–23:00）<span class="badge badge-doc">最终 Check</span></h4>
+<p>逐条确认 <a href="#checklist">最终 Check List</a> 全部打勾。</p>
+<p><strong>产出：</strong>All checked。</p>
+
+<h4>Hour 16（23:00–24:00）<span class="badge badge-code">收尾</span></h4>
+<p><strong>目标：</strong>用 db-agent 分析它自己。</p>
+<ol>
+  <li>用 single 模式统计测试覆盖率</li>
+  <li>用 multi 模式生成 dashboard</li>
+  <li>跑完整 benchmark + 截图表</li>
+</ol>
+<p><strong>产出：</strong>dashboard 截图 + benchmark 报告，面试时直接展示。</p>
+
+<hr class="divider">
+
+<!-- ═══════════════════ OVERVIEW ═══════════════════ -->
+<h2 id="overview">三天总览</h2>
+
+<table>
+  <tr>
+    <th></th>
+    <th>上午（8h）</th>
+    <th>下午（8h）</th>
+  </tr>
+  <tr>
+    <td><strong>Day 1</strong></td>
+    <td>
+      <span class="badge badge-new">s08</span> 后台任务<br>
+      read → design → code → test
+    </td>
+    <td>
+      <span class="badge badge-new">s09</span> 邮箱<br>
+      read → design → code → test
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Day 2</strong></td>
+    <td>
+      <span class="badge badge-new">s10</span> 协议 + <span class="badge badge-new">s11</span> loop<br>
+      FSM → protocol code → test
+    </td>
+    <td>
+      Team CLI + task system + E2E<br>
+      集成 → 端到端跑通 → 回顾
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Day 3</strong></td>
+    <td>
+      冒烟测试 + Benchmark<br>
+      15 条 + 数据采集
+    </td>
+    <td>
+      HARNESS 重写 + 面试逐字稿 + 模拟<br>
+      讲稿 → 追问预判 → 录音练习
+    </td>
+  </tr>
+</table>
+
+<hr class="divider">
+
+<!-- ═══════════════════ CHECKLIST ═══════════════════ -->
+<h2 id="checklist">最终 Check List</h2>
+
+<h3>代码文件</h3>
+<ul class="checklist">
+  <li>multi_agent/background.py — BackgroundManager 类</li>
+  <li>multi_agent/mailbox.py — MessageBus + TeamProtocols</li>
+  <li>multi_agent/autonomous_agent.py — AutonomousAgent 类</li>
+  <li>multi_agent/task_system.py — TaskManager 类</li>
+  <li>main.py — --mode team 入口</li>
+  <li>agent.py — bg_manager 参数（向后兼容）</li>
+</ul>
+
+<h3>测试</h3>
+<ul class="checklist">
+  <li>tests/test_background.py — 5 条冒烟</li>
+  <li>tests/test_mailbox.py — 5 条冒烟</li>
+  <li>tests/test_protocols.py — 3 条冒烟</li>
+  <li>tests/test_task_system.py — 5 条冒烟</li>
+  <li>tests/test_team_smoke.py — 15 条冒烟</li>
+  <li>tests/ (原有) — 全部通过，无回归</li>
+</ul>
+
+<h3>文档</h3>
+<ul class="checklist">
+  <li>HARNESS.md — 重写为面试讲稿</li>
+  <li>docs/interview_script.md — 面试逐字稿</li>
+  <li>docs/learning-plan.html — 本计划</li>
+  <li>benchmarks/results.md — 有真实数字</li>
+  <li>benchmarks/memory_results.md — 记忆系统数据</li>
+</ul>
+
+<h3>项目级</h3>
+<ul class="checklist">
+  <li>README.md 更新了 --mode team 使用说明</li>
+  <li>git log 有 4+ 个清晰的 commit</li>
+  <li>每个 commit 能独立跑通</li>
+</ul>
+
+<h3>面试准备</h3>
+<ul class="checklist">
+  <li>3 分钟自我介绍录音 ≥ 3 遍</li>
+  <li>白板图 30 秒能画完</li>
+  <li>追问预判 6 题都有标准回答</li>
+  <li>Benchmark 数字能脱口而出</li>
+</ul>
+
+<hr class="divider">
+
+<div class="footer">
+  <p>db-agent Harness 改造计划 &nbsp;|&nbsp; 2026-07-24</p>
+  <p>Agent = 模型 + Harness &nbsp;|&nbsp; 造好 Harness，Agent 会完成剩下的。</p>
+</div>
+
+</body>
+</html>

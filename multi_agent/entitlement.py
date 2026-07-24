@@ -38,7 +38,8 @@ _DEFAULT_ROLES: dict[str, dict] = {
     "dba": {
         "name": "研发DBA",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
-                          "search_knowledge_base", "read_document", "write_query"],
+                          "search_knowledge_base", "read_document", "write_query",
+                          "run_hbase", "generate_hbase_query"],
         "db_tables": None,
         "db_row_filter": None,
         "docs_filter": None,
@@ -56,7 +57,8 @@ _DEFAULT_ROLES: dict[str, dict] = {
     "analyst": {
         "name": "数据分析师",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
-                          "search_knowledge_base", "read_document"],
+                          "search_knowledge_base", "read_document",
+                          "run_hbase", "generate_hbase_query"],
         "db_tables": ["departments", "employees", "products", "customers", "orders"],
         "db_row_filter": None,
         "docs_filter": None,
@@ -433,6 +435,9 @@ def filter_docs(user: dict, docs: list[dict]) -> list[dict]:
 # 敏感列——涉及这些列时需要人工审批
 SENSITIVE_COLUMNS = {"salary", "cost", "budget"}
 
+# HBase 破坏性操作——执行前需人工审批
+_HBASE_DESTRUCTIVE_OPS = {"put", "delete", "drop", "truncate"}
+
 
 def needs_approval(user: dict, sql: str) -> bool:
     """检查 SQL 是否涉及敏感列，且用户角色需要 HITL。"""
@@ -441,6 +446,11 @@ def needs_approval(user: dict, sql: str) -> bool:
         return False
     sql_lower = sql.lower()
     return any(col in sql_lower for col in SENSITIVE_COLUMNS)
+
+
+def needs_approval_hbase(operation: str) -> bool:
+    """HBase 破坏性操作（put/delete/drop/truncate）需人工审批。"""
+    return (operation or "").strip().lower() in _HBASE_DESTRUCTIVE_OPS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

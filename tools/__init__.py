@@ -34,10 +34,17 @@ def tool(description: str):
 
     def _python_type_to_json(py_type) -> str:
         origin = getattr(py_type, "__origin__", None)
-        if origin is list:
+        if origin is list or py_type is list:
             return "array"
         mapping = {str: "string", int: "integer", float: "number", bool: "boolean", dict: "object"}
         return mapping.get(py_type, "string") if py_type else "string"
+
+    def _array_item_schema(py_type) -> dict:
+        """list[str] / list[float] → JSON Schema items；裸 list 默认 string。"""
+        args = getattr(py_type, "__args__", None)
+        if args:
+            return {"type": _python_type_to_json(args[0])}
+        return {"type": "string"}
 
     def _parse_param_docs(docstring: str) -> dict:
         """从 docstring 提取参数说明。
@@ -87,7 +94,7 @@ def tool(description: str):
                 "description": param_docs.get(name, f"{name} 参数"),
             }
             if json_type == "array":
-                prop["items"] = {"type": "object"}
+                prop["items"] = _array_item_schema(hints.get(name, list))
             if json_type == "string" and "enum" not in param_docs.get(name, ""):
                 pass  # enum 由参数说明中的列表自动识别
 

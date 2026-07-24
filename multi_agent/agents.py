@@ -4,8 +4,6 @@
 orchestrator.py 只需调用 result, usage = agent.run(client, task) 即可。
 """
 
-import re
-
 from tools.schema import (
     LIST_TABLES_TOOL, list_tables,
     DESCRIBE_TABLE_TOOL, describe_table,
@@ -17,93 +15,9 @@ from tools.analysis import (
 )
 from tools.chart import render_chart
 from tools.knowledge import search_knowledge_base
+from tools.hive import search_hive_syntax
+from tools.hbase import run_hbase, generate_hbase_query
 from multi_agent.base import ConfiguredAgent
-
-
-# ── Router Agent: 意图分类 + 任务分派 ──
-# Router 没有 Tool，纯推理——分析 query 后输出 JSON 执行计划。
-# 和 SQL/Strategy/Analysis 不同，它只被 orchestrator 调一次（不是 agent loop）。
-
-ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划的 JSON。
-
-你支持的专业 Agent:
-- sql: 查数据库（订单、员工、部门、产品、客户等结构化数据）
-- strategy: 查公司制度/政策文档（提成、年假、考勤、定价政策、公司战略等）
-- analysis: 综合分析与建议，或回答对话历史相关问题（不会自己查库）
-
-【优先级从高到低，必须严格遵守】
-1. 闲聊/能力介绍（"你好"、"你能做什么"、"你是谁"）→ plan 必须为 []，禁止 sql/strategy
-2. 对话历史/元问题（"刚才问了什么"、"上一个问题是"、"之前查了什么"）→ 只用 analysis，禁止 sql/strategy
-   task 写: "用户询问对话历史，请根据上下文回答"
-3. 制度/政策（"提成比例"、"年假多少天"、"考勤规则"）→ 只用 strategy，禁止 sql
-4. 纯数据查询（"销售额多少"、"有多少员工"）→ 只用 sql
-5. 需要数据+建议（"分析趋势并给建议"）→ sql + analysis；若还要对照制度再加 strategy
-6. 对比/变化/环比/同比（"对比本月和上月"、"订单量变化"）→ 必须 sql + analysis：
-   - sql: 分别查询两个时期的数据
-   - analysis: 对比变化幅度并解读
-
-反例（禁止）:
-- "销售人员的提成比例是多少" → 不要 sql，只要 strategy
-- "你好，你能做什么" → 不要 sql，plan=[]
-- "上一个问题是什么" → 不要 sql，只要 analysis
-
-输出格式（只输出 JSON，不要其他文字）:
-{"plan": [{"agent": "sql", "task": "具体任务描述"}], "combine": true}
-
-每个 task 要具体、完整。不确定时宁可少派 agent，也不要默认加 sql。"""
-
-
-# ── Router 硬规则：LLM 不可靠时兜底（与 ROUTER_PROMPT 优先级一致）──
-
-_CHITCHAT_MARKERS = (
-    "你好", "您好", "hi", "hello", "你是谁", "介绍下", "介绍一下",
-    "自我介绍", "在吗", "谢谢", "再见", "你能做什么", "你会什么",
-)
-_META_QUESTION_RE = re.compile(
-    r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问了|查了|问题|查询|语句|问了什么)|"
-    r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)|"
-    r"(第一句|最初的?问题|最开始|最初一句)|"
-    r"这[次轮场]对话|"
-    r"上一个问题"
-)
-_STRATEGY_MARKERS = ("提成", "年假", "考勤", "定价政策", "公司战略", "休假", "制度", "政策")
-_DATA_MARKERS = (
-    "销售额", "订单", "员工", "部门", "客户", "产品销量", "多少人",
-    "趋势", "对比", "分析", "统计", "表", "数据库",
-)
-_COMPARE_MARKERS = ("对比", "环比", "同比", "变化", "增减")
-_COMPARE_DATA_MARKERS = ("订单", "销售", "员工", "数据", "部门", "产品")
-
-
-def route_override(query: str) -> list[dict] | None:
-    """明确意图时返回硬编码 plan；否则返回 None，交给 LLM。
-
-    用来兜住 route-002/004/007 这类「模型爱乱加 sql」的 case。
-    """
-    q = (query or "").strip()
-    if not q:
-        return []
-
-    q_lower = q.lower()
-    if any(m in q_lower for m in _CHITCHAT_MARKERS):
-        if not any(m in q for m in _DATA_MARKERS) and not any(m in q for m in _STRATEGY_MARKERS):
-            return []
-
-    if _META_QUESTION_RE.search(q):
-        return [{"agent": "analysis", "task": "用户询问对话历史，请根据上下文回答"}]
-
-    has_strategy = any(m in q for m in _STRATEGY_MARKERS)
-    has_data = any(m in q for m in _DATA_MARKERS)
-    if has_strategy and not has_data:
-        return [{"agent": "strategy", "task": q}]
-
-    if any(m in q for m in _COMPARE_MARKERS) and any(m in q for m in _COMPARE_DATA_MARKERS):
-        return [
-            {"agent": "sql", "task": q},
-            {"agent": "analysis", "task": f"对比分析：{q}"},
-        ]
-
-    return None
 
 
 # ── SQL Agent: 只查数据 ──
@@ -137,7 +51,7 @@ ANALYSIS_AGENT_PROMPT = """你是数据分析师 Agent。你不会写 SQL、不�
 - 对比不同维度（地区、时间、部门、产品）
 - 用业务语言解释数据，而不是报 SQL 结果行数
 - 发现问题时主动标注（'华东 Q2 环比下降 15%，值得关注'）
-- 发现适合可视化的趋势或占比时，主动调 render_chart 生成图表（折线看趋势、饼图看占比、柱状图看对比）
+- 发现适合可视化的趋势或占比时，主动调 render_chart 生成数据大屏（暗色主题 HTML，多面板布局）
 
 回答要简洁：先给结论和关键数字，再补简短依据。不要道歉开场，不要大段可视化字符。
 如果数据不够支撑分析，说清楚缺什么，不要强行下结论。"""
@@ -166,6 +80,85 @@ strategy_agent = ConfiguredAgent(
     system_prompt=STRATEGY_AGENT_PROMPT,
     tools=[search_knowledge_base.tool_schema],
     handlers={"search_knowledge_base": search_knowledge_base},
+)
+
+
+# ── HBase Agent: 生成 HBase Shell 命令 ──
+
+HBASE_AGENT_PROMPT = """你是 HBase 查询 Agent。你能生成 HBase Shell 命令，也能在本地模拟 HBase 上直接执行查询。
+
+你的能力：
+- 调用 generate_hbase_query 生成 scan/get/count/put/delete/list/create/desc 等操作的 HBase Shell 命令
+- 调用 run_hbase 在本地模拟 HBase 上实际执行查询，获取真实数据
+- 如果用户描述的表结构不清楚，先调 search_knowledge_base 查"HBase操作参考"
+- 优先直接执行查询（run_hbase），当用户明确要命令文本时才用 generate_hbase_query
+
+本地模拟 HBase 中有 3 张表：
+- orders (列族 cf): order_NNN 行键，含 total/status/customer_id/region/created_at 等列
+- user_profile (列族 info, behavior): user_NNN 行键，含 info:name/email/age/region, behavior:last_login/pv/purchases
+- product_catalog (列族 meta, stock): prod_NNN 行键，含 meta:name/category/price, stock:qty/warehouse
+
+你的价值：
+- HBase 不是 SQL——你确保生成的命令符合 HBase Shell 语法（不是标准 SQL）
+- 解释命令中每个部分的作用（FILTER、COLUMNS、STARTROW 等）
+- 标注性能注意事项（scan 全表务必加 FILTER 或 STARTROW/STOPROW）
+- 写操作（put/delete）自动标注警告"""
+
+hbase_agent = ConfiguredAgent(
+    name="hbase",
+    system_prompt=HBASE_AGENT_PROMPT,
+    tools=[
+        generate_hbase_query.tool_schema,
+        run_hbase.tool_schema,
+        search_knowledge_base.tool_schema,
+    ],
+    handlers={
+        "generate_hbase_query": generate_hbase_query,
+        "run_hbase": run_hbase,
+        "search_knowledge_base": search_knowledge_base,
+    },
+)
+
+
+# ── Hive Agent: 生成 Hive/Impala (Hue) 查询 ──
+
+HIVE_AGENT_PROMPT = """你是 Hive/Impala 查询 Agent。你能生成 HiveQL/Impala SQL，也能在本地模拟 Hive 数仓上直接执行查询。
+
+本地模拟 Hive 数仓有 3 张表（SQLite 模拟，表名和结构保持 Hive 风格）：
+- ods_orders_hive (分区列 dt, region): 订单贴源层数据
+- dwd_user_events (分区列 dt): 用户行为埋点明细，event_props 为 JSON (模拟 MAP 类型)
+- dim_products_hive: 产品维度表，tags 为 JSON 数组 (模拟 ARRAY 类型)
+
+你的能力：
+- 调用 list_tables / describe_table 了解表结构和分区信息
+- 调用 run_query 在本地模拟 Hive 上执行 HiveQL 查询，获取真实数据
+- 调用 search_hive_syntax 获取语法模板（select、create_table、窗口函数、LATERAL VIEW 等）
+- 调用 search_knowledge_base 查"Hive/Hue表结构参考"
+- 优先直接执行查询（run_query），当用户明确要语法模板时才用 search_hive_syntax
+
+你的价值：
+- 确保生成的查询符合 HiveQL 方言（不是标准 SQL——有 PARTITIONED BY、LATERAL VIEW 等特有语法）
+- 标注 Hive vs Impala 差异（COMPUTE STATS、LEFT ANTI JOIN、OFFSET 等）
+- 给出性能建议（分区裁剪、MAPJOIN 提示、STORED AS 选择）
+- 不确定某个语法是否支持时标注"请验证"而不是断言"""
+
+hive_agent = ConfiguredAgent(
+    name="hive",
+    system_prompt=HIVE_AGENT_PROMPT,
+    tools=[
+        LIST_TABLES_TOOL,
+        DESCRIBE_TABLE_TOOL,
+        RUN_QUERY_TOOL,
+        search_hive_syntax.tool_schema,
+        search_knowledge_base.tool_schema,
+    ],
+    handlers={
+        "list_tables": list_tables,
+        "describe_table": describe_table,
+        "run_query": run_query,
+        "search_hive_syntax": search_hive_syntax,
+        "search_knowledge_base": search_knowledge_base,
+    },
 )
 
 

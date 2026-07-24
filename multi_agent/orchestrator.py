@@ -10,6 +10,7 @@
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 
@@ -24,8 +25,9 @@ from anthropic import Anthropic
 from multi_agent.state import MultiAgentState
 from multi_agent.agents import (
     sql_agent, analysis_agent, strategy_agent,
-    data_quality_agent, ROUTER_PROMPT, route_override,
+    data_quality_agent, hbase_agent, hive_agent,
 )
+from multi_agent.router import ROUTER_PROMPT, route_override
 from multi_agent.base import is_agent_timeout
 from multi_agent.guardrails import guard_input, guard_output
 from multi_agent.cache import RouterCache
@@ -84,7 +86,8 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     router_cache = config["configurable"].get("_router_cache")
 
     # 硬规则优先：闲聊 / 元问题 / 纯制度查询不依赖 LLM（也避免脏缓存）
-    override = route_override(state["query"])
+    prev_agents = [s["agent"] for s in state.get("plan", [])] if state.get("plan") else []
+    override = route_override(state["query"], prev_agents=prev_agents)
     router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
     cached_plan = None
 
@@ -137,9 +140,11 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
             # 空 plan：真闲聊就结束；否则兜底 sql（避免空白回复）
             # 注意：不要用 len>4 —— 「你好，你能做什么」长度很长但仍是闲聊
             query_text = state["query"].strip()
-            if any(m in query_text.lower() for m in (
-                "你好", "您好", "hi", "hello", "你能做什么", "你会什么", "你是谁",
-            )):
+            q_low = query_text.lower()
+            is_chitchat = any(m in q_low for m in (
+                "你好", "您好", "hi", "hello", "你能做什么", "你会什么",
+            )) or bool(re.search(r"你.{0,4}是谁", query_text))
+            if is_chitchat:
                 span.task = "无需数据查询"
                 trace.finish_span(span, router_usage)
                 print(trace.print_progress(span))
@@ -207,6 +212,31 @@ async def node_strategy(state: MultiAgentState, config: RunnableConfig) -> dict:
     print(f"✅ Strategy Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
     results = {**state.get("results", {}), "strategy": result}
     return _next_step(state, results, "strategy")
+
+
+async def _run_agent_node(state, config, agent, agent_name, result_key):
+    """通用 Agent 节点：取 task → 执行 → 写 results。"""
+    client = config["configurable"]["_client"]
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    task = next(s["task"] for s in state["plan"] if s["agent"] == agent_name)
+    span = trace.start_span(agent_name, task[:60])
+    print(f"⏳ {agent_name.upper()} Agent: {task[:60]}...")
+    result, usage = await _run_agent_with_timeout(agent, client, task, model, span, agent_name.upper())
+    trace.finish_span(span, usage, error=span.error)
+    print(f"✅ {agent_name.upper()} Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
+    results = {**state.get("results", {}), result_key: result}
+    return _next_step(state, results, agent_name)
+
+
+async def node_hbase(state: MultiAgentState, config: RunnableConfig) -> dict:
+    """HBase Agent: 生成 HBase Shell 命令。"""
+    return await _run_agent_node(state, config, hbase_agent, "hbase", "hbase")
+
+
+async def node_hive(state: MultiAgentState, config: RunnableConfig) -> dict:
+    """Hive Agent: 生成 Hive/Impala 查询。"""
+    return await _run_agent_node(state, config, hive_agent, "hive", "hive")
 
 
 async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
@@ -344,6 +374,8 @@ def build_multi_agent_graph(checkpointer=None):
     builder.add_node("data_quality", node_data_quality)
     builder.add_node("sql", node_sql)
     builder.add_node("strategy", node_strategy)
+    builder.add_node("hbase", node_hbase)
+    builder.add_node("hive", node_hive)
     builder.add_node("analysis", node_analysis)
 
     builder.set_entry_point("router")
@@ -353,6 +385,8 @@ def build_multi_agent_graph(checkpointer=None):
         "data_quality": "data_quality",
         "sql": "sql",
         "strategy": "strategy",
+        "hbase": "hbase",
+        "hive": "hive",
         "analysis": "analysis",
         "done": END,
     }
@@ -361,6 +395,8 @@ def build_multi_agent_graph(checkpointer=None):
     builder.add_conditional_edges("data_quality", edge_router, targets)
     builder.add_conditional_edges("sql", edge_router, targets)
     builder.add_conditional_edges("strategy", edge_router, targets)
+    builder.add_conditional_edges("hbase", edge_router, targets)
+    builder.add_conditional_edges("hive", edge_router, targets)
     builder.add_edge("analysis", END)
 
     return builder.compile(checkpointer=checkpointer)

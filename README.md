@@ -1,6 +1,8 @@
 # db-agent — 企业级自然语言数据库分析 Agent
 
-自然语言查询 SQLite 数据库的多 Agent 系统。支持单 Agent 快速问答和多 Agent 编排（Router → SQL/Strategy/DataQuality → Analysis），内置 Entitlement 权限网关、HITL 人工审批、三层记忆系统和 Eval 评估体系。
+[![Test](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml/badge.svg)](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml)
+
+自然语言查询 SQLite + HBase + Hive 的多 Agent 系统。支持单 Agent 快速问答和多 Agent 编排（Router → SQL/Strategy/HBase/Hive/DataQuality → Analysis），内置 Entitlement 权限网关、双层 HITL 人工审批（SQL 敏感列 + HBase 破坏性操作）、三层记忆系统和 Eval 评估体系。
 
 ## 从哪读起（导航）
 
@@ -11,9 +13,10 @@
 | 1 | `main.py` | CLI 入口：`--mode` / `--user`、记忆注入、HITL 交互 |
 | 2 | `agent.py` | single 模式：ReAct tool loop |
 | 2 | `multi_agent/orchestrator.py` | multi 模式：LangGraph 编排（详见 `multi_agent/README.md`） |
-| 3 | `tools/` | Agent 实际调用的能力（`query` 含权限） |
-| 3 | `multi_agent/entitlement.py` | 工具/表/行权限 + `deny_payload` |
+| 3 | `tools/` | Agent 实际调用的能力（`query` 含权限、`hbase` 含 KV 模拟器） |
+| 3 | `multi_agent/entitlement.py` | 工具/表/行权限 + HITL（SQL 敏感列 + HBase 破坏性 op） |
 | 4 | `memory/` | 短期压缩 + 向量长期记忆 |
+| 5 | `HARNESS.md` | Harness 工程架构说明（工具/Agent/护栏/审批/记忆全貌） |
 | 5 | `tests/`、`docs/` | 评测与排障 |
 | — | `archive/` | **不在主路径**；旧实现 / WIP，见 `archive/README.md` |
 
@@ -21,11 +24,12 @@
 main.py
   ├─ --mode single  → agent.streaming_agent → tools/*
   └─ --mode multi   → MultiAgentRunner
-                        ├─ Router (agents.route_override + LLM)
-                        ├─ sql / strategy / data_quality
+                        ├─ Router (route_override 硬规则 + LLM 意图 + LRU 缓存)
+                        ├─ sql / strategy / hbase / hive / data_quality
                         └─ analysis → final_answer
                              ↑
                       tools/query.py ← check_entitlement
+                      tools/hbase.py ← needs_approval_hbase
 ```
 
 ## 快速开始
@@ -88,18 +92,20 @@ python main.py --mode multi --no-dq
 
 ### Multi Agent 模式
 
-LangGraph 多 Agent 编排。Router 分析意图后分派给专业 Agent，结果汇总给 Analysis Agent 综合回答。
+LangGraph 多 Agent 编排。Router 分析意图后分派给 6 个专业 Agent，结果汇总给 Analysis Agent 综合回答。
 
 ```
 用户 query
     │
     ▼
 ┌──────────┐
-│  Router  │  意图分类 + 任务分派（输出 JSON 执行计划）
+│  Router  │  意图分类 + 任务分派（硬规则 > LLM > LRU 缓存）
 └────┬─────┘
      │  plan: [{agent, task}, ...]
      ├────► DataQuality  扫一遍数据质量（NULL、日期连续性、异常值）
-     ├────► SQL Agent    查数据库（只能 list/describe/run_query）
+     ├────► SQL Agent    查 SQLite 业务表（只能 list/describe/run_query）
+     ├────► HBase Agent  查 NoSQL KV 表（scan/get/count，写操作需 HITL）
+     ├────► Hive Agent   查数仓分层表（ods/dwd/dim，HiveQL 方言）
      ├────► Strategy     查公司制度文档（search_knowledge_base）
      ▼
 ┌──────────┐
@@ -110,13 +116,17 @@ LangGraph 多 Agent 编排。Router 分析意图后分派给专业 Agent，结�
 **路由逻辑**（Router 硬规则 > LLM）：
 | 用户意图 | 路由 | 示例 |
 |---------|------|------|
-| 数据查询 | sql | "销售额最高的部门" |
+| SQL 数据查询 | sql | "销售额最高的部门" |
+| HBase NoSQL 查询 | hbase | "scan orders 表前 10 行" |
+| Hive 数仓查询 | hive | "查 ods_orders_hive 华东地区订单" |
 | 制度/政策 | strategy | "销售提成比例是多少" |
 | 对比/趋势 | sql + analysis | "对比华东和华南的销售趋势" |
 | 元问题 | analysis | "刚才问了什么" |
 | 闲聊 | 空 plan | "你好" |
 
-## 安全模型：Entitlement + HITL
+Router 支持上下文继承：如果上一轮路由到 hbase，本轮"继续查"会优先复用同一 Agent。
+
+## 安全模型：Entitlement + 双层 HITL
 
 六层防御链，从 Prompt 软约束到 Tool 硬拦截。
 
@@ -127,7 +137,7 @@ LangGraph 多 Agent 编排。Router 分析意图后分派给专业 Agent，结�
 [1] guard_input()      输入护栏（SQL 注入 / prompt injection 检测）
     │
     ▼
-[2] Router             意图分类（制度/数据/闲聊分流）
+[2] Router             意图分类（SQL/HBase/Hive/制度/闲聊分流）
     │
     ▼
 [3] System Prompt      Layer 1 软约束（声明用户能做什么、不能做什么）
@@ -136,11 +146,21 @@ LangGraph 多 Agent 编排。Router 分析意图后分派给专业 Agent，结�
 [4] check_entitlement()  Layer 2 硬拦截（工具授权 + 表白名单 + 行级改写 + 文档过滤）
     │
     ▼
-[5] HITL (interrupt)   Layer 3 人工审批（salary/cost/budget 敏感列触发）
-    │
+[5] HITL (interrupt)   双层审批：
+    │                   - SQL：salary/cost/budget 敏感列 → 弹出 y/n 确认
+    │                   - HBase：put/delete/drop/truncate → 弹出 y/n 确认
     ▼
 [6] guard_output()     输出护栏（PII 泄露检测）
 ```
+
+### HITL 双层审批
+
+| 层 | 数据源 | 触发条件 | 实现 |
+|----|--------|---------|------|
+| SQL HITL | SQLite 业务表 | SELECT 含 salary/cost/budget 列 | `needs_approval()` 检查列名 |
+| HBase HITL | 内存 KV 模拟器 | put/delete/drop/truncate | `needs_approval_hbase()` 检查 op |
+
+HITL 在 LangGraph graph 上下文内通过原生 `interrupt()` 暂停执行，graph 外调用写操作直接返回错误。
 
 ### 权限模型（资源级，非 SQL 解析）
 
@@ -169,8 +189,11 @@ LangGraph 多 Agent 编排。Router 分析意图后分派给专业 Agent，结�
 LLM-as-Judge 模式：用独立模型（Kimi kimi-k2.5）评测被测 Agent（DeepSeek），避免裁判偏袒自己。
 
 ```bash
-# 跑全部 44 条测试
+# 跑全部测试（冒烟 48 + 单元 91 + 集成 17）
 pytest tests/ -v
+
+# 只跑冒烟测试（1.3s，零 API 成本）
+pytest tests/test_harness_smoke.py -v
 
 # 跑 Eval 评测（含 LLM judge）
 python tests/eval_runner.py
@@ -182,10 +205,10 @@ python tests/eval_runner.py
 |------|------|
 | correctness | 数据是否准确（查错表、写错 SQL、算错数） |
 | completeness | 是否回答了用户问的所有部分 |
-| safety | 是否拒绝 DROP/INSERT/UPDATE |
-| routing | 多 Agent 模式下 Router 是否选了正确的 Agent |
+| safety | 是否拒绝 DROP/INSERT/UPDATE / HBase 破坏性操作 |
+| routing | 多 Agent 模式下 Router 是否选了正确的 Agent（含 hbase/hive） |
 
-详见 `tests/eval_cases.py` — 44 条测试覆盖单 Agent 基础查询、SQL 安全、权限边界、多 Agent 路由。
+详见 `tests/eval_cases.py` — 35 条测试覆盖单 Agent 基础查询、SQL 安全、权限边界、多 Agent 路由（含 HBase/Hive）。
 
 ## 记忆系统
 
@@ -224,24 +247,28 @@ main.py（CLI 入口 + 记忆编排层）
     └── 每轮后: add_message → ConversationManager 对话管理
     │
     ├─ single 模式 ──► agent.py（ReAct Agent Loop + prompt caching）
-    │                    ├── tools/schema.py   list_tables, describe_table
-    │                    ├── tools/query.py    run_query（SELECT only + 权限）
-    │                    ├── tools/analysis.py analyze_results, compare_periods
-    │                    ├── tools/chart.py    render_chart（matplotlib）
-    │                    └── tools/knowledge.py search_knowledge_base, save/read/search_memory
+    │                    ├── tools/schema.py    list_tables, describe_table, get_schema_summary
+    │                    ├── tools/query.py     run_query（SELECT only + 权限）
+    │                    ├── tools/analysis.py  analyze_results, compare_periods
+    │                    ├── tools/chart.py     render_chart（matplotlib）
+    │                    ├── tools/knowledge.py search_knowledge_base, save/read/search_memory
+    │                    ├── tools/hbase.py     run_hbase（KV 模拟器）, generate_hbase_query
+    │                    └── tools/hive.py      search_hive_syntax（HiveQL 语法模板）
     │
     └─ multi 模式 ──► multi_agent/orchestrator.py（LangGraph 图编排）
-                         ├── agents.py / base.py / state.py
-                         ├── entitlement.py + guardrails.py
-                         └── cache.py
-                         （旧单 Agent 图、SQL 子图草稿 → 见 archive/）
+                         ├── agents.py / base.py / state.py（6 Agent + 基类）
+                         ├── router.py          三层路由（硬规则 > LLM > LRU 缓存）
+                         ├── entitlement.py     权限 + 双层 HITL（SQL 列 + HBase op）
+                         ├── guardrails.py      输入/输出护栏 + SQL guard
+                         └── cache.py           Router LRU 缓存
     │
     └── memory/  三层记忆系统
         ├── vector_store.py       ChromaDB 向量存储（remember/recall）
         ├── short_term_memory.py  ConversationManager（滑动窗口 + LLM 压缩）
         ├── token_budget.py       Token 估算 + 压缩阈值预警
         ├── hybrid_window_manager.py  3 层滑动窗口（L0 原文 / L1 轻摘要 / L2 全局摘要）
-        └── long_term_memory.py   RAGPipeline（HyDE + Rerank）
+        ├── long_term_memory.py   RAGPipeline（HyDE + Rerank）
+        └── memory_controller.py  记忆策略（闲聊/元问题/记忆召回判断）
 
 utils/
     ├── llm.py      extract_text（兼容 ThinkingBlock）
@@ -249,19 +276,21 @@ utils/
     └── tracer.py   TraceContext（请求级调用链追踪，落盘 JSONL）
 
 db/
-    ├── seed.py            表结构 + 示例数据（6 部门、40 员工、15 产品、12 客户、338 订单）
-    └── user_memory.sql   用户记忆表
+    ├── seed.py             SQLite 业务表（6 部门/40 员工/15 产品/12 客户/338 订单）
+    │                       + Hive 数仓表（ods_orders_hive/dwd_user_events/dim_products_hive）
+    └── user_memory.sql    用户记忆表
 
 mcp_servers/
     └── db_server.py       MCP 暴露 list/describe/run_query（可选）
 
-archive/                   不在主路径：旧 streaming、0020 单 Agent 图、WIP 子图等
-
 tests/
-    ├── test_agent.py      Agent 集成测试
-    ├── test_memory.py     记忆系统单元测试
-    ├── eval_runner.py     LLM-as-Judge 评测（Kimi 独立评测）
-    └── eval_cases.py      评测用例定义
+    ├── test_harness_smoke.py  冒烟测试（48 条，1.3s，零 API 成本）
+    ├── test_hbase.py          HBase 模拟器测试（37 条，含 graph 内 HITL 集成）
+    ├── test_memory.py         记忆系统单元测试（28 条）
+    ├── test_agent.py          Agent 集成测试（17 条）
+    ├── test_bigdata.py        大数据场景测试（26 条）
+    ├── eval_runner.py         LLM-as-Judge 评测（Kimi 独立评测）
+    └── eval_cases.py          评测用例定义（35 条）
 ```
 
 ## 设计决策
@@ -270,9 +299,11 @@ tests/
 
 **为什么 Run Query 只允许 SELECT？** 安全考量。Tool 层硬拦截非 SELECT 语句，权限网关做表/行/列三级控制。
 
+**为什么 HBase 用内存 KV 模拟？** 没有真实 HBase 集群。嵌套 dict 模拟 table→row_key→cf:col→value，API 与真实 HBase Shell 一致，可无缝切换。
+
 **为什么 Entitlement 不解析 SQL？** 正则提取 `FROM/JOIN` 表名做表级检查 + 字符串拼接做行级改写。不做完整 SQL 解析（正则不可靠），也不做列级过滤（颗粒度太细，生产无意义）。
 
-**为什么 HITL 用 LangGraph 原生 interrupt()？** 相比自建审批队列，原生 interrupt() 自动持久化暂停点，Command(resume=...) 恢复执行，checkpointer 保证状态不丢。
+**为什么 HITL 用 LangGraph 原生 interrupt()？** 相比自建审批队列，原生 interrupt() 自动持久化暂停点，Command(resume=...) 恢复执行，checkpointer 保证状态不丢。HITL 覆盖两层：SQL 敏感列（salary/cost/budget）和 HBase 破坏性操作（put/delete/drop/truncate）。
 
 **为什么 Eval 用不同模型？** 裁判不能是选手。DeepSeek 做被测 Agent，Kimi 做 Judge，避免模型自评偏差。
 
@@ -282,9 +313,17 @@ tests/
 
 ## 测试
 
+每次 push 自动跑 CI（GitHub Actions），覆盖冒烟 + HBase + 记忆 + self_query 测试。
+
 ```bash
 # 全部测试
 pytest tests/ -v
+
+# Harness 冒烟测试（1.3s，零 API 成本，每次 commit 必跑）
+pytest tests/test_harness_smoke.py -v
+
+# HBase 模拟器测试（含 graph 内 HITL 集成测试）
+pytest tests/test_hbase.py -v
 
 # 只跑单元测试（不需要 API key，秒级）
 pytest tests/ -v -k "test_memory"
@@ -295,3 +334,12 @@ pytest tests/ -v -k "test_agent"
 # Eval 评测（LLM-as-Judge，需要 Kimi API key）
 python tests/eval_runner.py
 ```
+
+| 测试层 | 文件 | 条数 | 耗时 | 说明 |
+|--------|------|------|------|------|
+| 冒烟 | test_harness_smoke.py | 48 | 1.3s | 模块导入、tool schema、handler 配线、agent 一致性 |
+| 单元 | test_hbase.py | 37 | 0.1s | HBase KV 模拟器 + graph 内 HITL 审批 |
+| 单元 | test_memory.py | 28 | 0.2s | 记忆控制器 + 向量存储 + token 预算 |
+| 集成 | test_bigdata.py | 26 | 需 API | HBase/Hive SQL 生成 + 路由 + 权限 |
+| 集成 | test_agent.py | 17 | 需 API | Agent ReAct loop + tool 调用 |
+| Eval | eval_runner.py | 35 | 需 API | LLM-as-Judge 双模型评测 |
