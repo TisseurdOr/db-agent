@@ -1,30 +1,33 @@
+import os
 import sqlite3
+
 from db.seed import DB_PATH
+from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id
 
 RUN_QUERY_TOOL = {
     "name": "run_query",
     "description": (
         "在 SQLite 数据库上执行一条 SELECT 查询。"
-    "当你需要从数据库获取数据时使用此工具。"
-    "调用前必须先通过 describe_table 了解字段名——不要猜测。"
-    "只支持 SELECT 语句。"
-    "返回 JSON: {rows: [...], count: N, truncated: bool}"
+        "当你需要从数据库获取数据时使用此工具。"
+        "调用前必须先通过 describe_table 了解字段名——不要猜测。"
+        "只支持 SELECT 语句。"
+        "返回 JSON: {rows: [...], count: N, truncated: bool}"
     ),
     "input_schema": {
         "type": "object",
         "properties": {
             "sql": {
                 "type": "string",
-                "description": "要执行的 SELECT 查询语句。只允许 SELECT。"
+                "description": "要执行的 SELECT 查询语句。只允许 SELECT。",
             }
         },
-        "required": ["sql"]
-    }
+        "required": ["sql"],
+    },
 }
 
-# 解决方案: Tool 层主动截断 + 结构化摘要
-def run_query(sql: str, max_rows: int = 50) -> dict:
-    # 安全：只允许 SELECT（防 SQL 注入 + 防误删数据）
+
+def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
+    """执行 SELECT 查询，自动截断大结果集。"""
     cleaned = sql.strip().upper()
     if not cleaned.startswith("SELECT"):
         return {
@@ -34,21 +37,58 @@ def run_query(sql: str, max_rows: int = 50) -> dict:
             "sql": sql,
         }
 
+    user = get_user(resolve_user_id(user_id))
+    ent = check_entitlement(user, tool_name="run_query", sql=sql)
+    if not ent.passed:
+        return {
+            "error": ent.reason,
+            "sql": sql,
+            "message": ent.reason,
+        }
+    if ent.needs_approval:
+        try:
+            from langgraph.types import interrupt
+            decision = interrupt({
+                "type": "hitl_approval",
+                "tool": "run_query",
+                "sql": ent.sql,
+                "user": user["name"],
+                "role": user["role"],
+                "message": (
+                    f"敏感查询需要审批。\n"
+                    f"用户: {user['name']} ({user['role']})\n"
+                    f"SQL: {ent.sql}"
+                ),
+            })
+            if isinstance(decision, dict) and not decision.get("approved"):
+                return {"error": "用户拒绝了该查询", "sql": sql}
+            # 用户批准，继续执行
+        except (RuntimeError, ImportError):
+            # 不在 graph 上下文（测试/单 Agent 模式），返回审批标记
+            return {
+                "error": "需要管理员审批",
+                "sql": sql,
+                "message": "需要管理员审批",
+                "pending_sql": ent.sql,
+            }
+
+    sql = ent.sql or sql
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # 让结果可以用列名访问
-    """执行 SELECT 查询，自动截断大结果集。"""
+    conn.row_factory = sqlite3.Row
     try:
         cursor = conn.execute(sql)
         rows = [dict(row) for row in cursor.fetchmany(max_rows + 1)]
         truncated = len(rows) > max_rows
-        #滑动窗口截断超长tools结果
         rows = rows[:max_rows] if truncated else rows
         return {
             "rows": rows,
             "count": len(rows),
             "truncated": truncated,
-            "hint": f"结果已截断，仅显示前 {max_rows} 行。如需更多数据，请用 WHERE 或 LIMIT 缩小范围。" if truncated else None,
-            # 不返回所有 1000 行——返回摘要 + 前 50 行
+            "hint": (
+                f"结果已截断，仅显示前 {max_rows} 行。如需更多数据，请用 WHERE 或 LIMIT 缩小范围。"
+                if truncated
+                else None
+            ),
             "summary": generate_summary(rows) if truncated else None,
         }
     except Exception as e:
@@ -60,7 +100,8 @@ def run_query(sql: str, max_rows: int = 50) -> dict:
         }
     finally:
         conn.close()
-#不调 LLM，用 Python 算
+
+
 def generate_summary(rows: list) -> str:
     """对查询结果做统计摘要——零 API 成本。"""
     if not rows:
@@ -71,7 +112,7 @@ def generate_summary(rows: list) -> str:
         if all(isinstance(r.get(c), (int, float)) for r in rows if r.get(c) is not None)
     ]
     parts = [f"共 {len(rows)} 行, {len(cols)} 列"]
-    for c in numeric_cols[:3]:  # 最多 3 个数值列
+    for c in numeric_cols[:3]:
         vals = [r[c] for r in rows if r.get(c) is not None]
         if vals:
             parts.append(f"{c}: avg={sum(vals)/len(vals):.1f} min={min(vals)} max={max(vals)}")

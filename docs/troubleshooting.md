@@ -23,6 +23,12 @@
 13. [Tool 结果截断在 `messages.append` 之后执行](#13-tool-结果截断在-messagesappend-之后执行)
 14. [Token 预算和 ConversationManager 同时往 System Prompt 注摘要](#14-token-预算和-conversationmanager-同时往-system-prompt-注摘要)
 15. [元问题（"刚才查了什么"）检索失败 + 向量库污染](#15-元问题刚才查了什么检索失败--向量库污染)
+16. [LangGraph `KeyError: '__end__'`（条件边路由）](#16-langgraph-keyerror-__end__条件边路由)
+17. [`TypeError: Missing required arguments`（`messages.create`）](#17-typeerror-missing-required-argumentsmessagescreate)
+18. [multi 模式重启后「上一个问题」答错（MemorySaver + 元问题污染）](#18-multi-模式重启后上一个问题答错memorysaver--元问题污染)
+19. [multi 模式 Agent 超 max_turns 返回垃圾文本，污染下游](#19-multi-模式-agent-超-max_turns-返回垃圾文本污染下游)
+20. [Router 返回空 plan，查询静默失败](#20-router-返回空-plan查询静默失败)
+21. ["上条"/"上一条"/"上轮"等元问题未被识别](#21-上条上一条上轮等元问题未被识别)
 
 ---
 
@@ -467,6 +473,283 @@ Agent 检索不到之前的对话，给出错误回答。更糟的是，这轮�
 
 **涉及文件**
 `main.py`（`is_meta_question` + `list_recent` + `remember` 跳过 + score 阈值）
+
+---
+
+## 16. LangGraph `KeyError: '__end__'`（条件边路由）
+
+**现象**
+```
+KeyError: '__end__'
+```
+堆栈落在 `langgraph/graph/_branch.py` 的 `_finish`：
+```python
+r if isinstance(r, Send) else self.ends[r] for r in result
+```
+多 Agent 模式（`uv run python main.py --mode multi`）跑到条件边时崩。
+
+**原因**
+两处叠在一起：
+
+1. **路由函数直接返回了 `END`，却又配了 path map。**
+   `END` 的值是字符串 `"__end__"`。`add_conditional_edges(node, fn, path_map)`
+   会用 `fn` 的**返回值**去查 `path_map` 的 key：
+   ```python
+   # 错：路由返回 END（"__end__"），path_map 里却只有 "done"
+   def edge_router(state):
+       return END if state.get("next") == "done" else state["next"]
+
+   targets = {"sql": "sql", "analysis": "analysis", "done": END}
+   builder.add_conditional_edges("router", edge_router, targets)
+   # → 查 targets["__end__"] → KeyError
+   ```
+
+2. **`TypedDict` State 没声明 `next` 字段。**
+   节点里 `return {"next": "sql"}`，但 `MultiAgentState` 没有 `next`，
+   LangGraph 可能丢弃未声明 channel → `state.get("next", "done")` 总落到
+   默认 `"done"` → 更容易走进「返回 END」那条错路。
+
+**解决**
+路由函数只返回 path map 的 **key**，由 map 再映射到 `END`；
+State 里显式声明路由字段：
+```python
+# state.py
+class MultiAgentState(TypedDict):
+    ...
+    next: str   # data_quality | sql | strategy | analysis | done
+
+# orchestrator.py
+def edge_router(state: MultiAgentState) -> str:
+    # 返回 key，不要 return END
+    return state.get("next") or "done"
+
+targets = {
+    "data_quality": "data_quality",
+    "sql": "sql",
+    "strategy": "strategy",
+    "analysis": "analysis",
+    "done": END,   # key "done" → 真正结束
+}
+builder.add_conditional_edges("router", edge_router, targets)
+```
+
+口诀：**path map 模式下，路由函数返回字典的 key，不直接返回 `END`。**
+
+**涉及文件**
+`multi_agent/orchestrator.py`（`edge_router` + `targets`）、
+`multi_agent/state.py`（`MultiAgentState.next`）
+
+---
+
+## 17. `TypeError: Missing required arguments`（`messages.create`）
+
+**现象**
+多 Agent 模式（`uv run python main.py --mode multi`）router 跑完后，进 `sql` 节点崩：
+```
+TypeError: Missing required arguments; Expected either
+('max_tokens', 'messages' and 'model') or
+('max_tokens', 'messages', 'model' and 'stream') arguments to be given
+During task with name 'sql' ...
+```
+堆栈：
+```
+main.py → MultiAgentRunner.run → node_sql → sql_agent.run
+  → _simple_agent_run → client.messages.create(...)
+  → anthropic/_utils/_utils.py (required_args wrapper)
+```
+
+**原因**
+Anthropic SDK 的 `@required_args` 只认**关键字参数名是否出现在 kwargs 里**。
+下面这种空调用会报**完全一样**的错：
+```python
+client.messages.create()  # 没传 model / messages / max_tokens
+```
+常见触发：
+1. **改到一半 / 旧进程还在跑**：磁盘上的 `base.py` 已有参数，但当前解释器加载的是旧代码。
+2. **调用时参数没真正传进去**：例如误写成 `create()`、或 `**kwargs` 解包时字典是空的。
+3. 注意：这不是「model 字符串为空」——`model=""` 仍算「给了参数」，会换成别的 API 错，不会是这条 TypeError。
+
+**解决**
+1. 确认 `_simple_agent_run` 里显式传了必填项：
+```python
+response = client.messages.create(
+    model=model,
+    max_tokens=4096,
+    system=system_prompt,
+    messages=messages,
+    tools=tools,
+)
+```
+2. 改完代码后**重启** CLI（`quit` 再 `uv run python main.py --mode multi`），避免旧进程。
+3. 仍复现时，在 `create` 前打印确认：
+```python
+print("create args", repr(model), type(messages), len(tools))
+```
+
+**涉及文件**
+`multi_agent/base.py`（`_simple_agent_run`）、
+`multi_agent/orchestrator.py`（`node_sql` → `sql_agent.run`）、
+`multi_agent/agents.py`（`sql_agent`）
+
+---
+
+## 18. multi 模式重启后「上一个问题」答错（MemorySaver + 元问题污染）
+
+**现象**
+1. multi 模式问「销售额这三个月如何」→ 答对 → `quit`
+2. 重新 `uv run python main.py --mode multi` → 问「上一个问题是什么？」
+3. Agent 答成「这次对话第一句是什么」之类自指问题，而不是销售额。
+4. 日志却写「持久化到 `agent_state.db`」，但重启后短期对话像丢了。
+
+**原因**
+两层叠在一起：
+
+1. **Checkpointer 用了进程内 `MemorySaver`。**
+   `quit` 进程退出后内存清空；新进程新建 `MemorySaver()`，同一 `thread_id` 也读不到旧 `messages`。
+   日志写 db 名是误导——当时根本没落盘。
+
+2. **「上一个问题」重启后只能靠向量库 `list_recent`。**
+   `META_MEMORY_RE` 只过滤「刚才/上次问了什么」写法，**滤不掉**：
+   - 「这次对话，我的第一句是什么？」
+   - 「这一轮对话，我的最初的问题是什么？」
+   这些旧元问答被当成「业务记忆」注入 → Analysis 跟错上下文。
+
+**解决**
+1. 换磁盘 **`AsyncSqliteSaver`**（不是同步 `SqliteSaver`），落盘 `db/agent_state.db`。
+   `graph.ainvoke` 会调异步 checkpoint API；同步 `SqliteSaver` 会直接：
+   ```
+   NotImplementedError: The SqliteSaver does not support async methods.
+   Consider using AsyncSqliteSaver instead.
+   ```
+2. `main.py` 进程内只建一次：`multi_runner = await MultiAgentRunner.create(...)`。
+3. 扩大 `META_QUESTION_RE` / `META_MEMORY_RE`，覆盖第一句 / 最初 / 「这次对话」等自指问题；元问题仍不 `remember`。
+4. 日志打印真实路径：`multi_runner.checkpoint_db`。
+
+```python
+# orchestrator.py
+self._conn = await aiosqlite.connect(str(db_path))
+self.checkpointer = AsyncSqliteSaver(self._conn)
+await self.checkpointer.setup()
+
+# main.py — 循环外 await 建一次
+multi_runner = await MultiAgentRunner.create(client, model=..., enable_data_quality=...)
+```
+
+**涉及文件**
+`multi_agent/orchestrator.py`（`AsyncSqliteSaver` + `CHECKPOINT_DB`）、
+`main.py`（单例 runner + 元问题正则）、
+`db/agent_state.db`（运行时生成，已在 `.gitignore` 的 `db/*.db`）
+
+---
+
+---
+
+## 19. multi 模式 Agent 超 max_turns 返回垃圾文本，污染下游
+
+**现象**
+查询"各部门的销售状态"时，日志显示 16 轮 tool 调用，最终返回：
+```
+Agent: (Agent 在 8 轮内未完成)
+```
+没有任何有效结果产出。
+
+**原因**
+连环坑：
+
+1. SQL Agent 写 SQL 出错 → 重试 → 又错 → 反复重试，在 `_simple_agent_run` 的
+   `for _ in range(max_turns)` 循环里跑满 8 轮。
+2. 超时后返回 `"(Agent 在 8 轮内未完成)"`——这是一个**字符串**，不是异常。
+   它被当有效结果写进 `results["sql"]`，然后传给 Analysis Agent。
+3. Analysis Agent 拿到这句垃圾当上游结果，试图分析它 → 又跑 8 轮。
+   加起来 16 轮，全部浪费。
+
+**解决**
+1. `base.py` 加 `is_agent_timeout(result)` 检测函数（匹配 `"(Agent 在"` 前缀）。
+2. `orchestrator.py` 每个节点调完 agent 后检测超时，打印 `⚠️ SQL 超过最大轮数` 警告。
+3. `node_analysis` 检测上游结果是否有超时标记，有则往 context 注入：
+   ```
+   [警告] 上游 sql Agent 超过最大轮数未完成，其结果为无效文本，请忽略并告知用户重试。
+   ```
+
+```python
+# base.py
+def is_agent_timeout(result: str) -> bool:
+    return result.startswith("(Agent 在")
+
+# orchestrator.py — 节点中
+if is_agent_timeout(result):
+    span.error = f"{agent_name} 超过最大轮数"
+    print(f"⚠️ {agent_name} 超过最大轮数，结果不可用。请缩小查询范围后重试。")
+```
+
+**涉及文件**
+`multi_agent/base.py`（`is_agent_timeout`）、
+`multi_agent/orchestrator.py`（超时检测 + `node_analysis` 上下文注入）
+
+---
+
+## 20. Router 返回空 plan，查询静默失败
+
+**现象**
+问"分析一下销售趋势"时，Router 返回了空 plan（`{"plan": []}`），
+Graph 直接走 `next: "done"` → END，没有任何 Agent 被调用，用户看到空白回复。
+
+**原因**
+Router LLM 对模糊查询分类不准——"分析一下销售趋势"被判定为既不需要 SQL 也不需要 strategy，
+返回空 plan。`node_router` 对空 plan 处理是 `return {"plan": [], "next": "done"}`，
+直接跳过了所有 Agent 节点。
+
+**解决**
+空 plan 加兜底逻辑：query 超过 4 个字符（排除 "hi"/"hello" 等短闲聊），
+默认路由到 SQL Agent：
+```python
+if not plan:
+    query_text = state["query"].strip()
+    if len(query_text) > 4:
+        plan = [{"agent": "sql", "task": query_text}]  # 兜底
+    else:
+        return {"plan": [], "next": "done"}
+```
+
+**涉及文件**
+`multi_agent/orchestrator.py`（`node_router` 空 plan 兜底）
+
+---
+
+## 21. "上条"/"上一条"/"上轮"等元问题未被识别
+
+**现象**
+问"上条查询语句是"时，Agent 返回的是**上次问这个元问题时的旧回答**（来自向量记忆），
+而不是当前对话里真正的上一条查询。
+
+**原因**
+`META_QUESTION_RE` 只匹配 "上次"/"上一个"/"之前" 等模式，不匹配 "上条"/"上一条"/
+"上轮"/"上一轮"。导致：
+
+1. `is_meta_question()` 返回 False → 走了向量检索 `vector_memory.recall()`，
+   用"上条查询语句是"去搜 embedding → 命中的是历史里同类的元问答记录。
+2. `vector_memory.remember()` 没跳过（因为不是元问题）→ 这次错误的 QA 对又被写回向量库，
+   形成**污染循环**。
+
+**解决**
+`META_QUESTION_RE` 和 `META_MEMORY_RE` 都加了漏掉的模式：
+```python
+# 之前
+r"(刚才|上次|之前|上一个).{0,8}(问了|查了|问题)"
+
+# 修复后
+r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问了|查了|问题|查询|语句|问了什么)"
+```
+
+验证：
+```
+"上条查询语句是"   → ✅ 匹配（之前 ❌）
+"上一条查询语句"   → ✅ 匹配（之前 ❌）
+"上一轮问了什么"   → ✅ 匹配（之前 ❌）
+```
+
+**涉及文件**
+`main.py`（`META_QUESTION_RE` + `META_MEMORY_RE`）
 
 ---
 

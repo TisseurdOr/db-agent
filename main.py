@@ -42,6 +42,7 @@ from tools.analysis import (
     ANALYZE_RESULTS_TOOL, analyze_results,
     COMPARE_PERIODS_TOOL, compare_periods,
 )
+from tools.chart import render_chart
 from tools.knowledge import (
     search_knowledge_base, save_to_memory, read_memory, search_memory,
     set_vector_memory, set_llm_client,
@@ -54,6 +55,7 @@ TOOLS = [
     RUN_QUERY_TOOL,
     ANALYZE_RESULTS_TOOL,
     COMPARE_PERIODS_TOOL,
+    render_chart.tool_schema,
     search_knowledge_base.tool_schema,
     save_to_memory.tool_schema,
     read_memory.tool_schema,
@@ -67,21 +69,49 @@ TOOL_HANDLERS = {
     "run_query": run_query,
     "analyze_results": analyze_results,
     "compare_periods": compare_periods,
+    "render_chart": render_chart,
     "search_knowledge_base": search_knowledge_base,
     "save_to_memory": save_to_memory,
     "read_memory": read_memory,
     "search_memory": search_memory,
 }
-
+# 用户输入
+#   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
+#   → runner.run(query, memories_text)
+#       → graph.ainvoke(state)
+#           → node_router: 读 messages 历史 + query → 输出 plan
+#           → node_sql: 执行 SQL → 结果写 results
+#           → node_analysis: 读向量记忆 + messages + 中间结果 → 综合回答
+#           → 返回 {final_answer, messages: [AIMessage]}
+#       → Checkpointer 自动存 state 到 agent_state.db
+#   → main.py: vector_memory.remember(Q&A pair)
+#   → 打印 token 日志
 
 async def main():
     parser = argparse.ArgumentParser(description="自然语言数据库分析 Agent")
     parser.add_argument(
         "--model", "-m",
         default=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
-        help="模型名 (默认: deepseek-chat，复杂查询可用 deepseek-reasoner)",
+        help="模型名 (默认: deepseek-chat，也可用 deepseek-v4-flash / deepseek-v4-pro)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["single", "multi"],
+        default="single",
+        help="Agent 模式: single (单 Agent) / multi (多 Agent 编排)",
+    )
+    parser.add_argument(
+        "--no-dq",
+        action="store_true",
+        help="多 Agent 模式下关闭首次 DataQuality 检查",
+    )
+    parser.add_argument(
+        "--user",
+        default=os.getenv("AGENT_USER", "viewer"),
+        help="用户名 (默认: viewer，也可用 analyst / xiaoyiming ...)",
     )
     args = parser.parse_args()
+    os.environ["AGENT_USER"] = args.user
 
     init_db()
 
@@ -106,7 +136,7 @@ async def main():
     set_vector_memory(vector_memory)  # 注入给 search_memory Tool
     set_llm_client(client)            # Self-Query 拆解用
 
-    print(f"数据分析 Agent 已启动（模型: {args.model}）")
+    print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}, 用户: {args.user}）")
     print("试试这些：")
     print("  - 有哪些表？查一下整体结构")
     print("  - 上周哪个部门销售额最高？")
@@ -124,12 +154,20 @@ async def main():
     # 解决：检索走时间倒序（list_recent），不写 remember（防污染）。
     # 覆盖：「刚才我问了什么」「我上一个问题是什么」「刚才查了什么」等。
     META_QUESTION_RE = re.compile(
-        r"(刚才|上次|之前|上一个).{0,8}(问了|查了|问题)|"
-        r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)"
+        r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问了|查了|问题|查询|语句|问了什么)|"
+        r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)|"
+        r"(第一句|最初的?问题|最开始|最初一句)|"
+        r"这[次轮场]对话"
     )
     # 记忆正文若本身是元问答，注入时跳过——否则「最近一条」常是污染过的元问答。
+    # 也覆盖「这次对话第一句是什么」等自指问题（旧过滤漏掉会污染 list_recent）。
     META_MEMORY_RE = re.compile(
-        r"^问:\s*.{0,20}(刚才|上次|之前|上一个).{0,8}(问了|查了|问题)"
+        r"^问:\s*.{0,40}("
+        r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问了|查了|问题|查询|语句)|"
+        r"(问了什么|查了什么|聊了什么|做过什么|查过什么|问过什么|还记得)|"
+        r"(第一句|最初的?问题|最开始|最初一句)|"
+        r"这[次轮场]对话"
+        r")"
     )
 
     def is_chitchat(q: str) -> bool:
@@ -144,78 +182,126 @@ async def main():
         """记忆是否为元问答（不应再当作「上一个业务问题」）。"""
         return bool(META_MEMORY_RE.search((text or "").strip()))
 
-    while True:
-        user_input = input("\n你: ").strip()
-        if user_input.lower() == "quit":
-            break
-        if not user_input:
-            continue
+    # ── multi 模式：进程内只建一次 Runner ──
+    # Checkpointer 靠 thread_id 识别"同一本笔记本"——
+    # 每次循环都 new Runner 会导致新的 SQLite 连接和新的 thread 上下文，
+    # 之前的 messages 历史就丢了。所以在循环前创建一次，每轮复用。
+    # 内部用 AsyncSqliteSaver，state 存到 db/agent_state.db，进程重启后还在。
+    multi_runner = None
+    if args.mode == "multi":
+        from multi_agent.orchestrator import MultiAgentRunner
+        multi_runner = await MultiAgentRunner.create(
+            client, model=args.model,
+            enable_data_quality=not args.no_dq,
+        )
+        print(f"Checkpointer: {multi_runner.checkpoint_db}")
 
-        # 记忆检索：对话开始时先 recall，再把结果注入本轮 System Prompt。
-        # 闲聊跳过，避免无意义 embedding。
-        # 元问题（"刚才查了什么"）走时间倒序——语义检索对这类 query 必然失败。
-        if is_chitchat(user_input):
-            memories = []
-        elif is_meta_question(user_input):
-            # 按时间倒序；丢掉元问答自身，只保留最近业务问答
-            memories = [
-                m for m in vector_memory.list_recent(limit=20)
-                if not is_meta_memory(m.get("text", ""))
-            ][:3]
-        else:
-            memories = vector_memory.recall(user_input, top_k=3)
-            # 分数阈值：相似度 < 0.3 的结果不注入，避免噪声误导模型
-            memories = [m for m in memories if m.get("score", 0) >= 0.3]
-        memories_text = "\n\n".join(m["text"] for m in memories)
-        meta_hint = ""
-        if is_meta_question(user_input) and memories:
-            meta_hint = (
-                "\n[提示] 用户在问「上一次/刚才问了什么」。"
-                "请以下面时间最近的一条业务问答为准回答，不要编造更早的话题。\n"
+    try:
+        while True:
+            user_input = input("\n你: ").strip()
+            if user_input.lower() == "quit":
+                break
+            if not user_input:
+                continue
+
+            # 记忆检索：对话开始时先 recall，再把结果注入本轮 System Prompt。
+            # 闲聊跳过，避免无意义 embedding。
+            # 元问题（"刚才查了什么"）走时间倒序——语义检索对这类 query 必然失败。
+            if is_chitchat(user_input):
+                memories = []
+            elif is_meta_question(user_input):
+                # 按时间倒序；丢掉元问答自身，只保留最近业务问答
+                memories = [
+                    m for m in vector_memory.list_recent(limit=20)
+                    if not is_meta_memory(m.get("text", ""))
+                ][:3]
+            else:
+                memories = vector_memory.recall(user_input, top_k=3)
+                # 分数阈值：相似度 < 0.3 的结果不注入，避免噪声误导模型
+                memories = [m for m in memories if m.get("score", 0) >= 0.3]
+            memories_text = "\n\n".join(m["text"] for m in memories)
+            meta_hint = ""
+            if is_meta_question(user_input) and memories:
+                meta_hint = (
+                    "\n[提示] 用户在问「上一次/刚才问了什么」。"
+                    "请以下面时间最近的一条业务问答为准回答，不要编造更早的话题。\n"
+                )
+            turn_prompt = build_system_prompt(
+                db_type="sqlite",
+                user_role="数据分析师",
+                extra_context=(
+                    f"{meta_hint}[历史对话]\n{memories_text}" if memories_text else ""
+                ),
             )
-        turn_prompt = build_system_prompt(
-            db_type="sqlite",
-            user_role="数据分析师",
-            extra_context=(
-                f"{meta_hint}[历史对话]\n{memories_text}" if memories_text else ""
-            ),
-        )
 
-        # 调统一 agent loop——streaming + cache_control + tool 结果可视化。
-        # - conversation: 早期对话摘要，由 streaming_agent 每轮注入 System Prompt
-        # - history: 最近几轮原文，拼在当前消息前，让第二轮能引用第一轮结果
-        # 取 history 要在 add_message 之前——此刻 messages 只含"上一轮及更早"。
-        result = await streaming_agent(
-            client=client,
-            user_msg=user_input,
-            system_prompt=turn_prompt,
-            tools=TOOLS,
-            handlers=TOOL_HANDLERS,
-            model=args.model,
-            conversation=conversation,
-            history=list(conversation.messages),
-        )
+            # ── 执行 Agent ──
+            # multi 模式：走 LangGraph 多 Agent 编排（Router → SQL/Strategy/DQ → Analysis）。
+            #   向量记忆通过 recalled_memories 参数传入，由 node_analysis 注入 Analysis Agent 上下文。
+            # single 模式：走 streaming_agent 单 Agent loop（tool 调用 + cache_control）。
+            if args.mode == "multi":
+                # 短期记忆压缩：ConversationManager 把超窗口消息压成摘要，
+                # 注入 node_analysis 作为 Layer 1 上下文（_conversation_summary）。
+                context = conversation.build_context()
+                result = await multi_runner.run(
+                    user_input,
+                    recalled_memories=memories_text,
+                    conversation_summary=context,
+                )
 
-        # 记录本轮对话——超过窗口时 ConversationManager 会自动压缩最旧的消息。
-        await conversation.add_message({"role": "user", "content": user_input})
-        await conversation.add_message({"role": "assistant", "content": result})
-        # 写：用 remember（带 user_id + year），才能被 recall / Self-Query 过滤找回。
-        # 元问题不写入——"刚才查了什么？→ 你查了各部门人数"这类 QA 没有
-        # 长期保存价值，写进去反而污染向量库（下次搜"刚才查了什么"先命中自己）。
-        if not is_meta_question(user_input):
-            vector_memory.remember(
-                content=f"问: {user_input}\n答: {result}",
-                memory_type="conversation",
-                metadata={"year": str(datetime.now().year)},
+                # HITL 审批：graph 在敏感 SQL 处暂停，等待人工确认
+                if isinstance(result, dict) and result.get("__interrupt__"):
+                    interrupt_data = result["data"]
+                    print(f"\n{'='*50}")
+                    print(f"⚠️  敏感查询需要审批")
+                    print(f" 👩‍💻👨‍💻🧑‍💻用户: {interrupt_data.get('user', '?')}")
+                    print(f"  🤖SQL:  {interrupt_data.get('sql', '?')}")
+                    print(f"{'='*50}")
+                    choice = input("  是否继续执行? (y/n): ").strip().lower()
+                    result = await multi_runner.resume(approved=(choice == "y"))
+                    print(f"\nAgent: {result}")
+                else:
+                    print(f"\nAgent: {result}")
+            else:
+                result = await streaming_agent(
+                    client=client,
+                    user_msg=user_input,
+                    system_prompt=turn_prompt,
+                    tools=TOOLS,
+                    handlers=TOOL_HANDLERS,
+                    model=args.model,
+                    conversation=conversation,
+                    history=list(conversation.messages),
+                )
+
+            # ── 记忆写入 ──
+            # 短期记忆（ConversationManager）：两种模式共用——
+            #   add_message 触发滑动窗口 + LLM 压缩，build_context() 在下一轮注入。
+            #   multi 模式额外靠 LangGraph Checkpointer 持久化完整 messages 历史。
+            await conversation.add_message({"role": "user", "content": user_input})
+            await conversation.add_message({"role": "assistant", "content": result})
+            # 长期记忆（VectorMemory）：两种模式共用——
+            #   把本轮问答写入 ChromaDB，下次相关查询时以向量召回方式注入 System Prompt。
+            #   元问题（"刚才问了什么"）不写——避免污染向量库。
+            if not is_meta_question(user_input):
+                vector_memory.remember(
+                    content=f"问: {user_input}\n答: {result}",
+                    memory_type="conversation",
+                    metadata={"year": str(datetime.now().year)},
+                )
+            # Token 日志：两种模式共用 ConversationManager 的估算
+            est = conversation.token_estimate()
+            checkpoint_info = ""
+            if args.mode == "multi":
+                checkpoint_info = f", checkpoint={multi_runner.checkpoint_db.name}"
+            print(
+                f"[memory] 本轮 tokens≈{est['total']} "
+                f"(原文 {est['recent']}/{est['recent_msgs']}条, "
+                f"摘要 {est['summary']}/{est['compressed_msgs']}条已压缩{checkpoint_info})"
             )
-        # 每轮打日志——观察 token 占用变化：压缩触发前 recent 持续涨，
-        # 触发后 recent 回落、summary 出现，total 曲线就能看出记忆策略在起效。
-        est = conversation.token_estimate()
-        print(
-            f"[memory] 本轮 tokens≈{est['total']} "
-            f"(原文 {est['recent']}/{est['recent_msgs']}条, "
-            f"摘要 {est['summary']}/{est['compressed_msgs']}条已压缩)"
-        )
+    finally:
+        # quit 前关掉 aiosqlite，避免 event loop 已关闭后 worker 线程回调报错
+        if multi_runner is not None:
+            await multi_runner.aclose()
 
 
 if __name__ == "__main__":

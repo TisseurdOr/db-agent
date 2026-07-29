@@ -81,7 +81,7 @@
 
 | 教学内容 | 代码位置 |
 |---------|---------|
-| 模型对比表 | `README.md:106-122` — deepseek-chat vs deepseek-reasoner |
+| 模型对比表 | `README.md` — deepseek-chat / v4-flash / v4-pro |
 | 单次查询成本估算 | `README.md:117-118` — ~¥0.01-0.03/次, 月成本 < ¥15 |
 | Embedding 选型 | `README.md:120-123` — qwen3.7-text-embedding, ¥0.0007/1K tokens |
 | 环境变量配置 | `.env.example` — `ANTHROPIC_MODEL`, `ANTHROPIC_BASE_URL` |
@@ -172,7 +172,7 @@
 |---------|---------|
 | 完整记忆编排（每轮） | `main.py:132-176` — recall → 注入 → agent → add_message ×2 → remember |
 | 闲聊过滤 | `main.py:118-123` — `is_chitchat()` 跳过无意义检索 |
-| 错误手册 | `docs/troubleshooting.md` — 14 个踩坑记录 + 解决方案 |
+| 错误手册 | `docs/troubleshooting.md` — 18 个踩坑记录 + 解决方案 |
 | 综合测试 | `tests/test_memory.py` — 19 个测试 |
 
 ---
