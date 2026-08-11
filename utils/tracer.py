@@ -1,5 +1,10 @@
 """结构化追踪（Structured Tracing）——让 Agent 的每一步都可追溯。
 
+审计日志脱敏：所有 SQL 参数在写入 trace 前自动打码，防止敏感数据泄露。
+面试金句："每次 SQL 执行的参数在写入审计日志前自动脱敏——token 替换敏感值，
+保留 SQL 结构用于调试，但不暴露真实数据。这个来自金融合规习惯。"
+
+
 概念（来自 OpenTelemetry）:
 - Trace: 一次完整查询的生命周期 = 用户输入 → 最终回答
 - Span:  Trace 里的一个操作单元 = 一个节点执行（router / sql / analysis）
@@ -25,6 +30,26 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import re as _re_mask
+
+# ── 审计脱敏：SQL 参数打码 ──
+# 面试金句："每次 SQL 执行参数在写入审计日志前自动脱敏——保留 SQL 结构，
+# 但不暴露真实数据。这个习惯来自金融合规。"
+
+_MASK_PATTERNS = [
+    (_re_mask.compile(r"(?i)VALUES\s*\([^)]+\)"), "VALUES (***)"),
+    (_re_mask.compile(r"(?i)password\s*=\s*'[^']*'"), "password='***'"),
+    (_re_mask.compile(r"(?i)WHERE\s+id\s*=\s*'\d{15,19}'"), "WHERE id='***'"),
+    (_re_mask.compile(r"(?i)WHERE\s+phone\s*=\s*'\d{11}'"), "WHERE phone='***'"),
+]
+
+
+def mask_sql(sql: str) -> str:
+    """脱敏 SQL 参数值，保留 SQL 结构用于调试。"""
+    masked = sql
+    for pattern, replacement in _MASK_PATTERNS:
+        masked = pattern.sub(replacement, masked)
+    return masked
 
 
 # Trace 文件目录
@@ -81,7 +106,7 @@ class Span:
 class TraceContext:
     """一次查询的完整追踪。跟着 state 在节点间流转。"""
 
-    __slots__ = ("trace_id", "query", "started_at", "finished_at", "spans", "blocked_by")
+    __slots__ = ("trace_id", "query", "started_at", "finished_at", "spans", "blocked_by", "opik_trace_id")
 
     def __init__(self, query: str = ""):
         # trace_id: 短 ID，方便肉眼识别（如 "20260721-a3f2"）
@@ -93,6 +118,7 @@ class TraceContext:
         self.finished_at = 0.0
         self.spans: list[Span] = []
         self.blocked_by: Optional[str] = None  # 如果被护栏拦截，记录是哪一层
+        self.opik_trace_id: Optional[str] = None  # Opik UUID when available
 
     @property
     def elapsed(self) -> float:
@@ -142,6 +168,7 @@ class TraceContext:
         """序列化为字典，用于写 JSONL。"""
         return {
             "trace_id": self.trace_id,
+            "opik_trace_id": self.opik_trace_id,
             "query": self.query,
             "started_at": datetime.fromtimestamp(self.started_at).isoformat(),
             "elapsed": round(self.elapsed, 3),

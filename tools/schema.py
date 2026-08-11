@@ -3,6 +3,48 @@ import sqlite3
 
 from db.seed import DB_PATH
 from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id, deny_payload
+from multi_agent.schema_discovery import discover_schema_for_query
+
+
+DISCOVER_SCHEMA_TOOL = {
+    "name": "discover_relevant_schema",
+    "description": (
+        "根据你的查询意图，自动检索最相关的表和字段。"
+        "在写 SQL 之前优先调用它——比逐表 describe 快得多。"
+        "传入你的原始问题或查询意图，返回相关表+字段的精简 schema。"
+        "返回 JSON: {schema_text: '...', field_count: N}"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query_intent": {
+                "type": "string",
+                "description": "你的查询意图或原始问题，如'华东区销售趋势'",
+            }
+        },
+        "required": ["query_intent"],
+    },
+}
+
+
+def discover_relevant_schema(query_intent: str) -> dict:
+    """语义检索相关表和字段。"""
+    schema_text = discover_schema_for_query(query_intent)
+    if not schema_text:
+        return {
+            "schema_text": "",
+            "field_count": 0,
+            "hint": "索引未就绪，请改用 list_tables + describe_table",
+        }
+    field_count = schema_text.count("\n  ")  # 粗略计数
+    return {"schema_text": schema_text, "field_count": field_count}
+
+# 本地 SQLite 里用 Hive 风格命名的模拟数仓表（与业务表 departments/orders 等区分）
+HIVE_SIM_TABLES = (
+    "ods_orders_hive",
+    "dwd_user_events",
+    "dim_products_hive",
+)
 
 LIST_TABLES_TOOL = {
     "name": "list_tables",
@@ -10,6 +52,21 @@ LIST_TABLES_TOOL = {
         "列出数据库中的所有表名。"
         "当你还不知道有哪些表时，在写任何 SQL 之前先调用它。"
         "返回 JSON: {tables: [表名, ...]}。"
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+}
+
+LIST_HIVE_TABLES_TOOL = {
+    "name": "list_tables",
+    "description": (
+        "列出本地模拟 Hive 数仓中的表名（ods_/dwd_/dim_ 风格），"
+        "不是业务库的 departments/employees/orders。"
+        "问「Hive 有哪些表」时必须用此结果，不要把业务表当成 Hive 表。"
+        "返回 JSON: {tables: [...], catalog: 'hive_sim'}。"
     ),
     "input_schema": {
         "type": "object",
@@ -31,6 +88,36 @@ def list_tables(user_id: str | None = None) -> dict:
         if not ent.passed:
             return deny_payload(ent)
         return {"tables": ent.tables or []}
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "hint": "数据库可能未初始化，请先运行 db/seed.py。",
+        }
+    finally:
+        conn.close()
+
+
+def list_hive_tables(user_id: str | None = None) -> dict:
+    """Hive Agent 专用：只返回 Hive 风格模拟表，避免把业务 SQL 表当成 Hive 表。"""
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        existing = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        hive_tables = [t for t in HIVE_SIM_TABLES if t in existing]
+        user = get_user(resolve_user_id(user_id))
+        ent = check_entitlement(user, tool_name="list_tables", tables=hive_tables)
+        if not ent.passed:
+            return deny_payload(ent)
+        return {
+            "tables": ent.tables or [],
+            "catalog": "hive_sim",
+            "note": "以上为本地 SQLite 模拟的 Hive 风格表；业务表请走 SQL Agent。",
+        }
     except Exception as e:
         return {
             "error": str(e),

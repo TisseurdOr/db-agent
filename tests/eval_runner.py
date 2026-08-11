@@ -13,6 +13,11 @@
     # Pro 建议: 让 Kimi 分析失败原因并给出修改方案
     python -m tests.eval_runner --full --judge --suggest
 
+    # 同步 eval cases 到 Opik Dataset 并上传 Experiment（需 OPIK_ENABLED=1）
+    python -m tests.eval_runner --fast --opik
+    python -m tests.eval_runner --full --judge --opik
+    # 或: OPIK_EVAL=1 python -m tests.eval_runner --fast
+
     # 指定类别
     python -m tests.eval_runner --category routing
     python -m tests.eval_runner --category guardrail
@@ -153,6 +158,29 @@ async def _run_fast_case(case: EvalCase) -> EvalResult:
     return result
 
 
+def _is_interrupt(answer) -> bool:
+    return isinstance(answer, dict) and bool(answer.get("__interrupt__"))
+
+
+def _interrupt_data(answer) -> dict:
+    data = answer.get("data") if isinstance(answer, dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+# interrupt payload 的 tool 名 → plan 里的 agent 名（暂停时 trace 还没落盘）
+_INTERRUPT_TOOL_TO_AGENT = {
+    "run_hbase": "hbase",
+    "run_query": "sql",
+    "run_hive": "hive",
+}
+
+
+def _agents_from_interrupt(data: dict) -> set[str]:
+    tool = str(data.get("tool") or "")
+    agent = _INTERRUPT_TOOL_TO_AGENT.get(tool)
+    return {agent} if agent else set()
+
+
 async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
     """完整用例：调 multi-agent 系统，检查输出和 plan。返回 (result, answer_text)。"""
     result = EvalResult(case)
@@ -167,20 +195,41 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
         return result, ""
 
     result.elapsed = time.time() - t0
+    assertions = case.assertions
+    expect_hitl = bool(assertions.get("expect_hitl"))
+    hitl_paused = _is_interrupt(answer)
+    interrupt_payload = _interrupt_data(answer) if hitl_paused else {}
 
-    # HITL interrupt: runner.run() 返回 {"__interrupt__": True, "data": {...}}
-    # eval 环境下自动批准继续执行
-    if isinstance(answer, dict) and answer.get("__interrupt__"):
+    if expect_hitl and hitl_paused:
+        itype = interrupt_payload.get("type") or "?"
+        tool = interrupt_payload.get("tool") or "?"
+        op = interrupt_payload.get("operation") or "?"
+        result.ok(f"HITL 已暂停: type={itype} tool={tool} op={op}")
+        # 评测只证明「停下来了」；拒绝以清掉 checkpointer，避免下一条用例卡在 interrupt
+        try:
+            await runner.resume(approved=False)
+        except Exception as e:
+            result.fail(f"HITL 拒绝恢复异常: {e}")
+            return result, interrupt_payload.get("message") or str(answer)
+        answer = interrupt_payload.get("message") or json.dumps(interrupt_payload, ensure_ascii=False)
+    elif expect_hitl and not hitl_paused:
+        preview = answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
+        result.fail(
+            "应触发 HITL interrupt，但 runner.run() 直接返回了最终回答。"
+            f"\n    实际回答（前 200 字）: {preview[:200]}"
+        )
+    elif hitl_paused and not expect_hitl:
+        # 其它用例偶发审批：自动批准，让后续断言仍能看最终回答
         try:
             answer = await runner.resume(approved=True)
         except Exception as e:
             result.fail(f"HITL resume 异常: {e}")
             return result, str(answer)
 
-    assertions = case.assertions
-
-    # 读最新 trace 获取 plan 和 token 信息
+    # 暂停时 trace 尚未落盘，用 interrupt.tool 补 agent；resume 后仍以最新 trace 为准
     agent_names = _parse_agents_from_trace()
+    if expect_hitl and hitl_paused:
+        agent_names = agent_names | _agents_from_interrupt(interrupt_payload)
 
     # 安全转换：resume 后仍可能是 dict（边缘情况）
     if isinstance(answer, dict):
@@ -415,7 +464,13 @@ async def main():
     parser.add_argument("--model", type=str, default="deepseek-chat", help="模型名")
     parser.add_argument("--judge", action="store_true", help="LLM-as-Judge: 对失败用例用 deepseek-chat 打分")
     parser.add_argument("--suggest", action="store_true", help="让 deepseek-v4-flash 分析失败原因并给出修改方案")
+    parser.add_argument("--opik", action="store_true", help="同步 Dataset 并上传 Experiment 到 Opik（或设 OPIK_EVAL=1）")
     args = parser.parse_args()
+
+    use_opik = args.opik or os.getenv("OPIK_EVAL", "").strip().lower() in {"1", "true", "yes", "on"}
+    if use_opik:
+        # Eval upload needs Opik client; enable if caller only passed --opik
+        os.environ.setdefault("OPIK_ENABLED", "1")
 
     if args.id:
         cases = [c for c in ALL_CASES if c.id == args.id]
@@ -436,6 +491,15 @@ async def main():
     if not cases:
         print("没有匹配的用例。")
         sys.exit(1)
+
+    if use_opik:
+        try:
+            from utils.opik_eval import sync_eval_dataset
+            from tests.eval_cases import ALL_CASES as _ALL_START
+            n = len(sync_eval_dataset(_ALL_START))
+            print(f"{CYAN}Opik dataset synced ({n} cases){RESET}")
+        except Exception as exc:
+            print(f"{YELLOW}Opik dataset sync skipped: {exc}{RESET}")
 
     results: list[EvalResult] = []
     full_answers: dict[str, str] = {}  # case.id → answer text（judge 用）
@@ -486,6 +550,7 @@ async def main():
     print_summary(results)
 
     # ── Judge: LLM-as-Judge 打分（使用 Kimi，独立于被测模型） ──
+    judge_by_id: dict[str, dict] = {}
     if args.judge:
         failed = [(r, full_answers.get(r.case.id, "")) for r in results if not r.passed]
         if not failed:
@@ -497,6 +562,8 @@ async def main():
             else:
                 print_header(f"LLM-as-Judge 评分 (Kimi {KIMI_MODEL}, {len(failed)} 条失败用例)")
                 scores = await judge_results(judge_client, failed, model=KIMI_MODEL)
+                for (result, _ans), score in zip(failed, scores):
+                    judge_by_id[result.case.id] = score
                 passed_judge = sum(1 for s in scores if s.get("verdict") == "pass")
                 print(f"\n  Judge 判定: {GREEN}{passed_judge} pass{RESET} / {RED}{len(scores) - passed_judge} fail{RESET} (共 {len(scores)} 条)")
 
@@ -514,6 +581,38 @@ async def main():
                 suggestion = await suggest_fixes(suggest_client, failed, model=KIMI_MODEL)
                 print(suggestion)
                 print()
+
+    # ── Opik: sync dataset + upload experiment ──
+    if use_opik:
+        mode = "full" if (args.full or full_cases) else "fast"
+        if args.category:
+            mode = args.category
+        elif args.id:
+            mode = "single"
+        try:
+            from utils.opik_eval import sync_eval_dataset, upload_eval_experiment
+            from tests.eval_cases import ALL_CASES as _ALL
+
+            print_header("Opik Experiment 上传")
+            id_map = sync_eval_dataset(_ALL)
+            print(f"  Dataset synced: {len(id_map)} cases")
+            opik_out = upload_eval_experiment(
+                results=results,
+                answers=full_answers,
+                judge_scores=judge_by_id or None,
+                mode=mode,
+                model=args.model if full_cases else "",
+            )
+            if opik_out.get("ok"):
+                print(f"  Experiment: {opik_out.get('experiment_name')}")
+                print(f"  ID:         {opik_out.get('experiment_id')}")
+                print(f"  Items:      {opik_out.get('item_count')}  pass_rate={opik_out.get('pass_rate', 0):.0%}")
+                print(f"  Open Opik UI → Experiments → latest eval-*")
+                print(f"  Dataset:    Datasets → db-agent-eval-cases")
+            else:
+                print(f"{RED}  Opik upload failed: {opik_out.get('error')}{RESET}")
+        except Exception as exc:
+            print(f"{RED}  Opik upload error: {exc}{RESET}")
 
     print_summary(results)
 

@@ -164,6 +164,57 @@ def test_router_both_hbase_and_hive():
     assert "hive" in agents
 
 
+def test_router_both_sql_and_hive():
+    """同时提 SQL 和 Hive → 两个都路由，不能只派 hive。"""
+    plan = route_override("SQL和hive有什么表")
+    assert plan is not None
+    agents = [s["agent"] for s in plan]
+    assert "sql" in agents
+    assert "hive" in agents
+
+
+def test_router_pasted_hiveql_insert_overwrite():
+    """CLI 误粘贴 INSERT OVERWRITE ... PARTITION → 必须 hive，不能当 SQLite sql。"""
+    q = (
+        "INSERT OVERWRITE TABLE orders PARTITION (dt='2025-01-01')\n"
+        "SELECT ... FROM source_table;"
+    )
+    plan = route_override(q)
+    assert plan is not None
+    agents = [s["agent"] for s in plan]
+    assert agents == ["hive"]
+
+
+def test_router_pasted_plain_select():
+    """粘贴普通 SELECT → sql（解释/改写），不是 hive。"""
+    plan = route_override("SELECT * FROM orders WHERE status = 'completed';")
+    assert plan is not None
+    agents = [s["agent"] for s in plan]
+    assert agents == ["sql"]
+
+
+def test_list_hive_tables_only_hive_sim():
+    """Hive list_tables 只返回模拟数仓表，不含业务表。"""
+    import os
+    from tools.schema import list_hive_tables, HIVE_SIM_TABLES
+
+    os.environ["AGENT_USER"] = "analyst"
+    result = list_hive_tables()
+    assert "tables" in result
+    assert set(result["tables"]) == set(HIVE_SIM_TABLES)
+    assert "orders" not in result["tables"]
+    assert "departments" not in result["tables"]
+    assert result.get("catalog") == "hive_sim"
+
+
+def test_router_sql_engine_alone():
+    """只点名 SQL 引擎（无 hive/hbase）→ 路由到 sql。"""
+    plan = route_override("SQL里有哪些表")
+    assert plan is not None
+    agents = [s["agent"] for s in plan]
+    assert agents == ["sql"]
+
+
 def test_router_scan_verb_without_hbase_keyword():
     """"scan" 动词（不含 hbase 关键词）→ 路由到 hbase，不路由到 sql。"""
     plan = route_override("scan orders 表，限制 10 行")
@@ -230,3 +281,24 @@ def test_router_context_no_inherit_mixed_prev():
     if plan is not None:
         agents = [s["agent"] for s in plan]
         assert not ("hbase" in agents and "hive" not in agents)  # 不会单独继承一个
+
+def test_long_briefing_with_口径_still_routes_sql():
+    """edge-007 超长复盘含「口径/指标」，末尾查数 → sql，不误派 strategy。"""
+    from tests.eval_cases import _EDGE_007_LONG_QUERY
+    plan = route_override(_EDGE_007_LONG_QUERY)
+    assert plan is not None
+    assert any(s["agent"] == "sql" for s in plan)
+    assert not any(s["agent"] == "strategy" for s in plan)
+
+
+def test_metric_gmv_how_calculated_routes_strategy():
+    plan = route_override("GMV怎么算")
+    assert plan is not None
+    assert any(s["agent"] == "strategy" for s in plan)
+
+
+def test_metric_sales_含退款_routes_strategy():
+    plan = route_override("销售额包含退款吗")
+    assert plan is not None
+    assert any(s["agent"] == "strategy" for s in plan)
+

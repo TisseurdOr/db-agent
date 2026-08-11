@@ -45,6 +45,9 @@ class MultiAgentState(TypedDict):
     _client: object             # ⚠️ 已废弃——现在走 configurable，不再放 state
     _model: str                 # ⚠️ 已废弃——同上
     _inject_dq: bool            # 是否注入 DataQuality（首轮为 True）
+    _reflection_attempts: int   # Reflection 节点重试次数（上限 2）
+    _replan_attempts: int       # 失败重规划次数（上限 1——防 router↔agent 死循环）
+    _replan_feedback: str       # Agent 失败原因，回喂 Router 重排计划后清空
 
 
 

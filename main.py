@@ -17,6 +17,7 @@
 
 import asyncio
 import argparse
+import difflib
 import os
 from datetime import datetime
 from dotenv import load_dotenv
@@ -52,6 +53,8 @@ from tools.knowledge import (
 )
 from tools.hive import search_hive_syntax
 from tools.hbase import run_hbase, _seed_hbase_store, generate_hbase_query
+from tools.template_matcher import get_template_matcher, init_metric_registry, match_sql_template
+from multi_agent.schema_discovery import get_schema_discovery
 
 TOOLS = [
     LIST_TABLES_TOOL,
@@ -68,6 +71,7 @@ TOOLS = [
     generate_hbase_query.tool_schema,
     search_hive_syntax.tool_schema,
     run_hbase.tool_schema,
+    match_sql_template.tool_schema,
 ]
 
 TOOL_HANDLERS = {
@@ -85,6 +89,7 @@ TOOL_HANDLERS = {
     "generate_hbase_query": generate_hbase_query,
     "search_hive_syntax": search_hive_syntax,
     "run_hbase": run_hbase,
+    "match_sql_template": match_sql_template,
 }
 # 用户输入
 #   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
@@ -97,6 +102,28 @@ TOOL_HANDLERS = {
 #       → Checkpointer 自动存 state 到 agent_state.db
 #   → main.py: vector_memory.remember(Q&A pair)
 #   → 打印 token 日志
+
+# 退出指令。Agent 链路没有"结束进程"的能力——模型只能回一句"会话结束"，
+# 循环还在跑，所以退出必须在这里拦下来，不能交给 Router。
+EXIT_COMMANDS = {"quit", "exit", "q", ":q", "bye", "退出", "结束会话", "再见", "拜拜"}
+
+
+def _exit_intent(text: str) -> str:
+    """判断输入是否为退出指令：exit=确定退出，maybe=疑似错字，no=正常提问。"""
+    cleaned = text.strip().strip(" 。，！？.,!?、").lower()
+    if not cleaned:
+        return "no"
+    if cleaned in EXIT_COMMANDS:
+        return "exit"
+    if len(cleaned) <= 5 and "退出" in cleaned:
+        return "exit"
+    # 拼错的 quit/exit 不能直接退出（怕误杀会话），但也别送进 Agent 白烧 token
+    if len(cleaned) <= 6 and cleaned.isascii() and difflib.get_close_matches(
+        cleaned, ("quit", "exit"), n=1, cutoff=0.6
+    ):
+        return "maybe"
+    return "no"
+
 
 async def main():
     parser = argparse.ArgumentParser(description="自然语言数据库分析 Agent")
@@ -126,6 +153,11 @@ async def main():
 
     init_db()
     _seed_hbase_store()
+    init_metric_registry()  # 初始化业务指标模板库
+    try:
+        get_schema_discovery().build_index()  # 预计算表字段 embedding
+    except Exception as e:
+        print(f"[schema_discovery] 索引构建跳过: {e}")
 
     # Anthropic SDK 初始化——base_url 和 api_key 从 .env 读。
     # 如果用 DeepSeek 兼容 endpoint：.env 里设
@@ -136,6 +168,8 @@ async def main():
         api_key=os.environ["ANTHROPIC_API_KEY"],
         base_url=os.environ.get("ANTHROPIC_BASE_URL"),
     )
+    from utils.opik_tracing import wrap_anthropic_client
+    client = wrap_anthropic_client(client)
 
     # 对话记忆管理器——最近 N 轮保留原文，更早的压缩成摘要。
     # 摘要由 streaming_agent 每轮调用前注入 System Prompt，实现跨轮上下文记忆。
@@ -150,11 +184,13 @@ async def main():
 
     print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}, 用户: {args.user}）")
     print("试试这些：")
-    print("  - 有哪些表？查一下整体结构")
-    print("  - 上周哪个部门销售额最高？")
-    print("  - 各状态的订单数量和金额分别是多少？")
-    print("  - 分析一下销售趋势")
-    print("输入 'quit' 退出\n")
+    print("  [SQL]   上周哪个部门销售额最高？")
+    print("  [Hive]  Hive 里有哪些表？帮我查 ods_orders_hive 分区情况")
+    print("  [HBase] 用 HBase scan orders 表，限制 10 行")
+    print("  [多引擎] SQL和hive有什么表")
+    print("  [分析]  对比本月和上月订单量变化并给建议")
+    print("  [制度]  销售人员的提成比例是多少")
+    print("输入 quit / 退出 结束会话（Ctrl+C / Ctrl+D 同样有效）\n")
 
     from agent import streaming_agent
 
@@ -174,10 +210,19 @@ async def main():
 
     try:
         while True:
-            user_input = input("\n你: ").strip()
-            if user_input.lower() == "quit":
+            try:
+                user_input = input("\n你: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n已退出。")
                 break
             if not user_input:
+                continue
+            intent = _exit_intent(user_input)
+            if intent == "exit":
+                print("已退出。")
+                break
+            if intent == "maybe":
+                print("没识别出这条输入。想退出请输入 quit，或重新描述你的问题。")
                 continue
 
             # 记忆检索：对话开始时先 recall，再把结果注入本轮 System Prompt。
@@ -202,12 +247,32 @@ async def main():
                     "\n[提示] 用户在问「上一次/刚才问了什么」。"
                     "请以下面时间最近的一条业务问答为准回答，不要编造更早的话题。\n"
                 )
+
+            # ── 模板优先匹配：命中则注入预填 SQL 到上下文，LLM 可选用或覆盖 ──
+            template_matcher = get_template_matcher()
+            template_result = template_matcher.match(user_input)
+            template_hint = ""
+            if template_result.matched:
+                template_hint = (
+                    f"\n[SQL 模板匹配] 指标「{template_result.metric_name}」命中，"
+                    f"预填 SQL: {template_result.sql}"
+                )
+                if template_result.caveats:
+                    template_hint += f"\n注意事项: {template_result.caveats}"
+                template_hint += "\n你可以直接执行此 SQL，或根据需要调整后执行。\n"
+
+            extra_parts = []
+            if meta_hint:
+                extra_parts.append(meta_hint)
+            if template_hint:
+                extra_parts.append(template_hint)
+            if memories_text:
+                extra_parts.append(f"[历史对话]\n{memories_text}")
+
             turn_prompt = build_system_prompt(
                 db_type="sqlite",
                 user_role="数据分析师",
-                extra_context=(
-                    f"{meta_hint}[历史对话]\n{memories_text}" if memories_text else ""
-                ),
+                extra_context=("\n".join(extra_parts) if extra_parts else ""),
             )
 
             # ── 执行 Agent ──
@@ -233,7 +298,12 @@ async def main():
                     print(f"  🤖SQL:  {interrupt_data.get('sql', '?')}")
                     print(f"{'='*50}")
                     choice = input("  是否继续执行? (y/n): ").strip().lower()
-                    result = await multi_runner.resume(approved=(choice == "y"))
+                    approved = choice == "y"
+                    result = await multi_runner.resume(approved=approved)
+                    # 自学习：用户批准的 SQL（敏感列 HITL / 置信度门）有人工背书
+                    if approved and interrupt_data.get("sql"):
+                        from rag.feedback import learn_from_hitl
+                        learn_from_hitl(user_input, interrupt_data.get("sql", ""))
                     print(f"\nAgent: {result}")
                 else:
                     print(f"\nAgent: {result}")
@@ -269,6 +339,8 @@ async def main():
             checkpoint_info = ""
             if args.mode == "multi":
                 checkpoint_info = f", checkpoint={multi_runner.checkpoint_db.name}"
+                from utils.opik_tracing import opik_tag_memory
+                opik_tag_memory(est)
             print(
                 f"[memory] 本轮 tokens≈{est['total']} "
                 f"(原文 {est['recent']}/{est['recent_msgs']}条, "

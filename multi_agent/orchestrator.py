@@ -17,7 +17,7 @@ from pathlib import Path
 import aiosqlite
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.types import RunnableConfig, Command
+from langgraph.types import RunnableConfig, Command, interrupt
 from langgraph.errors import GraphInterrupt
 from langchain_core.messages import AIMessage
 from anthropic import Anthropic
@@ -31,8 +31,28 @@ from multi_agent.router import ROUTER_PROMPT, route_override
 from multi_agent.base import is_agent_timeout
 from multi_agent.guardrails import guard_input, guard_output
 from multi_agent.cache import RouterCache
+from multi_agent.task_system import TaskManager
+from multi_agent.confidence import (
+    CONFIDENCE_PROMPT, parse_confidence_result, should_pause, format_confidence_report,
+)
 from utils.llm import extract_text
-from utils.tracer import TraceContext
+from utils.retry import acall_with_retry
+from utils.tracer import TraceContext, mask_sql
+from utils.opik_tracing import (
+    wrap_langgraph,
+    flush_opik,
+    annotate_opik,
+    get_current_opik_trace_id,
+    capture_opik_trace_id_for_graph,
+    opik_tag_route,
+    opik_tag_guard,
+    opik_tag_hitl,
+    opik_tag_fewshot,
+    opik_tag_reflection,
+    opik_tag_task_board,
+    opik_tag_sql,
+)
+from utils.cost import estimate_tokens_cost
 
 # Checkpointer 数据库路径。
 # 图每执行完一个节点，自动把 state 写进这个 SQLite 文件。
@@ -49,13 +69,60 @@ def _fmt_time(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
-async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_name: str) -> tuple[str, dict]:
-    """包装 agent.run()：检测超时，打日志，返回 (result, usage)。"""
-    result, usage = await agent.run(client, task, model=model, verbose=True)
+async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_name: str, context: str = "", config: RunnableConfig | None = None) -> tuple[str, dict]:
+    """包装 agent.run()：检测超时，打日志，返回 (result, usage)。
+
+    如果 config 中注入了 _event_queue，emit step_start/step_end SSE 事件。
+    """
+    queue = config["configurable"].get("_event_queue") if config else None
+    if queue:
+        await queue.put(("step_start", {"type": "step_start", "node": agent_name.lower(), "task": task[:60], "timestamp": time.time()}))
+
+    result, usage = await agent.run(client, task, context=context, model=model, verbose=True)
+
+    if queue:
+        elapsed = trace_span.elapsed if hasattr(trace_span, 'elapsed') else 0
+        tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+        await queue.put(("step_end", {"type": "step_end", "node": agent_name.lower(), "task": task[:60], "elapsed": round(elapsed, 3), "tokens": tokens}))
+
     if is_agent_timeout(result):
         trace_span.error = f"{agent_name} 超过最大轮数"
         print(f"⚠️ {agent_name} 超过最大轮数，结果不可用。请缩小查询范围后重试。")
     return result, usage
+
+
+MAX_REPLAN_ATTEMPTS = 1  # 失败重规划上限——1 次足够换思路，多了是烧 token 的死循环
+
+
+def _maybe_replan(state: MultiAgentState, results: dict, agent_name: str, result: str) -> dict | None:
+    """失败重规划：Agent 超轮数失败且额度未用完时，带失败反馈回 Router 重排计划。
+
+    返回 None 表示无需重规划（正常结果，或额度已用完走原路径——
+    Analysis 的超时警告兜底仍会提示用户）。
+
+    重规划时把失败 Agent 的结果从 results 里删掉：
+    _next_step 用 results 的 key 判断"已执行"，不删的话新 plan 里
+    同名 Agent 会被跳过，重规划等于空转。
+    """
+    if not is_agent_timeout(result):
+        return None
+    attempts = state.get("_replan_attempts", 0)
+    if attempts >= MAX_REPLAN_ATTEMPTS:
+        return None
+
+    print(f"🔄 {agent_name} Agent 失败，带反馈回 Router 重规划 (第{attempts + 1}次)")
+    cleaned = {k: v for k, v in results.items() if k != agent_name}
+    feedback = (
+        f"上一轮计划中 {agent_name} Agent 执行失败：超过最大工具调用轮数仍未完成任务。"
+        f"请重新规划：把任务拆小、简化任务描述，或改派更合适的 Agent。"
+        f"不要原样重复上一轮的 plan。"
+    )
+    return {
+        "results": cleaned,
+        "next": "router",
+        "_replan_attempts": attempts + 1,
+        "_replan_feedback": feedback,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -71,6 +138,19 @@ async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_
 #   runner.run() 负责把 client 和 model 塞进 configurable。
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
+def _annotate_route(route_source: str, plan: list, router_cache=None) -> None:
+    """Tag Opik with router source + plan agent chain."""
+    plan_agents = "→".join(s.get("agent", "") for s in (plan or []) if s.get("agent"))
+    extra = {"plan_agents": plan_agents}
+    if route_source == "cache" and router_cache is not None:
+        try:
+            extra["cache_hit_rate"] = router_cache.hit_rate
+        except Exception:
+            pass
+    opik_tag_route(route_source, **extra)
+
+
 async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Router: 分析用户 query，输出 JSON 执行计划。
 
@@ -85,22 +165,33 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     router_cache = config["configurable"].get("_router_cache")
 
+    # 失败重规划路径：跳过硬规则和缓存——两者都会原样复现失败的 plan，
+    # 必须走 LLM 并把失败反馈喂进去，才可能得到不同的计划。
+    replan_feedback = state.get("_replan_feedback", "")
+
     # 硬规则优先：闲聊 / 元问题 / 纯制度查询不依赖 LLM（也避免脏缓存）
     prev_agents = [s["agent"] for s in state.get("plan", [])] if state.get("plan") else []
-    override = route_override(state["query"], prev_agents=prev_agents)
+    t0 = time.time()
+    override = None if replan_feedback else route_override(state["query"], prev_agents=prev_agents)
+    route_latency = time.time() - t0
     router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
     cached_plan = None
+    route_source_fallback = False
+    plan_data = {}  # 硬规则路径不经 LLM，后续读 confidence 前必须有默认值
 
     if override is not None:
         plan = override
         span.task = "硬规则覆盖" if plan else "无需数据查询"
+        router_usage["elapsed"] = route_latency
         if not plan:
             trace.finish_span(span, router_usage)
             print(trace.print_progress(span))
-            return {"plan": [], "next": "done"}
+            _annotate_route("rule", [], router_cache)
+            return {"plan": [], "next": "done", "_stats": {"elapsed": route_latency, "nodes": ["router(硬规则)"]}}
     else:
         # 查缓存：同样 query 之前解析过，直接复用 plan，省一次 LLM 调用（~250t）
-        cached_plan = router_cache.get(state["query"]) if router_cache else None
+        # 重规划时不读缓存——缓存里存的正是刚失败的 plan
+        cached_plan = router_cache.get(state["query"]) if (router_cache and not replan_feedback) else None
 
         if cached_plan is not None:
             plan_data = {"plan": cached_plan}
@@ -116,15 +207,24 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
                     router_msgs.append({"role": "user", "content": str(content)[:300]})
                 elif role == "ai":
                     router_msgs.append({"role": "assistant", "content": str(content)[:300]})
-            router_msgs.append({"role": "user", "content": state["query"]})
+            if replan_feedback:
+                router_msgs.append({
+                    "role": "user",
+                    "content": f"[重规划反馈]\n{replan_feedback}\n\n原问题: {state['query']}",
+                })
+            else:
+                router_msgs.append({"role": "user", "content": state["query"]})
 
-            resp = client.messages.create(
+            t_llm = time.time()
+            resp = await acall_with_retry(
+                client.messages.create,
                 model=model,
                 max_tokens=300,
                 system=ROUTER_PROMPT,
                 messages=router_msgs,
             )
-            router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+            llm_latency = time.time() - t_llm
+            router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1, "elapsed": llm_latency}
             if hasattr(resp, "usage") and resp.usage:
                 router_usage["input_tokens"] = resp.usage.input_tokens or 0
                 router_usage["output_tokens"] = resp.usage.output_tokens or 0
@@ -148,12 +248,15 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
                 span.task = "无需数据查询"
                 trace.finish_span(span, router_usage)
                 print(trace.print_progress(span))
+                _annotate_route("llm", [], router_cache)
                 return {"plan": [], "next": "done"}
             plan = [{"agent": "sql", "task": query_text}]
             span.task = "空 plan → 兜底 sql"
+            route_source_fallback = True
 
-    # 缓存写入：仅 LLM 路径；硬规则不写缓存（避免污染）
-    if override is None and cached_plan is None and router_cache is not None and plan:
+    # 缓存写入：仅 LLM 路径；硬规则不写缓存（避免污染）；
+    # 重规划出的 plan 也不写——它是针对本次失败的补救计划，不是该 query 的通用答案
+    if override is None and cached_plan is None and router_cache is not None and plan and not replan_feedback:
         router_cache.set(state["query"], plan)
 
     # DataQuality 首次注入：在 plan 最前面插入 DQ 检查，先扫库再查数。
@@ -166,7 +269,113 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     span.task = plan_names
     trace.finish_span(span, router_usage)
     print(trace.print_progress(span))
-    return {"plan": plan, "next": plan[0]["agent"]}
+    # 打印路由方式 + 耗时
+    if override is not None:
+        route_source = "rule"
+        print(f"   ⚡ 硬规则路由 ({route_latency*1000:.1f}ms)")
+    elif cached_plan is not None:
+        route_source = "cache"
+        print(f"   💾 缓存命中 ({router_cache.hit_rate})")
+    elif route_source_fallback:
+        route_source = "fallback_sql"
+        print(f"   🤖 LLM 路由 ({router_usage.get('elapsed', 0):.1f}s · {router_usage.get('input_tokens', 0)}+{router_usage.get('output_tokens', 0)}t) [兜底 sql]")
+    else:
+        route_source = "llm"
+        print(f"   🤖 LLM 路由 ({router_usage.get('elapsed', 0):.1f}s · {router_usage.get('input_tokens', 0)}+{router_usage.get('output_tokens', 0)}t)")
+    _annotate_route(route_source, plan, router_cache)
+    stats = {"elapsed": router_usage.get("elapsed", route_latency), "nodes": ["router"]}
+
+    # 检测模糊查询：Router 返回了 plan 但置信度标记为 low
+    if plan_data.get("confidence") == "low" and not override:
+        return {"plan": plan, "next": "clarify", "_stats": stats, "_replan_feedback": ""}
+
+    # s12：把 plan 落成 .tasks/ 任务图（先计划再执行的磁盘可见版）
+    task_manager = config["configurable"].get("_task_manager")
+    if task_manager is not None and plan:
+        task_manager.materialize_from_plan(plan, query=state.get("query", ""))
+
+    # _replan_feedback 用完即清——留着会让下一轮 Router 误以为又失败了
+    return {"plan": plan, "next": plan[0]["agent"], "_stats": stats, "_replan_feedback": ""}
+
+
+def _finish_agent_task(config: RunnableConfig, agent: str, failed: bool = False) -> None:
+    """Agent 节点结束后推进 Task board——失败标 ✗，成功标 ✓ 并 claim 下一个。"""
+    task_manager = config.get("configurable", {}).get("_task_manager")
+    if task_manager is None:
+        return
+    if failed:
+        on_failed = getattr(task_manager, "on_agent_failed", None)
+        if callable(on_failed):
+            on_failed(agent)
+        else:
+            # 兼容：旧 TaskManager 无 on_agent_failed 时退化为 finished(失败不 claim 下一跳仍走 finished 逻辑需自行扩展)
+            pass
+    else:
+        task_manager.on_agent_finished(agent)
+
+    run_ids = getattr(task_manager, "_run_ids", None) or []
+    if run_ids:
+        board = []
+        for tid in run_ids:
+            t = task_manager.get(tid)
+            if t:
+                board.append({"agent": t.agent, "status": t.status, "id": t.id})
+        if board:
+            opik_tag_task_board(board)
+
+
+CLARIFY_PROMPT = """用户问了一个模糊的问题："{query}"
+
+当前数据库中有以下表和相关上下文。请生成 2-3 个简短、具体的澄清问题，帮助理解用户的真实意图。
+问题应该引导用户提供更具体的信息（时间范围、实体名、指标、对比维度等）。
+
+只输出问题列表，每行一个，以 "- " 开头。不要其他文字。"""
+
+
+async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
+    """AskHuman 澄清节点：检测模糊查询并主动提问。
+
+    当 Router 无法确定用户意图时触发。
+    用 LLM 生成 2-3 个针对性问题，通过 interrupt 暂停等待用户回复。
+    """
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    span = trace.start_span("clarify", "澄清模糊问题")
+
+    client = config["configurable"]["_client"]
+    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+
+    prompt = CLARIFY_PROMPT.format(query=state["query"])
+    resp = await acall_with_retry(
+        client.messages.create,
+        model=model,
+        max_tokens=200,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = extract_text(resp, context="clarify")
+    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+    if hasattr(resp, "usage") and resp.usage:
+        usage["input_tokens"] = resp.usage.input_tokens or 0
+        usage["output_tokens"] = resp.usage.output_tokens or 0
+
+    trace.finish_span(span, usage)
+    print(f"❓ Clarify: 需要澄清「{state['query'][:40]}」")
+
+    # HITL: 暂停并展示澄清问题
+    opik_tag_hitl("pause", hitl_type="clarify")
+    response = interrupt({
+        "type": "clarify",
+        "query": state["query"],
+        "questions": text.strip(),
+        "message": "这个问题比较模糊，请帮我确认一下：",
+    })
+
+    # 用户回复后 resume —— 用澄清后的 query 重新路由
+    clarified = response.get("clarified_query", "") if isinstance(response, dict) else ""
+    if clarified:
+        print(f"   💬 用户澄清: {clarified[:80]}")
+        return {"query": clarified, "next": "router"}
+
+    return {"next": "router"}
 
 
 async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> dict:
@@ -177,10 +386,14 @@ async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> d
     task = next(s["task"] for s in state["plan"] if s["agent"] == "data_quality")
     span = trace.start_span("data_quality", task[:60])
     print(f"⏳ DataQuality: {task[:60]}...")
-    result, usage = await _run_agent_with_timeout(data_quality_agent, client, task, model, span, "DataQuality")
+    result, usage = await _run_agent_with_timeout(data_quality_agent, client, task, model, span, "DataQuality", config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ DataQuality ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
+    _finish_agent_task(config, "data_quality", failed=is_agent_timeout(result))
     results = {**state.get("results", {}), "data_quality": result}
+    replan = _maybe_replan(state, results, "data_quality", result)
+    if replan:
+        return replan
     return _next_step(state, results, "data_quality")
 
 
@@ -192,11 +405,143 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     task = next(s["task"] for s in state["plan"] if s["agent"] == "sql")
     span = trace.start_span("sql", task[:60])
     print(f"⏳ SQL Agent: {task[:60]}...")
-    result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL")
+
+    # 清掉上一轮残留的成功 SQL，避免超时失败时误回流探索性查询
+    from tools.query import pop_last_successful_sql
+    pop_last_successful_sql()
+
+    # 检索式 few-shot（Vanna 模式）：召回相似问题的已验证 SQL 注入上下文。
+    # 用原始 query 而非 Router 改写后的 task 检索——样例库存的是用户口语问法。
+    from rag.sql_examples import get_sql_fewshot
+    fewshot = get_sql_fewshot(state.get("query", "") or task)
+    fewshot_hits = 0
+    if fewshot:
+        fewshot_hits = fewshot.count("\nQ: ")
+        print(f"   📚 few-shot: 命中 {fewshot_hits} 条相似 SQL 样例")
+    opik_tag_fewshot(fewshot_hits)
+
+    result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL", context=fewshot, config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ SQL Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
+    _finish_agent_task(config, "sql", failed=is_agent_timeout(result))
+
+    # 自学习回流（第 3 项）：优先用工具层捕获的成功 SQL（比从自然语言抽更准）
+    if not is_agent_timeout(result):
+        from rag.feedback import learn_from_success
+        learned_sql = pop_last_successful_sql()
+        if learned_sql:
+            opik_tag_sql(mask_sql(learned_sql))
+        learn_from_success(
+            state.get("query", "") or task,
+            result,
+            sql=learned_sql,
+            source="auto",
+        )
+
     results = {**state.get("results", {}), "sql": result}
-    return _next_step(state, results, "sql")
+    replan = _maybe_replan(state, results, "sql", result)
+    if replan:
+        return replan
+    # SQL 生成后先过置信度门，再决定下一步
+    return _next_step_after_sql(state, results)
+
+
+async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -> dict:
+    """置信度门：LLM 自评 SQL 质量，低分触发 HITL 审批。
+
+    在 node_sql 之后、node_analysis 之前执行。
+    从 sql agent 结果中提取 SQL，让 LLM 按 6 项标准打分。
+    置信度 < 0.7 时暂停并请用户确认。
+    """
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    span = trace.start_span("confidence_gate", "SQL 置信度评估")
+
+    sql_result = state.get("results", {}).get("sql", "")
+    if not sql_result:
+        trace.finish_span(span, {"input_tokens": 0, "output_tokens": 0, "turns": 0})
+        return _next_step(state, state["results"], "sql")
+
+    # 提取 SQL 语句
+    sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
+    sql = sql_match.group(0).strip() if sql_match else sql_result[:500]
+
+    client = config["configurable"]["_client"]
+    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+
+    prompt = CONFIDENCE_PROMPT.format(
+        query=state["query"],
+        schema_context=sql_result[:2000],  # sql agent 结果中包含表结构信息
+        sql=sql,
+    )
+
+    resp = await acall_with_retry(
+        client.messages.create,
+        model=model,
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = extract_text(resp, context="confidence")
+    result_data = parse_confidence_result(text)
+    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+    if hasattr(resp, "usage") and resp.usage:
+        usage["input_tokens"] = resp.usage.input_tokens or 0
+        usage["output_tokens"] = resp.usage.output_tokens or 0
+
+    trace.finish_span(span, usage)
+
+    confidence = result_data["confidence"]
+    report = format_confidence_report(result_data)
+    print(f"🔍 置信度门: {confidence:.2f} ({'✅ 通过' if not should_pause(confidence) else '⚠️ 需确认'})")
+    print(report)
+
+    if should_pause(confidence):
+        # HITL: 暂停并展示 SQL + 置信度报告给用户确认
+        opik_tag_hitl(
+            "pause",
+            hitl_type="confidence",
+            confidence=float(confidence),
+            masked_sql=mask_sql(sql) if sql else "",
+        )
+        response = interrupt({
+            "type": "confidence_gate",
+            "sql": sql,
+            "confidence": confidence,
+            "report": report,
+            "message": f"SQL 置信度 {confidence:.2f}，低于阈值 0.7，请确认是否继续执行。",
+        })
+        # 读取用户审批结果
+        approved = response.get("approved", True) if isinstance(response, dict) else True
+        if not approved:
+            print(f"🚫 用户拒绝了低置信度 SQL")
+            return {
+                "final_answer": "SQL 执行已被用户取消（置信度过低）。",
+                "messages": [AIMessage(content="SQL 执行已被用户取消（置信度过低）。")],
+                "next": "done",
+            }
+
+    # 置信度通过，继续下一步
+    return _next_step(state, state["results"], "sql")
+
+
+def _next_step_after_sql(state: MultiAgentState, results: dict) -> dict:
+    """SQL 节点专用调度：先跑完 plan 里其他 Agent，再决定是否进置信度门。
+
+    sql + hive 这类多引擎 plan 必须先把 hive/hbase 跑完，
+    不能 sql 一结束就进 confidence_gate 把后续 Agent 堵死。
+    """
+    plan = state["plan"]
+    executed = set(results.keys())
+    pending = [s for s in plan if s["agent"] not in executed]
+    if pending:
+        return {"results": results, "next": pending[0]["agent"]}
+
+    plan_agents = {s["agent"] for s in plan}
+    # 只有还要走 analysis 时才过置信度门
+    if "analysis" in plan_agents:
+        return {"results": results, "next": "confidence_gate"}
+
+    # 单 sql 或 sql+hive/hbase 已全部完成：仍需走 analysis（呈现）+ reflection（审查）
+    return {"results": results, "next": "analysis"}
 
 
 async def node_strategy(state: MultiAgentState, config: RunnableConfig) -> dict:
@@ -207,10 +552,14 @@ async def node_strategy(state: MultiAgentState, config: RunnableConfig) -> dict:
     task = next(s["task"] for s in state["plan"] if s["agent"] == "strategy")
     span = trace.start_span("strategy", task[:60])
     print(f"⏳ Strategy Agent: {task[:60]}...")
-    result, usage = await _run_agent_with_timeout(strategy_agent, client, task, model, span, "Strategy")
+    result, usage = await _run_agent_with_timeout(strategy_agent, client, task, model, span, "Strategy", config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ Strategy Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
+    _finish_agent_task(config, "strategy", failed=is_agent_timeout(result))
     results = {**state.get("results", {}), "strategy": result}
+    replan = _maybe_replan(state, results, "strategy", result)
+    if replan:
+        return replan
     return _next_step(state, results, "strategy")
 
 
@@ -222,10 +571,14 @@ async def _run_agent_node(state, config, agent, agent_name, result_key):
     task = next(s["task"] for s in state["plan"] if s["agent"] == agent_name)
     span = trace.start_span(agent_name, task[:60])
     print(f"⏳ {agent_name.upper()} Agent: {task[:60]}...")
-    result, usage = await _run_agent_with_timeout(agent, client, task, model, span, agent_name.upper())
+    result, usage = await _run_agent_with_timeout(agent, client, task, model, span, agent_name.upper(), config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ {agent_name.upper()} Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
+    _finish_agent_task(config, agent_name, failed=is_agent_timeout(result))
     results = {**state.get("results", {}), result_key: result}
+    replan = _maybe_replan(state, results, agent_name, result)
+    if replan:
+        return replan
     return _next_step(state, results, agent_name)
 
 
@@ -269,8 +622,14 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
             recent.append(f"{role}: {content}")
     if recent:
         context_parts.insert(0, f"[最近对话]\n" + "\n".join(recent))
-    # Layer 4: 上游 Agent 的中间结果
+    # Layer 4: Reflection 反馈（如果有）——放到最前面，让 Analysis 优先看到
+    if state.get("results", {}).get("_reflection_feedback"):
+        context_parts.insert(0, f"[🔴 重写指令 —— 上次回答被 Reflection 退回，请根据以下建议改进]\n{state['results']['_reflection_feedback']}")
+
+    # Layer 5: 上游 Agent 的中间结果
     for name, text in state.get("results", {}).items():
+        if name == "_reflection_feedback":
+            continue  # 已单独处理
         context_parts.append(f"[{name} Agent 结果]\n{text}")
 
     # 检测上游结果是否有超时——如果有，在 context 里加提示
@@ -294,6 +653,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     passed, reason = guard_output(result)
     if not passed:
         print(f"🚫 输出护栏拦截: {reason}")
+        opik_tag_guard("output", reason)
         # finish span before set blocked
         trace.finish_span(span, usage, error = reason)
         trace.set_blocked("output", reason)
@@ -304,12 +664,132 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
         }
     # 处理超时情况，正常情况是NONE，超时才传参进span
     trace.finish_span(span, usage, error=span.error)
+    _finish_agent_task(config, "analysis", failed=is_agent_timeout(result))
 
     # 把最终回答写回 messages —— Checkpointer 自动持久化，
     # 下一轮 Router 和 Analysis 就能从 messages 里看到这轮说了什么。
     return {
         "final_answer": result,
         "messages": [AIMessage(content=result)],
+        "next": "reflection",  # 输出后走反思检查
+    }
+
+
+REFLECTION_PROMPT = """你是回答质量审查员。审查以下 Agent 输出，判断是否合格。
+
+【用户问题】
+{query}
+
+【Agent 回答】
+{answer}
+
+【上游数据来源】
+{context}
+
+审核标准（每项 pass/fail）：
+1. 完整性：回答是否直接、完整地回应用户问题？（不是岔开话题或只给半截答案）
+2. 真实性：有没有编造数据？（数字、日期、名称如果在 context 里找不到就是编造）
+3. 可用性：用户读完能立刻用吗？（结论在前、具体数字、不模糊）
+
+只输出 JSON：
+{{"pass": true/false, "issues": ["问题1", "问题2"], "suggestion": "如何改进（如果 pass 为 false）"}}
+
+如果 pass=false，suggestion 必须具体、可执行，让 Analysis Agent 能直接据此重写。"""
+
+
+async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dict:
+    """Reflection 反思节点：审查 Analysis 输出质量，不合格则退回重写。
+
+    借鉴 Self-Refine 模式：
+    1. LLM 自审回答质量（完整性/真实性/可用性）
+    2. 不通过 → 把改进建议注入 context，退回 Analysis 重写
+    3. 最多重试 2 次，避免死循环
+
+    面试金句：
+    "在 Analysis 输出后加了 Reflection 节点——Self-Refine 模式。
+    LLM 自审三个维度：完整性、真实性、可用性。不合格就把改进建议
+    喂回 Analysis 重写。最多 2 轮，用 token 换质量。"
+    """
+    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    span = trace.start_span("reflection", "回答质量审查")
+
+    answer = state.get("final_answer", "")
+    if not answer:
+        trace.finish_span(span, {"input_tokens": 0, "output_tokens": 0, "turns": 0})
+        return {"next": "done"}
+
+    attempts = state.get("_reflection_attempts", 0)
+
+    client = config["configurable"]["_client"]
+    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+
+    # 拼接上游数据作为审查依据
+    context = "\n".join(str(v)[:1000] for v in state.get("results", {}).values() if v)
+
+    prompt = REFLECTION_PROMPT.format(
+        query=state["query"],
+        answer=answer[:2000],
+        context=context[:2000],
+    )
+
+    resp = await acall_with_retry(
+        client.messages.create,
+        model=model,
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = extract_text(resp, context="reflection")
+    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+    if hasattr(resp, "usage") and resp.usage:
+        usage["input_tokens"] = resp.usage.input_tokens or 0
+        usage["output_tokens"] = resp.usage.output_tokens or 0
+
+    # 解析审查结果
+    import json as _json
+    try:
+        match = re.search(r'\{[\s\S]*\}', text)
+        review = _json.loads(match.group()) if match else {"pass": True, "issues": [], "suggestion": ""}
+    except (_json.JSONDecodeError, KeyError):
+        review = {"pass": True, "issues": [], "suggestion": ""}
+
+    trace.finish_span(span, usage)
+
+    issues = list(review.get("issues") or [])
+    suggestion = str(review.get("suggestion") or "")
+
+    if review.get("pass") or attempts >= 2:
+        status = "✅ 通过" if review.get("pass") else f"⏭ 已达上限({attempts}次)"
+        print(f"🔍 Reflection: {status}")
+        opik_tag_reflection(
+            passed=bool(review.get("pass")),
+            attempts=attempts,
+            issues=issues,
+            suggestion=suggestion,
+        )
+        return {"next": "done", "_reflection_attempts": 0}
+
+    # 不通过：退回重写
+    print(f"🔍 Reflection: ❌ 不通过，退回重写 (第{attempts+1}次)")
+    for issue in issues:
+        print(f"   ⚠ {issue}")
+    print(f"   💡 {suggestion}")
+    opik_tag_reflection(
+        passed=False,
+        attempts=attempts + 1,
+        issues=issues,
+        suggestion=suggestion,
+    )
+
+    # 把改进建议注入 results，作为 Analysis 的 context
+    results_with_feedback = {
+        **state.get("results", {}),
+        "_reflection_feedback": review.get("suggestion", "请改进回答质量"),
+    }
+
+    return {
+        "results": results_with_feedback,
+        "next": "analysis",
+        "_reflection_attempts": attempts + 1,
     }
 
 
@@ -333,13 +813,20 @@ def _next_step(state: MultiAgentState, results: dict, current: str) -> dict:
     if "analysis" in plan_agents and "analysis" not in executed:
         return {"results": results, "next": "analysis"}
 
-    # plan 已跑完且不需要 analysis：优先用 sql/strategy 原文作答
-    answer = (
-        results.get("sql")
-        or results.get("strategy")
-        or results.get("data_quality")
-        or "\n\n".join(results.values())
-    )
+    # plan 已跑完且不需要 analysis：
+    # 多引擎结果要拼接（sql+hive），不能只取 sql 丢掉 hive
+    non_empty = {k: v for k, v in results.items() if v}
+    if len(non_empty) > 1:
+        answer = "\n\n".join(f"【{k}】\n{v}" for k, v in non_empty.items())
+    else:
+        answer = (
+            results.get("sql")
+            or results.get("strategy")
+            or results.get("data_quality")
+            or results.get("hive")
+            or results.get("hbase")
+            or "\n\n".join(str(v) for v in results.values() if v)
+        )
     return {"results": results, "next": "done", "final_answer": answer}
 
 
@@ -371,33 +858,43 @@ def build_multi_agent_graph(checkpointer=None):
     builder = StateGraph(MultiAgentState)
 
     builder.add_node("router", node_router)
+    builder.add_node("clarify", node_clarify)
     builder.add_node("data_quality", node_data_quality)
     builder.add_node("sql", node_sql)
+    builder.add_node("confidence_gate", node_confidence_gate)
     builder.add_node("strategy", node_strategy)
     builder.add_node("hbase", node_hbase)
     builder.add_node("hive", node_hive)
     builder.add_node("analysis", node_analysis)
+    builder.add_node("reflection", node_reflection)
 
     builder.set_entry_point("router")
 
     # targets: edge_router 返回值 → LangGraph 节点名的映射
     targets = {
+        "router": "router",  # 失败重规划：Agent 节点失败后回 Router 重排计划
+        "clarify": "clarify",
         "data_quality": "data_quality",
         "sql": "sql",
         "strategy": "strategy",
         "hbase": "hbase",
         "hive": "hive",
         "analysis": "analysis",
+        "confidence_gate": "confidence_gate",
+        "reflection": "reflection",
         "done": END,
     }
 
     builder.add_conditional_edges("router", edge_router, targets)
+    builder.add_conditional_edges("clarify", edge_router, targets)
     builder.add_conditional_edges("data_quality", edge_router, targets)
     builder.add_conditional_edges("sql", edge_router, targets)
     builder.add_conditional_edges("strategy", edge_router, targets)
     builder.add_conditional_edges("hbase", edge_router, targets)
     builder.add_conditional_edges("hive", edge_router, targets)
-    builder.add_edge("analysis", END)
+    builder.add_conditional_edges("confidence_gate", edge_router, targets)
+    builder.add_conditional_edges("analysis", edge_router, targets)
+    builder.add_conditional_edges("reflection", edge_router, targets)
 
     return builder.compile(checkpointer=checkpointer)
 
@@ -447,14 +944,18 @@ class MultiAgentRunner:
         self._dq_done = False       # 首次查询后置 True，后续不再注入 DQ
         self._dq_time = 0.0         # 上次 DQ 执行时间戳（epoch 秒）
         self.router_cache = RouterCache(max_size=100)
+        self.task_manager = TaskManager()
         self.thread_id = thread_id
+        self._last_state = None  # 最近一次 graph 执行完成后的 state（供 UI 读取中间结果）
 
         db_path = Path(checkpoint_db) if checkpoint_db else CHECKPOINT_DB
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = await aiosqlite.connect(str(db_path))
         self.checkpointer = AsyncSqliteSaver(self._conn)
         await self.checkpointer.setup()  # 建 checkpoints 表
-        self.graph = build_multi_agent_graph(checkpointer=self.checkpointer)
+        self.graph = wrap_langgraph(
+            build_multi_agent_graph(checkpointer=self.checkpointer)
+        )
         self.checkpoint_db = db_path
         return self
 
@@ -489,13 +990,19 @@ class MultiAgentRunner:
         """
         # 每个请求创建一个 TraceContext——跟着 configurable 在节点间流转
         trace = TraceContext(query)
+        annotate_opik(metadata={
+            "recalled_memories_present": bool(recalled_memories),
+            "conversation_summary_present": bool(conversation_summary),
+        })
 
         # Layer 1 输入护栏：在 LLM 调用前拦截恶意输入，零 token 成本
         passed, reason = guard_input(query)
         if not passed:
             print(f"🚫 输入护栏拦截: {reason}")
+            opik_tag_guard("input", reason)
             trace.set_blocked("input", reason)
             trace.save()
+            flush_opik()
             return reason
 
         self._current_config = {
@@ -505,6 +1012,7 @@ class MultiAgentRunner:
                 "_model": self.model,
                 "_trace": trace,
                 "_router_cache": self.router_cache,
+                "_task_manager": self.task_manager,
             }
         }
         state = {
@@ -518,6 +1026,9 @@ class MultiAgentRunner:
             "final_answer": "",
             "next": "",
             "_stats": {},
+            "_reflection_attempts": 0,
+            "_replan_attempts": 0,
+            "_replan_feedback": "",
         }
 
         try:
@@ -530,36 +1041,109 @@ class MultiAgentRunner:
         snapshot = await self.graph.aget_state(self._current_config)
         if snapshot and snapshot.interrupts:
             interrupt_data = snapshot.interrupts[0].value if snapshot.interrupts else {}
+            hitl_type = interrupt_data.get("type") if isinstance(interrupt_data, dict) else None
+            pause_meta = {"hitl_type": hitl_type} if hitl_type else {}
+            if isinstance(interrupt_data, dict) and "confidence" in interrupt_data:
+                pause_meta["confidence"] = interrupt_data.get("confidence")
+            opik_tag_hitl("pause", **{k: v for k, v in pause_meta.items() if v is not None})
             # trace 暂不存盘——等 resume() 完成后一起写
             return {"__interrupt__": True, "data": interrupt_data}
 
         if result is None:
             return "抱歉，无法回答。"
 
-        # 所有节点运行完，落盘 trace
-        trace.finished_at = time.monotonic()
+        # 保存 state 供 UI 读取中间结果
+        self._last_state = result
+
+        # 所有节点运行完，落盘 trace。
+        # finished_at 由 trace.save() 用 time.time() 补——之前在这里手动赋
+        # time.monotonic()，和 started_at 的 time.time() 基准不同，算出负耗时。
         filepath = trace.save()
         print(f"📊 {trace.summary()}  → {filepath}")
+        self._annotate_turn_cost(trace)
+        flush_opik()
 
         return result.get("final_answer", "抱歉，无法回答。")
 
-    async def resume(self, approved: bool) -> str:
+    def _annotate_turn_cost(self, trace: TraceContext) -> None:
+        """Annotate Opik with per-turn token cost + local_trace_id + opik_trace_id."""
+        cost = estimate_tokens_cost(
+            trace.total_input_tokens,
+            trace.total_output_tokens,
+            model=self.model,
+        )
+        oid = get_current_opik_trace_id() or capture_opik_trace_id_for_graph(
+            getattr(self, "graph", None)
+        )
+        if oid:
+            trace.opik_trace_id = oid
+        meta = {**cost, "local_trace_id": trace.trace_id}
+        if oid:
+            meta["opik_trace_id"] = oid
+        annotate_opik(metadata=meta, tags=["turn_complete"])
+        # If Opik context already closed (e.g. streaming ainvoke), update via tracer
+        if oid and getattr(self, "graph", None) is not None:
+            try:
+                tracer = getattr(self.graph, "_opik_tracer", None)
+                if tracer is not None:
+                    created = tracer.created_traces()
+                    for t in reversed(created or []):
+                        if getattr(t, "id", None) == oid:
+                            t.update(metadata=meta, tags=["turn_complete"])
+                            break
+            except Exception:
+                pass
+
+    async def resume(self, approved: bool = True, clarified_query: str = "") -> str:
         """HITL 审批后恢复 graph 执行。
 
         Args:
-            approved: True = 用户批准，继续执行敏感查询
+            approved: True = 用户批准，继续执行敏感查询（confidence_gate 场景）
+            clarified_query: 用户对澄清问题的回复（clarify 场景）
         """
+        opik_tag_hitl("resume", approved=bool(approved))
+        resume_value = {"approved": approved}
+        if clarified_query:
+            resume_value["clarified_query"] = clarified_query
+
         trace = self._current_config["configurable"].get("_trace")
         result = await self.graph.ainvoke(
-            Command(resume={"approved": approved}),
+            Command(resume=resume_value),
             config=self._current_config,
         )
+        self._last_state = result
         if trace:
-            trace.finished_at = time.monotonic()
-            filepath = trace.save()
+            filepath = trace.save()  # finished_at 由 save() 统一补，避免时钟基准混用
             print(f"📊 {trace.summary()}  → {filepath}")
+            self._annotate_turn_cost(trace)
+            flush_opik()
         return result.get("final_answer", "抱歉，无法回答。")
+
+    def get_execution_info(self) -> dict:
+        """返回最近一次执行的结构化信息（供 UI 面板展示）。
+
+        从 _last_state 提取：Router 分派方式、执行计划、SQL、Reflection 结果。
+        """
+        state = self._last_state or {}
+        results = state.get("results", {})
+
+        # 提取 SQL（从 sql agent 的结果中）
+        sql_text = ""
+        sql_result = results.get("sql", "")
+        if sql_result:
+            sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
+            sql_text = sql_match.group(0).strip() if sql_match else ""
+
+        return {
+            "plan": state.get("plan", []),
+            "sql": sql_text,
+            "reflection": {
+                "attempts": state.get("_reflection_attempts", 0),
+            },
+            "stats": state.get("_stats", {}),
+        }
 
     async def aclose(self) -> None:
         """关闭 SQLite 连接。main.py quit 时调用，避免 event loop 关闭后报错。"""
+        flush_opik()
         await self._conn.close()

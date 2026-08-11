@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.claude/
+.idea/
+.DS_Store
+*.db
+*.db-shm
+*.db-wal
+memory/chroma_db/
+tests/
+docs/
+*.md
+!README.md

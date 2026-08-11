@@ -140,8 +140,8 @@ def init_db(reset: bool = False):
         -- agent_roles: 5 种角色
         INSERT INTO agent_roles VALUES ('dba',     '研发DBA',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document","write_query"]', null, null, null, 0);
         INSERT INTO agent_roles VALUES ('manager', '部门经理',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', null, '{"employees":"dept_id"}', null, 1);
-        INSERT INTO agent_roles VALUES ('analyst', '数据分析师','["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","employees","products","customers","orders"]', null, null, 1);
-        INSERT INTO agent_roles VALUES ('viewer',  '访客',      '["list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","products","customers","orders"]', null, '["产品手册","部门介绍","销售制度"]', 0);
+        INSERT INTO agent_roles VALUES ('analyst', '数据分析师','["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","employees","products","customers","orders","ods_orders_hive","dwd_user_events","dim_products_hive"]', null, null, 1);
+        INSERT INTO agent_roles VALUES ('viewer',  '访客',      '["list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","products","customers","orders","ods_orders_hive","dwd_user_events","dim_products_hive"]', null, '["产品手册","部门介绍","销售制度"]', 0);
         INSERT INTO agent_roles VALUES ('support', '技术支持',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["products","customers","orders"]', null, '["技术文档","产品手册"]', 0);
 
         -- agent_users: 10 个用户
@@ -361,10 +361,11 @@ def init_db(reset: bool = False):
     conn.close()
 
     print(f"数据库已初始化: {DB_PATH}")
-    print(f"  departments: 6, employees: {emp_count}, products: 15, customers: {cust_count}, orders: {order_count}")
+    print(f"  [SQL]  departments: 6, employees: {emp_count}, products: 15, customers: {cust_count}, orders: {order_count}")
     print(f"  [Hive] ods_orders_hive: {hive_order_count}, dwd_user_events: {hive_event_count}, dim_products_hive: {hive_prod_count}")
+    print(f"  [HBase] 内存模拟表: orders / user_profile / product_catalog（启动时 seed）")
     print(f"  时间范围: 2025-06-01 ~ 2026-07-15")
-    print(f"  新特性: customers 表（地区 + 行业维度），orders 含季节性波动")
+    print(f"  能力: 多 Agent 编排 · SQL/Hive/HBase · 权限 HITL · 记忆 · Task board")
 
 
 if __name__ == "__main__":

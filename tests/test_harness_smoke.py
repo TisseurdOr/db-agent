@@ -31,6 +31,7 @@ HARNESS_MODULES = [
     "multi_agent.orchestrator",
     "multi_agent.router",
     "multi_agent.state",
+    "multi_agent.task_system",
     "tools.analysis",
     "tools.chart",
     "tools.hbase",
@@ -357,11 +358,15 @@ def test_conversation_manager_importable():
 
 
 def test_vector_memory_importable():
-    """VectorMemory 可导入和实例化。"""
+    """VectorMemory 可导入和实例化（需要 EMBEDDING_API_KEY）。"""
+    import os
+    if not os.getenv("EMBEDDING_API_KEY"):
+        import pytest
+        pytest.skip("需要 EMBEDDING_API_KEY")
+
     from memory.vector_store import VectorMemory
     vm = VectorMemory(collection_name="test_harness_smoke")
     assert vm is not None
-    # 清理
     try:
         vm.client.delete_collection("test_harness_smoke")
     except Exception:

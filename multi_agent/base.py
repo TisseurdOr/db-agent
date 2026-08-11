@@ -9,6 +9,8 @@ from typing import Optional
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
+from utils.retry import acall_with_retry
+
 
 class AgentRunError(Exception):
     """Agent 执行失败。"""
@@ -54,7 +56,9 @@ async def _simple_agent_run(
     usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
 
     for _ in range(max_turns):
-        response = client.messages.create(
+        # 429/5xx/超时自动指数退避重试——不重试则单个 Agent 失败导致整轮对话失败
+        response = await acall_with_retry(
+            client.messages.create,
             model=model,
             max_tokens=4096,
             system=system_prompt,

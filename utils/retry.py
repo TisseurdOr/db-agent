@@ -1,0 +1,92 @@
+# utils/retry.py — LLM API 调用重试（指数退避 + 抖动）
+#
+# 为什么需要：DeepSeek/Kimi 返回 429（限流）、5xx（服务端错误）或网络超时
+# 是运行时常态，不重试就意味着整轮对话直接失败。
+#
+# 设计决策：
+#   只重试"可恢复"错误——429/500/502/503/529 和连接类错误。
+#   400（参数错）、401（key 错）、403（权限）重试没有意义，立即抛出。
+#   指数退避 + 随机抖动：避免多个并发 Agent 同时限流后同时重试（惊群）。
+#   重试预算走环境变量，生产可调，测试可关（LLM_MAX_RETRIES=0）。
+
+import asyncio
+import inspect
+import os
+import random
+import time
+
+import anthropic
+
+# 可重试的 HTTP 状态码：
+#   429 限流 / 500 服务端错误 / 502,503 网关、过载 / 529 Anthropic overloaded
+RETRIABLE_STATUS = {429, 500, 502, 503, 529}
+
+
+def is_retriable(exc: BaseException) -> bool:
+    """判断异常是否值得重试。
+
+    连接类错误（含超时）一律可重试；HTTP 错误看状态码。
+    通过 getattr 取 status_code——同时兼容 anthropic SDK 异常
+    和测试里带 status_code 属性的自定义异常。
+    """
+    if isinstance(exc, anthropic.APIConnectionError):  # 含 APITimeoutError 子类
+        return True
+    return getattr(exc, "status_code", None) in RETRIABLE_STATUS
+
+
+def max_retries_from_env() -> int:
+    return int(os.getenv("LLM_MAX_RETRIES", "3"))
+
+
+def base_delay_from_env() -> float:
+    return float(os.getenv("LLM_RETRY_BASE_DELAY", "1.0"))
+
+
+def backoff_delay(attempt: int, base_delay: float) -> float:
+    """第 attempt 次失败后的等待秒数：base * 2^attempt + 随机抖动。"""
+    return base_delay * (2 ** attempt) + random.uniform(0, base_delay / 2)
+
+
+def call_with_retry(fn, *args, max_retries: int | None = None,
+                    base_delay: float | None = None, **kwargs):
+    """同步调用 fn，可恢复错误时指数退避重试。
+
+    用法: resp = call_with_retry(client.messages.create, model=..., messages=...)
+    """
+    max_retries = max_retries_from_env() if max_retries is None else max_retries
+    base_delay = base_delay_from_env() if base_delay is None else base_delay
+
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if not is_retriable(e) or attempt >= max_retries:
+                raise
+            delay = backoff_delay(attempt, base_delay)
+            print(f"⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
+                  f"({attempt + 1}/{max_retries})")
+            time.sleep(delay)
+
+
+async def acall_with_retry(fn, *args, max_retries: int | None = None,
+                           base_delay: float | None = None, **kwargs):
+    """异步版本：等待用 asyncio.sleep，不阻塞事件循环。
+
+    fn 可以是同步函数（如 client.messages.create）或协程函数。
+    """
+    max_retries = max_retries_from_env() if max_retries is None else max_retries
+    base_delay = base_delay_from_env() if base_delay is None else base_delay
+
+    for attempt in range(max_retries + 1):
+        try:
+            result = fn(*args, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+        except Exception as e:
+            if not is_retriable(e) or attempt >= max_retries:
+                raise
+            delay = backoff_delay(attempt, base_delay)
+            print(f"⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
+                  f"({attempt + 1}/{max_retries})")
+            await asyncio.sleep(delay)

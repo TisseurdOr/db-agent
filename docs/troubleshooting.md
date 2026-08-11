@@ -29,6 +29,12 @@
 19. [multi 模式 Agent 超 max_turns 返回垃圾文本，污染下游](#19-multi-模式-agent-超-max_turns-返回垃圾文本污染下游)
 20. [Router 返回空 plan，查询静默失败](#20-router-返回空-plan查询静默失败)
 21. ["上条"/"上一条"/"上轮"等元问题未被识别](#21-上条上一条上轮等元问题未被识别)
+22. [LangGraph `KeyError: 'router'`（重规划边漏配 targets）](#22-langgraph-keyerror-router重规划边漏配-targets)
+23. [trace 汇总打出负数耗时 `-1785597142.5s`](#23-trace-汇总打出负数耗时)
+24. [Agent 失败时 Task board 仍打印 "Task complete"](#24-agent-失败时-task-board-仍打印-task-complete)
+25. [自学习无 `📥`：SQL Agent 答对了却不回流](#25-自学习无--sql-agent-答对了却不回流)
+26. [前端打不开 / Vite 端口被占](#26-前端打不开--vite-端口被占)
+27. [`OPIK_ENABLED=1` 但 Opik 里没有 Trace](#27-opik_enabled1-但-opik-里没有-trace)
 
 ---
 
@@ -753,4 +759,207 @@ r"(刚才|上次|上条|上轮|之前|上一个|上一条|上一轮).{0,8}(问�
 
 ---
 
+## 22. LangGraph `KeyError: 'router'`（重规划边漏配 targets）
+
+**现象**
+失败重规划功能上线后，第一次现场演示（给 SQL Agent 注入假超时）直接崩：
+```
+File ".../langgraph/graph/_branch.py", line 203, in _finish
+    r if isinstance(r, Send) else self.ends[r] for r in result
+KeyError: 'router'
+During task with name 'sql' and id '...'
+```
+
+**原因**
+和第 16 条（`KeyError: '__end__'`）同根：LangGraph 条件边的返回值必须是
+`targets` 映射里的 key。`_maybe_replan()` 返回了 `next: "router"`，
+但 `build_multi_agent_graph()` 的 `targets` dict 里没有 `"router"` 这个键——
+节点函数写好了，图的接线没跟上。
+
+**单测为什么没抓到**：只测了 `_maybe_replan` 的纯逻辑（返回值对不对），
+没测图本身。**节点逻辑和图接线是两层，接线必须单独测。**
+
+**解决**
+1. `targets` 加一行：`"router": "router"`。
+2. 加图接线回归测试——用 `graph.get_graph().edges` 断言每个业务 Agent
+   节点都有回 Router 的边：
+```python
+graph = build_multi_agent_graph()
+edges = {(e.source, e.target) for e in graph.get_graph().edges}
+for agent_node in ("sql", "hbase", "hive", "strategy", "data_quality"):
+    assert (agent_node, "router") in edges
+```
+
+**附带坑**：崩溃后进程不退出——异常路径没走到 `runner.aclose()`，
+aiosqlite 的非 daemon 后台线程把进程挂住，只能 `kill`。
+
+**涉及文件**
+`multi_agent/orchestrator.py`（`targets` 映射）、
+`tests/test_recovery.py`（`test_graph_has_replan_edges`）
+
+---
+
+## 23. trace 汇总打出负数耗时
+
+**现象**
+每轮 multi 模式查询结束后的汇总行：
+```
+📊 总计 -1785597142.5s · 4927t (入 2690 / 出 2237) · 16轮
+```
+耗时是一个 -17 亿秒的负数。
+
+**原因**
+时钟基准混用。`TraceContext.started_at` 用的是 `time.time()`（Unix 时间戳，~17 亿），
+但 `orchestrator.py` 的 `run()`/`resume()` 里手写了：
+```python
+trace.finished_at = time.monotonic()   # 开机以来的秒数，很小
+```
+`elapsed = finished_at - started_at` = 小数字 - 17 亿 = 负数。
+
+`time.time()` 和 `time.monotonic()` **不可混算**：前者是墙上时钟（会被 NTP 调整），
+后者是单调时钟（起点任意，只保证递增）。测耗时要么全用 monotonic，
+要么全用 time——一个对象内部只能选一种。
+
+**解决**
+删掉 orchestrator 里两处手动赋值，让 `trace.save()` 统一用 `time.time()` 补
+`finished_at`——tracer 自己管自己的时钟，调用方不要碰它的内部字段。
+回归测试：`test_trace_elapsed_never_negative`。
+
+**涉及文件**
+`multi_agent/orchestrator.py`（`run()` / `resume()` 删手动赋值）、
+`utils/tracer.py`（`save()` 是唯一补 `finished_at` 的地方）
+
+---
+
+## 24. Agent 失败时 Task board 仍打印 "Task complete"
+
+**现象**
+SQL Agent 超过最大轮数失败，Task board 却显示任务完成：
+```
+⚠️ SQL 超过最大轮数，结果不可用。
+   ✅ Task complete: Completed task_895430_00_sql (查询各部门的订单总金额)
+📋 Task board
+  [✓] sql          查询各部门的订单总金额 @sql
+```
+
+**原因**
+`TaskManager` 的状态机只有 `pending | in_progress | completed` 三态，
+没有失败态；节点里 `_finish_agent_task(config, agent)` 是无条件调用的——
+不管 agent 成功还是超时，一律 `on_agent_finished()` → 标 completed。
+展示层谎报状态，排查时会误导人。
+
+**解决**
+1. `Task.status` 加 `failed` 态，board 图标加 `✗`。
+2. `TaskManager` 加 `fail()` + `on_agent_failed()`——标记失败、不 claim 下一个任务；
+   下游 `blockedBy` 它的任务保持阻塞（`can_start` 只认 `completed`）。
+3. `_finish_agent_task` 加 `failed` 参数，各节点传 `failed=is_agent_timeout(result)`。
+
+修复后输出：
+```
+   ❌ Task failed: Failed task_6b001b_00_sql (查询各部门的订单总金额)
+📋 Task board
+  [✗] sql          查询各部门的订单总金额 @sql
+🔄 sql Agent 失败，带反馈回 Router 重规划 (第1次)
+```
+
+**涉及文件**
+`multi_agent/task_system.py`（`failed` 态 + `fail` + `on_agent_failed`）、
+`multi_agent/orchestrator.py`（`_finish_agent_task` 传失败状态）、
+`tests/test_recovery.py`（`test_task_board_marks_failure`）
+
+---
+
+## 25. 自学习无 `📥`：SQL Agent 答对了却不回流
+
+**现象**
+```
+🔧 run_query(...) → {'rows': [{'订单数量': 32}], ...}
+✅ SQL Agent (... · 3轮)
+⏳ Analysis Agent: ...
+# 业务答案正确，但始终没有：
+#    📥 自学习: 回流样例 [auto] …
+```
+`scripts/demo_feedback.py live` 第一版复现。
+
+**原因**
+自学习最初只从 SQL Agent 的**自然语言最终回答**里正则抽 `SELECT`。
+模型常这样写：
+
+> 产品部已完成订单数量为 32。  
+> SQL 逻辑：通过 `orders.dept_id = departments.id` 关联两表……
+
+描述里有表名字段名，但**没有完整 SELECT 语句** → `extract_sql()` 返回 `None`
+→ 质量门拒绝写入。读路径 few-shot、查数都正常，唯独写路径静默失败——最难察觉。
+
+**解决**
+1. `run_query` 仅在执行成功时写入 `_last_successful_sql`（错误路径不写）。
+2. `node_sql` 开始时 `pop_last_successful_sql()` 清空残留；成功后再 `pop` 交给
+   `learn_from_success(..., sql=捕获值)`。
+3. 文本提取降为兜底；单测覆盖成功捕获 / 报错不捕获。
+
+```python
+# tools/query.py — 成功路径
+_last_successful_sql["sql"] = sql
+
+# orchestrator node_sql
+pop_last_successful_sql()          # 开局清空，防超时误回流探索 SQL
+...
+learned_sql = pop_last_successful_sql()
+learn_from_success(query, result, sql=learned_sql, source="auto")
+```
+
+**教训**：回流信号取**工具执行事实**，不要赌模型在最终回答里复述 SQL。
+
+**涉及文件**
+`tools/query.py`（`pop_last_successful_sql`）、
+`multi_agent/orchestrator.py`（`node_sql`）、
+`rag/feedback.py`、
+`tests/test_feedback.py`、
+`docs/2026-08-06_自学习闭环操作手册.md`
+
+---
+
 > 新踩到坑就往这里加一条，格式照旧：现象 → 原因 → 解决 → 涉及文件。
+
+---
+
+## 26. 前端打不开 / Vite 端口被占
+
+**现象**
+`cd frontend && npm run dev` 后浏览器打不开，或打开的是 Opik 而不是聊天页。
+
+**原因**
+Vite 默认端口 `5173`，本地 Opik 前端也绑在 `5173`（`./scripts/opik.sh up`）。后起的一方会抢端口失败或你进错站点。
+
+**解决**
+Web UI 用 3000（`server/main.py` CORS 已放行 `localhost:3000`）：
+
+```bash
+cd frontend && npm run dev -- --port 3000
+```
+
+或先停 Opik：`./scripts/opik.sh down`。
+
+**涉及文件**
+`frontend/vite.config.ts`、`server/main.py`（CORS）、`scripts/opik.sh`
+
+---
+
+## 27. `OPIK_ENABLED=1` 但 Opik 里没有 Trace
+
+**现象**
+`.env` 已开 `OPIK_ENABLED=1`，http://localhost:5173 能打开，但 `db-agent` 项目里没有新 trace。
+
+**原因**
+常见三类：(1) 本地 Opik 没起来（Docker 未启动）；(2) SDK 指到了 Cloud / 错误 URL；(3) 进程在 `configure_opik()` 之前就建了 client，或请求走完没 `flush_opik()`。
+
+**解决**
+1. `./scripts/opik.sh status`，UI 应返回 200：`curl -s -o /dev/null -w '%{http_code}' http://localhost:5173/`
+2. 确认 `.env`：`OPIK_URL_OVERRIDE=http://localhost:5173/api`、`OPIK_PROJECT_NAME=db-agent`
+3. 重启 CLI / `uvicorn`（必须在加载 `.env` 之后创建 Anthropic client，`server/main.py` / `app.py` 已 `wrap_anthropic_client`）
+4. 跑完一轮查询后再刷 Opik；`MultiAgentRunner` 在 `run`/`resume`/`aclose` 会 `flush_opik()`
+
+本地 JSONL 不受影响：`python -m utils.tracer --today`。
+
+**涉及文件**
+`utils/opik_tracing.py`、`.env` / `.env.example`、`opik-platform/README.md`

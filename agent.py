@@ -13,6 +13,7 @@
 #
 # 参考：Lesson 0004 (agent loop), 0006 (cache_control), 0010 (streaming + tool use)
 
+import asyncio
 import inspect
 import json
 import os
@@ -20,6 +21,7 @@ from anthropic import Anthropic, APIStatusError
 from memory.vector_store import VectorMemory
 from memory.token_budget import TokenBudget
 from memory.hybrid_window_manager import HybridWindowManager
+from utils.retry import acall_with_retry, is_retriable, backoff_delay, base_delay_from_env, max_retries_from_env
 
 # 不从模块级拿 TOOLS / TOOL_HANDLERS——tools 和 handlers 一律由调用方显式传入。
 # 好处：
@@ -152,53 +154,67 @@ async def streaming_agent(
         print(f"[Turn {turn+1}] {budget.summary(messages)}")
         cached_system = _build_cacheable_system(full_system_prompt)
 
-        # 用于积累 streaming 中到达的 tool_use 和 text
-        tool_use_blocks = {}   # {content_block_index: {id, name, input_str}}
-        text_content = ""
+        # streaming 的重试策略：只有"还没输出任何内容"时才重试——
+        # 一旦有文字打到终端，重试会导致重复输出，此时直接抛错更诚实。
+        final_msg = None
+        for attempt in range(max_retries_from_env() + 1):
+            # 用于积累 streaming 中到达的 tool_use 和 text
+            tool_use_blocks = {}   # {content_block_index: {id, name, input_str}}
+            text_content = ""
 
-        # temperature=0 的理由：Agent 选 Tool 必须确定。temperature > 0 时模型可能随机选一个不存在的 Tool，
-        # 或者把本该调 run_query 的请求直接编一个回答——这在 Agent 场景不可接受。
-        with client.messages.stream(
-            model=model,
-            max_tokens=4096,
-            temperature=temperature,
-            system=cached_system,
-            messages=messages,
-            tools=tools,
-        ) as stream:
-            for event in stream:
-                if event.type == "content_block_start":
-                    block = event.content_block
-                    if block.type == "tool_use":
-                        tool_use_blocks[event.index] = {
-                            "id": block.id,
-                            "name": block.name,
-                            "input": "",
-                        }
-                        # 实时通知：Agent 正在调什么 Tool
-                        print(f"\n🔧 {block.name}...", end="", flush=True)
+            try:
+                # temperature=0 的理由：Agent 选 Tool 必须确定。temperature > 0 时模型可能随机选一个不存在的 Tool，
+                # 或者把本该调 run_query 的请求直接编一个回答——这在 Agent 场景不可接受。
+                with client.messages.stream(
+                    model=model,
+                    max_tokens=4096,
+                    temperature=temperature,
+                    system=cached_system,
+                    messages=messages,
+                    tools=tools,
+                ) as stream:
+                    for event in stream:
+                        if event.type == "content_block_start":
+                            block = event.content_block
+                            if block.type == "tool_use":
+                                tool_use_blocks[event.index] = {
+                                    "id": block.id,
+                                    "name": block.name,
+                                    "input": "",
+                                }
+                                # 实时通知：Agent 正在调什么 Tool
+                                print(f"\n🔧 {block.name}...", end="", flush=True)
 
-                elif event.type == "content_block_delta":
-                    delta = event.delta
-                    if delta.type == "text_delta":
-                        # 逐字输出——用户看到 Agent "在思考"，信任感来源
-                        print(delta.text, end="", flush=True)
-                        text_content += delta.text
+                        elif event.type == "content_block_delta":
+                            delta = event.delta
+                            if delta.type == "text_delta":
+                                # 逐字输出——用户看到 Agent "在思考"，信任感来源
+                                print(delta.text, end="", flush=True)
+                                text_content += delta.text
 
-                    elif delta.type == "input_json_delta":
-                        # partial_json 是增量片段，不能解析——只能累积。
-                        # 比如 {"city": "Beijing"} 可能分两次到达：
-                        #   delta 1: '{"city": "Bei'
-                        #   delta 2: 'jing"}'
-                        idx = event.index
-                        if idx in tool_use_blocks:
-                            tool_use_blocks[idx]["input"] += delta.partial_json
+                            elif delta.type == "input_json_delta":
+                                # partial_json 是增量片段，不能解析——只能累积。
+                                # 比如 {"city": "Beijing"} 可能分两次到达：
+                                #   delta 1: '{"city": "Bei'
+                                #   delta 2: 'jing"}'
+                                idx = event.index
+                                if idx in tool_use_blocks:
+                                    tool_use_blocks[idx]["input"] += delta.partial_json
 
-                elif event.type == "content_block_stop":
-                    pass  # 单个 block（text 或 tool_use）结束
+                        elif event.type == "content_block_stop":
+                            pass  # 单个 block（text 或 tool_use）结束
 
-            # stream 结束后，get_final_message() 返回完整、解析好的 message 对象
-            final_msg = stream.get_final_message()
+                    # stream 结束后，get_final_message() 返回完整、解析好的 message 对象
+                    final_msg = stream.get_final_message()
+                break
+            except Exception as e:
+                emitted = bool(text_content or tool_use_blocks)
+                if emitted or not is_retriable(e) or attempt >= max_retries_from_env():
+                    raise
+                delay = backoff_delay(attempt, base_delay_from_env())
+                print(f"\n⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
+                      f"({attempt + 1}/{max_retries_from_env()})")
+                await asyncio.sleep(delay)
 
         # final_msg.content 里每个 block 的 .input 已经是完整的 Python dict，
         # 不需要再手动解析 JSON（SDK 在 stream 结束后帮我们 parse 了）
@@ -273,7 +289,8 @@ async def agent_loop(
     cacheable_system_blocks = _build_cacheable_system(system_prompt)
 
     for turn in range(max_turns):
-        response = client.messages.create(
+        response = await acall_with_retry(
+            client.messages.create,
             model=model,
             max_tokens=4096,
             temperature=temperature,

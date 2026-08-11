@@ -59,7 +59,10 @@ _DEFAULT_ROLES: dict[str, dict] = {
         "allowed_tools": ["run_query", "list_tables", "describe_table",
                           "search_knowledge_base", "read_document",
                           "run_hbase", "generate_hbase_query"],
-        "db_tables": ["departments", "employees", "products", "customers", "orders"],
+        "db_tables": [
+            "departments", "employees", "products", "customers", "orders",
+            "ods_orders_hive", "dwd_user_events", "dim_products_hive",
+        ],
         "db_row_filter": None,
         "docs_filter": None,
         "sensitive_check": True,
@@ -68,7 +71,10 @@ _DEFAULT_ROLES: dict[str, dict] = {
         "name": "访客",
         "allowed_tools": ["list_tables", "describe_table",
                           "search_knowledge_base", "read_document"],
-        "db_tables": ["departments", "products", "customers", "orders"],
+        "db_tables": [
+            "departments", "products", "customers", "orders",
+            "ods_orders_hive", "dwd_user_events", "dim_products_hive",
+        ],
         "docs_filter": ["产品手册", "部门介绍", "销售制度"],
         "sensitive_check": False,
     },

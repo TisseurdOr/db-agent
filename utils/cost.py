@@ -34,6 +34,41 @@ MODEL_PRICES: dict[str, dict[str, float]] = {
 # 如果 trace 没存 model 字段，用这个默认模型算
 DEFAULT_MODEL = "deepseek-chat"
 
+USD_TO_CNY = 7.2
+
+
+def estimate_tokens_cost(
+    input_tokens: int,
+    output_tokens: int,
+    model: str = DEFAULT_MODEL,
+) -> dict:
+    """Return per-turn cost estimate from token counts.
+
+    Keys: model, input_tokens, output_tokens, currency,
+    input_cost, output_cost, subtotal, cost_cny_equivalent.
+    USD models convert to CNY with *7.2 for cost_cny_equivalent.
+    """
+    price = MODEL_PRICES.get(model) or MODEL_PRICES[DEFAULT_MODEL]
+    input_cost = (input_tokens / 1_000_000) * price["input"]
+    output_cost = (output_tokens / 1_000_000) * price["output"]
+    subtotal = input_cost + output_cost
+    currency = price["currency"]
+    if currency == "$":
+        cost_cny_equivalent = subtotal * USD_TO_CNY
+    else:
+        cost_cny_equivalent = subtotal
+    return {
+        "model": model,
+        "input_tokens": int(input_tokens),
+        "output_tokens": int(output_tokens),
+        "currency": currency,
+        "input_cost": round(input_cost, 6),
+        "output_cost": round(output_cost, 6),
+        "subtotal": round(subtotal, 6),
+        "cost_cny_equivalent": round(cost_cny_equivalent, 6),
+    }
+
+
 
 def _read_file(filepath: Path) -> list[dict]:
     if not filepath.exists():

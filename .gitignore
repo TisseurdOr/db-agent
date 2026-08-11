@@ -18,17 +18,56 @@ wheels/
 db/*.db
 db/*.db-shm
 db/*.db-wal
+pipeline_monitor/*.db
 
 # ChromaDB 向量库（本地数据，可重新生成，不入库）
 memory/chroma_db/
 
-# 生成的图表
-charts/*.png
-
-# 运行日志
+# 生成的图表 / 运行产物
+charts/
 logs/
+.tasks/
 
-# Test / cache
+# Test / cache / editor
 .pytest_cache/
 __pycache__/
 .DS_Store
+.vscode/
+
+# 本地 Agent 工作上下文（非项目文档）
+CONTEXT.md
+MISSION.md
+MISTAKES.md
+
+# 个人简历（含真实姓名，勿入库）
+resume/
+*简历*
+scripts/convert_resume_pdf.py
+
+# LaTeX 编译产物
+*.aux
+*.log
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# 个人学习 / 面试材料（非工程文档）
+lessons/
+learning-records/
+reference/
+assets/
+
+docs/interview*
+docs/*面试*
+docs/curriculum-mapping.md
+docs/resume-projects.md
+docs/learning-plan*
+docs/7-day-plan.html
+
+# 日期笔记默认忽略；仅保留工程相关操作手册 / 改进日志
+docs/2026-*
+!docs/2026-06-24_harness-improvements.md
+!docs/2026-06-24_改进日志.md
+!docs/2026-08-05_错误恢复操作手册.md
+!docs/2026-08-06_自学习闭环操作手册.md

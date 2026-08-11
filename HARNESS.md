@@ -28,7 +28,7 @@
   │  QUERY   │    │                                                  │
   └──────────┘    │  ┌────────────────────────────────────────────┐  │
                   │  │       streaming_agent()  单Agent模式        │  │
-                  │  │  14 tools 全挂一个agent, while True loop   │  │
+                  │  │  15 tools 全挂一个agent, while True loop   │  │
                   │  │  cache_control 温度=0, 结构化错误处理      │  │
                   │  └────────────────────────────────────────────┘  │
                   │                                                  │
@@ -50,13 +50,13 @@
                   │  │  │                                      │  │  │
                   │  │  │  ┌──────────┐ ┌──────────────────┐   │  │  │
                   │  │  │  │ sql      │ │ analysis         │   │  │  │
-                  │  │  │  │ 3 tools  │ │ 3 tools           │   │  │  │
+                  │  │  │  │ 4 tools  │ │ 3 tools           │   │  │  │
                   │  │  │  │ 只查数据  │ │ 趋势/对比/图表     │   │  │  │
                   │  │  │  └────┬─────┘ └────────┬─────────┘   │  │  │
                   │  │  │       │                 │             │  │  │
                   │  │  │  ┌────┴─────┐ ┌────────┴─────────┐   │  │  │
                   │  │  │  │ strategy │ │ data_quality     │   │  │  │
-                  │  │  │  │ 1 tool   │ │ 3 tools           │   │  │  │
+                  │  │  │  │ 2 tools  │ │ 3 tools           │   │  │  │
                   │  │  │  │ 制度文档  │ │ NULL/异常/日期扫描 │   │  │  │
                   │  │  │  └──────────┘ └──────────────────┘   │  │  │
                   │  │  │                                      │  │  │
@@ -69,10 +69,11 @@
                   │  │           │                                 │  │
                   │  │           ▼                                 │  │
                   │  │  ┌──────────────────────────────────────┐  │  │
-                  │  │  │         14 TOOLS                      │  │  │
+                  │  │  │         15 TOOLS                      │  │  │
                   │  │  │  ┌─────────────────────────────────┐  │  │  │
                   │  │  │  │ 数据: list_tables describe_table │  │  │  │
                   │  │  │  │       run_query get_schema_summary│  │  │  │
+                  │  │  │  │       match_sql_template          │  │  │  │
                   │  │  │  │ 分析: analyze_results             │  │  │  │
                   │  │  │  │       compare_periods render_chart│  │  │  │
                   │  │  │  │ 知识: search_knowledge_base       │  │  │  │
@@ -108,6 +109,7 @@
   │                  OBSERVATION LAYER                               │
   │                                                                  │
   │  TraceContext   → logs/traces/*.jsonl (节点耗时+token+错误)       │
+  │  Opik           → LangGraph 树 + LLM span + Feedback（可选）      │
   │  RouterCache    → LRU 缓存 (同样 query 零 LLM 重复调用)           │
   │  Checkpointer   → agent_state.db (LangGraph state 跨轮持久化)     │
   │  Token 日志     → 每轮 [memory] 统计: 原文/摘要/压缩/checkpoint   │
@@ -124,14 +126,14 @@
 
 ```
 职责: 只查数据，不做分析
-Tools: list_tables, describe_table, run_query
+Tools: discover_relevant_schema, list_tables, describe_table, run_query
 约束: 不分析趋势、不给业务建议、不编造数据
        SQL 报错如实报告，不猜测原因
        run_query 只允许 SELECT 语句
 ```
 
-- 先 `list_tables` 了解有哪些表
-- 再 `describe_table` 确认字段名和类型
+- 先 `discover_relevant_schema` 按问题检索相关表/字段
+- 不够再 `list_tables` / `describe_table`
 - 最后 `run_query` 执行 SELECT，返回 `{rows, count, truncated}`
 - 自动截断超大结果集（>50 行），生成统计摘要
 
@@ -255,7 +257,7 @@ route_override(query, prev_agents) → plan | None
 
 ---
 
-## 14 个 Tool — 给 Agent 的双手
+## 15 个 Tool — 给 Agent 的双手
 
 | # | Tool | Agent | 作用 | HITL |
 |---|------|-------|------|------|
@@ -273,6 +275,9 @@ route_override(query, prev_agents) → plan | None
 | 12 | `run_hbase` | hbase | HBase 模拟器执行 (12 种操作) | 写操作审批 |
 | 13 | `generate_hbase_query` | hbase | 生成 HBase Shell 命令文本 | — |
 | 14 | `search_hive_syntax` | hive | Hive/Impala 语法模板检索 | — |
+| 15 | `match_sql_template` | (single) | 高频指标模板填槽，未命中回退 LLM | — |
+
+另：multi 模式 SQL Agent 优先调 `discover_relevant_schema`（Schema Linking）；Strategy Agent 另挂 `lookup_metric`。
 
 每个 tool 通过 `@tool` 装饰器自动生成 JSON Schema（name/description/input_schema），注册进 `TOOLS` + `TOOL_HANDLERS` dispatch map。
 
@@ -370,10 +375,11 @@ HBase HITL:
 | 组件 | 文件 | 机制 |
 |------|------|------|
 | **TraceContext** | `utils/tracer.py` | 每个节点记录: node名/耗时/token/错误。落盘 `logs/traces/*.jsonl`。`trace.summary()` 输出一行摘要 |
+| **Opik** | `utils/opik_tracing.py` | `OPIK_ENABLED=1` 时 wrap LangGraph + Anthropic；annotate 路由/few-shot/HITL/成本；点赞写 Feedback Score |
 | **RouterCache** | `multi_agent/cache.py` | LRU 缓存 (max_size=100)。`cache.get(query)` → hit 则跳过 LLM。显示命中率 `hit_rate` |
 | **Checkpointer** | `db/agent_state.db` | LangGraph `AsyncSqliteSaver`。graph 每步 auto-save state。同一 thread_id 跨轮恢复 messages + plan + results |
 | **Token 日志** | `main.py` | 每轮 `[memory]` 统计: `total≈N (原文 X/Y条, 摘要 Z/W条已压缩, checkpoint=db)` |
-| **Eval tracer** | `eval_runner.py` | `_parse_agents_from_trace()` 从最新 trace 解析 agent 列表。`_parse_tokens_from_trace()` 读取总 token 数 |
+| **Eval tracer** | `eval_runner.py` | `_parse_agents_from_trace()` 从最新 trace 解析 agent 列表。`_parse_tokens_from_trace()` 读取总 token 数；`--opik` 上传 Experiment |
 
 ---
 
@@ -382,14 +388,14 @@ HBase HITL:
 ### 冒烟测试 (零成本，每次 commit)
 
 ```sh
-uv run pytest tests/test_harness_smoke.py -v   # 46 条，1.2s
+uv run pytest tests/test_harness_smoke.py -v   # 零 API
 ```
 
 | 验证维度 | 条数 | 说明 |
 |---------|------|------|
 | 模块编译 | 21 | 所有 harness 模块能正常 import |
-| Tool schema | 1 | 14 个 tool 的 name/description/input_schema 格式合法，无重复名 |
-| Handler 配线 | 1 | 14 个 tool ↔ 14 个 handler 一一对应，无孤立 |
+| Tool schema | 1 | 15 个 tool 的 name/description/input_schema 格式合法，无重复名 |
+| Handler 配线 | 1 | 15 个 tool ↔ 15 个 handler 一一对应，无孤立 |
 | Agent 配置 | 5 | 6 个 agent 的 name/prompt 非空，tools/handlers 一致，核心 tool 到位 |
 | Router 标记 | 2 | 5 组标记常量非空，scan 正则能匹配且不误匹配 |
 | Guardrails | 4 | guard_input/guard_output/guard_sql 可调用，prompt injection 被拦截 |
@@ -397,13 +403,13 @@ uv run pytest tests/test_harness_smoke.py -v   # 46 条，1.2s
 | Memory | 1 | 5 个 controller 函数齐全可调用 |
 | Graph | 1 | LangGraph 图能编译，节点含 router/sql/analysis |
 | Entitlement | 3 | 5 角色 + 9 用户已加载，get_user 返回完整对象，build_permission_context 非空 |
-| Handler | 1 | 14 个 handler 均可调用 |
+| Handler | 1 | 15 个 handler 均可调用 |
 | Memory 组件 | 3 | ConversationManager/VectorMemory/TokenBudget 可实例化 |
 
 ### 单元测试
 
 ```sh
-uv run pytest tests/ -v                          # 159 条
+uv run pytest tests/ -v                          # 零/低 API 用例为主
 ```
 
 | 文件 | 条数 | 覆盖 |
@@ -414,6 +420,13 @@ uv run pytest tests/ -v                          # 159 条
 | `test_bigdata.py` | 22 | HBase/Hive SQL 生成 + Router 路由 + 上下文继承 |
 | `test_agent.py` | 10 | Agent 集成 (tool 调用 / 未知表 / 写操作被拒) |
 | `test_self_query.py` | 7 | Self-Query 检索 (过滤/降级/memory_type) |
+| `test_recovery.py` | 12 | 错误恢复 (API 重试退避 / SQL 自愈信号 / 失败重规划 / Task失败态 / trace耗时) |
+| `test_context_engineering.py` | 6 | 检索式 few-shot + 值级索引（种子 SQL 可执行 / 降级） |
+| `test_feedback.py` | 14 | 自学习回流 (SQL 提取 / 质量门 / HITL / 降级) |
+| `test_template_matcher.py` | 23 | 模板填槽 / 未命中回退 / Tool 接口 |
+| `test_orchestration.py` | 16 | 编排边、Strategy lookup_metric 等 |
+| `test_task_system.py` | 5 | 任务板状态机 |
+| `test_eval_hitl.py` | 4 | Eval 与 HITL 边界 |
 | `eval_cases.py` | 36 | 结构化 eval 用例库 (非 pytest，eval_runner 驱动) |
 
 ### Eval 评估
@@ -442,9 +455,9 @@ python -m tests.eval_runner --full --judge --suggest  # +修改建议
 user_input → memory_controller (闲聊过滤)
           → vector_memory.recall() (语义召回 top_k=3)
           → build_system_prompt(extra_context=memories)
-          → streaming_agent(client, system_prompt, tools=14, handlers=14)
+          → streaming_agent(client, system_prompt, tools=15, handlers=15)
              → while True:
-                 response = client.messages.create(tools=14)
+                 response = client.messages.create(tools=15)
                  if stop_reason != "tool_use": break
                  for tool_call: TOOL_HANDLERS[name](**input)
                  append tool_result → loop
@@ -452,7 +465,7 @@ user_input → memory_controller (闲聊过滤)
           → vector_memory.remember(Q&A pair)
 ```
 
-优势：14 个 tool 全挂一个 agent，灵活。适合简单查询和探索性对话。
+优势：15 个 tool 全挂一个 agent，灵活。适合简单查询和探索性对话。
 
 ### Multi 模式 (`--mode multi`)
 
@@ -481,10 +494,13 @@ user_input → guard_input (L1 护栏)
 
 ```
 db-agent/
-  main.py                     CLI 入口，14 TOOLS/TOOL_HANDLERS 注册，双模式调度
+  main.py                     CLI 入口，15 TOOLS/TOOL_HANDLERS 注册，双模式调度
+  app.py                      Streamlit 聊天界面
+  server/                     FastAPI + SSE（query / resume / feedback / sessions / datasource）
+  frontend/                   React + Vite 聊天 UI
   agent.py                    单 Agent loop (streaming_agent, cache_control)
   multi_agent/
-    orchestrator.py           多 Agent 编排 (LangGraph StateGraph + Checkpointer + HITL resume)
+    orchestrator.py           多 Agent 编排 (LangGraph StateGraph + Checkpointer + HITL resume + Opik wrap)
     agents.py                 6 个 ConfiguredAgent 定义 (prompt + tools + handlers)
     router.py                 意图路由 (5组标记 + 正则 + 上下文继承 + route_override)
     state.py                  MultiAgentState TypedDict
@@ -492,13 +508,18 @@ db-agent/
     entitlement.py            权限网关 (5角色/表级/行级/HITL/db动态加载)
     guardrails.py             三层护栏 (L1输入/L2 SQL/L3输出)
     cache.py                  Router LRU 缓存 (max_size=100)
+    schema_discovery.py       Schema Linking + 值级索引
+    task_system.py            Task board（成功/失败态）
+    confidence.py             SQL 置信度门
   tools/
     __init__.py               @tool 装饰器 (自动生成 JSON Schema)
-    schema.py                 list_tables / describe_table / get_schema_summary
+    schema.py                 list_tables / describe_table / get_schema_summary / discover_relevant_schema
     query.py                  run_query (只读 SELECT + HITL interrupt + 结果截断)
     analysis.py               analyze_results / compare_periods
     chart.py                  render_chart (暗色 HTML 多面板数据大屏)
     knowledge.py              search_knowledge_base / save_to_memory / read_memory / search_memory
+    metrics.py                lookup_metric（指标口径）
+    template_matcher.py       高频 SQL 模板优先匹配
     hbase.py                  HBase 内存模拟引擎 + 12种操作 + HITL + Shell命令生成
     hive.py                   Hive/Impala 语法模板 (9类型, 双方言)
   memory/
@@ -515,15 +536,26 @@ db-agent/
   utils/
     llm.py                    extract_text (多格式兼容)
     tracer.py                 TraceContext (节点trace + JSONL落盘 + summary)
+    opik_tracing.py           Opik wrap + annotate + 用户反馈打分
+    retry.py                  LLM API 指数退避
+    cost.py                   token 成本估算
+  opik-platform/              本地 Opik Docker Compose
   tests/
-    test_harness_smoke.py     ★ Harness 冒烟测试 (46条, 1.2s, 零API)
-    test_hbase.py             HBase 模拟器 (34条)
-    test_bigdata.py           HBase/Hive/Router (22条)
-    test_memory.py            Memory 系统 + memory_controller (31条)
-    test_agent.py             Agent 集成 (10条)
-    test_self_query.py        Self-Query 检索 (7条)
+    test_harness_smoke.py     ★ Harness 冒烟测试 (零API)
+    test_hbase.py             HBase 模拟器
+    test_bigdata.py           HBase/Hive/Router
+    test_memory.py            Memory 系统 + memory_controller
+    test_agent.py             Agent 集成
+    test_self_query.py        Self-Query 检索
+    test_recovery.py          错误恢复
+    test_feedback.py          自学习质量门
+    test_context_engineering.py  few-shot + 值级索引
+    test_template_matcher.py  SQL 模板匹配
+    test_orchestration.py     编排与 Strategy 工具
+    test_task_system.py       任务板状态机
+    test_eval_hitl.py         Eval / HITL 边界
     eval_cases.py             评估用例库 (36条, 4类别)
-    eval_runner.py            评估执行器 (fast/full/judge/suggest, LLM-as-Judge Kimi)
+    eval_runner.py            评估执行器 (fast/full/judge/suggest/--opik)
 ```
 
 ---
@@ -570,7 +602,7 @@ db-agent/
 | 课程 | 机制 | db-agent 实现 |
 |------|------|-------------|
 | s01 Agent Loop | 循环 + Bash | `streaming_agent()` while True + LangGraph graph |
-| s02 Tool Use | dispatch map | 14 tools + TOOL_HANDLERS dict, `@tool` 自动Schema |
+| s02 Tool Use | dispatch map | 15 tools + TOOL_HANDLERS dict, `@tool` 自动Schema |
 | s03 Permission | 审批管线 | entitlement.py (5角色, 表级, 行级改写, HITL interrupt) |
 | s04 Hooks | 工具前后插口 | guardrails L1(输入)/L2(SQL)/L3(输出) 三层拦截点 |
 | s05 TodoWrite | 先计划后执行 | TaskCreate/TaskUpdate + blockedBy 依赖图 |
@@ -579,11 +611,13 @@ db-agent/
 | s08 Context Compact | 上下文压缩 | HybridWindowManager 四层 (layer0原文/middle压缩对/old全局摘要) |
 | s09 Memory | 筛选/提取/整理 | VectorMemory (ChromaDB) + memory_controller (闲聊/Meta过滤) |
 | s10 System Prompt | 运行时组装 | `build_system_prompt()` 工厂函数 (分段拼接) |
-| s11 Error Recovery | 重试策略 | agent timeout 检测 + is_agent_timeout() + fallback 兜底 |
+| s11 Error Recovery | 重试策略 | 三层自愈：API 指数退避重试 (utils/retry.py) + SQL 错误回喂重写 (自愈协议, 最多2次) + Agent 失败回 Router 重规划 (_maybe_replan, 上限1次) |
+| — | 动态上下文 | Schema Linking + 值级索引 (schema_discovery) + 检索式 few-shot (sql_examples，Vanna 模式) |
+| — | 自学习闭环 | 成功 SQL（run_query 工具层捕获）/ HITL 批准 → 质量门 dry-run → 回流样例库 (rag/feedback.py)；AUTO_LEARN_SQL 可关 |
 | s12 Task System | 磁盘持久化 | LangGraph Checkpointer (agent_state.db, cross-turn state恢复) |
 | s13 Background Tasks | 后台执行 | Agent tool run_in_background + Monitor stream |
 | s15 Agent Teams | 多Agent协作 | 6 agent LangGraph 编排 (Router→SQL/HBase/Hive/Strategy→Analysis) |
-| — | 可观测性 | TraceContext (logs/traces/*.jsonl, node级耗时+token+错误) |
+| — | 可观测性 | TraceContext JSONL + Opik（LangGraph/LLM span/Feedback/Experiment） |
 | — | HITL | interrupt() 双层审批 (SQL敏感列 + HBase写操作) |
 | — | 缓存 | RouterCache LRU (同样 query 零重复 LLM 调用) |
 | — | 数据模拟 | HBase 内存 KV 引擎 (3表12操作) + Hive SQLite 模拟 (3表) |

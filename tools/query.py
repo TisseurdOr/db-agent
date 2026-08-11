@@ -4,6 +4,22 @@ import sqlite3
 from db.seed import DB_PATH
 from multi_agent.entitlement import get_user, check_entitlement, resolve_user_id, deny_payload
 
+# 自学习回流用：记录最近一次成功执行的 SELECT。
+# Agent 最终回答经常不带完整 SQL，从工具层捕获比从自然语言抽更可靠。
+_last_successful_sql: dict = {"sql": None}
+
+
+def pop_last_successful_sql() -> str | None:
+    """取出并清空最近一次成功 SQL；没有则返回 None。"""
+    sql = _last_successful_sql["sql"]
+    _last_successful_sql["sql"] = None
+    return sql
+
+
+def peek_last_successful_sql() -> str | None:
+    return _last_successful_sql["sql"]
+
+
 RUN_QUERY_TOOL = {
     "name": "run_query",
     "description": (
@@ -76,6 +92,7 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
         rows = [dict(row) for row in cursor.fetchmany(max_rows + 1)]
         truncated = len(rows) > max_rows
         rows = rows[:max_rows] if truncated else rows
+        _last_successful_sql["sql"] = sql  # 仅成功路径写入，供自学习回流
         return {
             "rows": rows,
             "count": len(rows),
@@ -88,11 +105,17 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
             "summary": generate_summary(rows) if truncated else None,
         }
     except Exception as e:
+        # retryable=True 是给 Agent 的自愈信号：结合 error + hint 重写 SQL 重试
+        # （重试预算由 Agent prompt 约束为 2 次，max_turns 兜底防死循环）。
         return {
             "error": str(e),
             "error_type": type(e).__name__,
             "sql": sql,
-            "hint": "检查表名/字段名是否正确，可先调 describe_table 确认字段后重试。",
+            "retryable": True,
+            "hint": (
+                "先调 describe_table 核对正确的表名/字段名，"
+                "再根据本错误信息重写 SQL 重试（最多重试 2 次，仍失败则如实报告）。"
+            ),
         }
     finally:
         conn.close()

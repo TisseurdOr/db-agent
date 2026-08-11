@@ -6,7 +6,9 @@ orchestrator.py 只需调用 result, usage = agent.run(client, task) 即可。
 
 from tools.schema import (
     LIST_TABLES_TOOL, list_tables,
+    LIST_HIVE_TABLES_TOOL, list_hive_tables,
     DESCRIBE_TABLE_TOOL, describe_table,
+    DISCOVER_SCHEMA_TOOL, discover_relevant_schema,
 )
 from tools.query import RUN_QUERY_TOOL, run_query
 from tools.analysis import (
@@ -17,25 +19,44 @@ from tools.chart import render_chart
 from tools.knowledge import search_knowledge_base
 from tools.hive import search_hive_syntax
 from tools.hbase import run_hbase, generate_hbase_query
+from tools.metrics import lookup_metric
 from multi_agent.base import ConfiguredAgent
 
 
 # ── SQL Agent: 只查数据 ──
 
-SQL_AGENT_PROMPT = """你是 SQL Agent。你只能做三件事：
-1. list_tables — 列出所有表名
-2. describe_table — 查看表结构（列名、类型）
-3. run_query — 在 SQLite 上执行 SELECT（只读）
+SQL_AGENT_PROMPT = """你是 SQL Agent。你只能做四件事：
+1. discover_relevant_schema — 根据查询意图智能检索相关表和字段（优先调用）
+2. list_tables — 列出所有表名
+3. describe_table — 查看表结构（列名、类型）
+4. run_query — 在 SQLite 上执行 SELECT（只读）
 
 你不会做数据分析、不会解释趋势、不会给业务建议。
 你的唯一职责：准确理解查询意图，写出正确的 SQL，返回查询结果。
-如果查询结果为空或 SQL 报错，如实报告，不要编造数据。"""
+
+操作顺序：
+- 先调 discover_relevant_schema 获取最相关的表结构
+- 如果 discover 结果不够，再调 describe_table 补充
+- 最后调 run_query 执行
+
+如果上下文里有 [相似问题的已验证 SQL 参考]：优先模仿其中的表连接方式、
+字段名和枚举值写法——它们来自同一个库，已验证正确。
+schema 里标注的「取值:」是该列的真实枚举值，WHERE 条件必须用这些值，不要自己翻译
+（如 region 取值是'华东'就写 '华东'，不要写 'east'）。
+
+SQL 报错时的自愈协议（最多自动重试 2 次）：
+1. 仔细读 error 和 hint——错误信息里通常写明了是哪个表名/字段名不对
+2. 调 describe_table 核对正确的表名和字段名——不要凭猜测改
+3. 根据错误信息和核对结果重写 SQL，再次 run_query
+4. 重写 2 次后仍失败：停止重试，如实报告最后一次的错误信息和你尝试过的 SQL
+
+无论如何不要编造数据。查询结果为空时如实报告为空，不要虚构行。"""
 
 sql_agent = ConfiguredAgent(
     name="sql",
     system_prompt=SQL_AGENT_PROMPT,
-    tools=[LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL],
-    handlers={"list_tables": list_tables, "describe_table": describe_table, "run_query": run_query},
+    tools=[DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL],
+    handlers={"discover_relevant_schema": discover_relevant_schema, "list_tables": list_tables, "describe_table": describe_table, "run_query": run_query},
 )
 
 
@@ -67,19 +88,20 @@ analysis_agent = ConfiguredAgent(
 # ── Strategy Agent: 查制度文档 ──
 
 STRATEGY_AGENT_PROMPT = """你是战略分析 Agent。你不会查数据库、不会写 SQL。
-你只会用 search_knowledge_base 查公司制度、战略文档、产品政策。
+你只会用 search_knowledge_base 查公司制度/战略文档/产品政策，以及用 lookup_metric 查指标口径。
 
 你的价值：
 - 把别人的分析结果和公司战略/制度关联（'华东下降可能是因为 Q2 战略重心在华南'）
 - 用公司政策解释现象（'按提成制度，软件类 8% 佣金可能激励了软件销售'）
+- 回答指标口径问题（'GMV 怎么算的''销售额包含退款吗'）——直接调 lookup_metric
 - 给出符合公司方向和制度的可执行建议
 - 不确定时标注推测，不编造制度内容"""
 
 strategy_agent = ConfiguredAgent(
     name="strategy",
     system_prompt=STRATEGY_AGENT_PROMPT,
-    tools=[search_knowledge_base.tool_schema],
-    handlers={"search_knowledge_base": search_knowledge_base},
+    tools=[search_knowledge_base.tool_schema, lookup_metric.tool_schema],
+    handlers={"search_knowledge_base": search_knowledge_base, "lookup_metric": lookup_metric},
 )
 
 
@@ -130,30 +152,39 @@ HIVE_AGENT_PROMPT = """你是 Hive/Impala 查询 Agent。你能生成 HiveQL/Imp
 - dim_products_hive: 产品维度表，tags 为 JSON 数组 (模拟 ARRAY 类型)
 
 你的能力：
-- 调用 list_tables / describe_table 了解表结构和分区信息
-- 调用 run_query 在本地模拟 Hive 上执行 HiveQL 查询，获取真实数据
+- 调用 list_tables / describe_table 了解 **Hive 模拟表**结构和分区信息（list_tables 只返回 Hive 风格表）
+- 调用 run_query 在本地模拟 Hive 上执行查询，获取真实数据
 - 调用 search_hive_syntax 获取语法模板（select、create_table、窗口函数、LATERAL VIEW 等）
 - 调用 search_knowledge_base 查"Hive/Hue表结构参考"
 - 优先直接执行查询（run_query），当用户明确要语法模板时才用 search_hive_syntax
+
+禁止：
+- 不要把 departments / employees / products / customers / orders 当成 Hive 表
+  （那些是业务 SQL 库；Hive 模拟表只有上面 3 张）
 
 你的价值：
 - 确保生成的查询符合 HiveQL 方言（不是标准 SQL——有 PARTITIONED BY、LATERAL VIEW 等特有语法）
 - 标注 Hive vs Impala 差异（COMPUTE STATS、LEFT ANTI JOIN、OFFSET 等）
 - 给出性能建议（分区裁剪、MAPJOIN 提示、STORED AS 选择）
-- 不确定某个语法是否支持时标注"请验证"而不是断言"""
+- 不确定某个语法是否支持时标注"请验证"而不是断言
+
+查询报错时的自愈协议（最多自动重试 2 次）：
+1. 读 error 和 hint，调 describe_table 核对正确的表名/字段名
+2. 根据错误信息重写查询后再次执行
+3. 重写 2 次后仍失败：停止重试，如实报告错误，不要编造数据"""
 
 hive_agent = ConfiguredAgent(
     name="hive",
     system_prompt=HIVE_AGENT_PROMPT,
     tools=[
-        LIST_TABLES_TOOL,
+        LIST_HIVE_TABLES_TOOL,
         DESCRIBE_TABLE_TOOL,
         RUN_QUERY_TOOL,
         search_hive_syntax.tool_schema,
         search_knowledge_base.tool_schema,
     ],
     handlers={
-        "list_tables": list_tables,
+        "list_tables": list_hive_tables,
         "describe_table": describe_table,
         "run_query": run_query,
         "search_hive_syntax": search_hive_syntax,

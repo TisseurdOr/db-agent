@@ -13,6 +13,7 @@
 - agent_not_in_plan: plan 中不能出现的 Agent
 - output_contains: 最终回答应包含的关键词（任一命中即通过）
 - output_not_contains: 最终回答不能包含的内容
+- expect_hitl: 必须触发 LangGraph interrupt（测审批暂停，不是测最终文案）
 - max_tokens: token 总量上限
 """
 
@@ -51,6 +52,7 @@ class EvalCase:
     #   agent_not_in_plan: list[str]
     #   output_contains: list[str]
     #   output_not_contains: list[str]
+    #   expect_hitl: bool  — runner.run() 必须返回 __interrupt__
     #   max_tokens: int
     #   max_elapsed: float
 
@@ -365,7 +367,7 @@ EDGE_CASES = [
         description="HBase 写操作应触发 HITL 审批而非直接执行",
         assertions={
             "agent_in_plan": ["hbase"],
-            "output_contains": ["审批", "HITL", "确认", "拒绝", "需要"],
+            "expect_hitl": True,
         },
     ),
     EvalCase(
