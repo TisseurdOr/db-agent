@@ -1,0 +1,25 @@
+{
+  "direction": "TB",
+  "nodes": [
+    {"id": "agent", "label": "Agent / Tool 调用", "width": 140, "height": 55},
+
+    {"id": "trace", "label": "TraceContext\nSpan 层级埋点", "group": "埋点与成本", "width": 150, "height": 60},
+    {"id": "mask", "label": "SQL 掩码\nVALUES/密码/手机号", "group": "埋点与成本", "width": 150, "height": 60},
+    {"id": "jsonl", "label": "JSONL 落盘\nlogs/traces/按日", "group": "埋点与成本", "width": 150, "height": 60},
+    {"id": "cost", "label": "Cost 计费\n按模型定价表", "group": "埋点与成本", "width": 140, "height": 60},
+
+    {"id": "opik", "label": "Opik\nwrap_langgraph\n全链路追踪", "group": "平台与告警", "width": 160, "height": 60},
+    {"id": "monitor", "label": "Pipeline Monitor\nSLA/连续失败\n成功率/耗时异常", "group": "平台与告警", "width": 170, "height": 65},
+    {"id": "alert", "label": "告警\n去重·分级", "group": "平台与告警", "width": 130, "height": 55,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;"}
+  ],
+  "edges": [
+    {"source": "agent", "target": "trace", "label": "埋点"},
+    {"source": "trace", "target": "mask", "label": "脱敏"},
+    {"source": "mask", "target": "jsonl", "label": "写日志"},
+    {"source": "trace", "target": "cost", "label": "token统计"},
+    {"source": "trace", "target": "opik", "label": "上报"},
+    {"source": "opik", "target": "monitor", "label": "运行数据"},
+    {"source": "monitor", "target": "alert", "label": "触发"}
+  ]
+}

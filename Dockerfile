@@ -29,7 +29,7 @@ RUN uv pip install --system --no-cache \
 COPY . .
 
 # Create data directories
-RUN mkdir -p /app/db /app/memory/chroma_db
+RUN mkdir -p /app/db /app/harness/memory/chroma_db
 
 ENTRYPOINT ["python", "main.py"]
 CMD ["--mode", "single", "--user", "viewer"]

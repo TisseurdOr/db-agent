@@ -11,7 +11,7 @@ services:
     volumes:
       # 持久化数据（SQLite + ChromaDB）
       - ./db:/app/db
-      - ./memory/chroma_db:/app/memory/chroma_db
+      - ./harness/memory/chroma_db:/app/harness/memory/chroma_db
       # 可选：挂载源码目录用于开发热更新
       # - .:/app
     command: ["--mode", "multi", "--user", "${AGENT_USER:-viewer}"]

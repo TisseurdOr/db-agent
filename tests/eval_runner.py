@@ -69,8 +69,8 @@ from tests.eval_cases import (
     get_cases_by_category, get_fast_cases, get_full_cases,
     EvalCase,
 )
-from utils.llm import extract_text
-from multi_agent.guardrails import guard_input, guard_sql
+from harness.observation.llm import extract_text
+from harness.constraints.guardrails import guard_input, guard_sql
 
 JUDGE_PROMPT = """你是 Agent 输出质量评估员。对以下回答从三个维度打分（1-5 分）:
 
@@ -494,7 +494,7 @@ async def main():
 
     if use_opik:
         try:
-            from utils.opik_eval import sync_eval_dataset
+            from harness.observation.opik_eval import sync_eval_dataset
             from tests.eval_cases import ALL_CASES as _ALL_START
             n = len(sync_eval_dataset(_ALL_START))
             print(f"{CYAN}Opik dataset synced ({n} cases){RESET}")
@@ -527,7 +527,7 @@ async def main():
                 api_key=api_key,
                 base_url=os.getenv("ANTHROPIC_BASE_URL"),
             )
-            from multi_agent.orchestrator import MultiAgentRunner
+            from harness.orchestration.multi.orchestrator import MultiAgentRunner
 
             print_header(f"完整评估 ({len(full_cases)} 条)")
             runner = await MultiAgentRunner.create(
@@ -590,7 +590,7 @@ async def main():
         elif args.id:
             mode = "single"
         try:
-            from utils.opik_eval import sync_eval_dataset, upload_eval_experiment
+            from harness.observation.opik_eval import sync_eval_dataset, upload_eval_experiment
             from tests.eval_cases import ALL_CASES as _ALL
 
             print_header("Opik Experiment 上传")

@@ -1,0 +1,61 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="group_0" value="埋点与成本" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="6" y="66" width="358" height="308" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_1" value="平台与告警" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontColor=#82b366;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="376" y="166" width="218" height="293" as="geometry"/>
+        </mxCell>
+        <mxCell id="agent" value="Agent / Tool 调用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="200" y="0" width="140" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="trace" value="TraceContext&#xa;Span 层级埋点" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="184" y="24" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="mask" value="SQL 掩码&#xa;VALUES/密码/手机号" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="124" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="jsonl" value="JSONL 落盘&#xa;logs/traces/按日" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="224" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="cost" value="Cost 计费&#xa;按模型定价表" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="194" y="124" width="140" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="opik" value="Opik&#xa;wrap_langgraph&#xa;全链路追踪" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="monitor" value="Pipeline Monitor&#xa;SLA/连续失败&#xa;成功率/耗时异常" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="114" width="170" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="alert" value="告警&#xa;去重·分级" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="group_1">
+          <mxGeometry x="44" y="214" width="130" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="埋点" style="html=1;rounded=0;" edge="1" parent="1" source="agent" target="trace">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="270" y="60"/><mxPoint x="270" y="80"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="脱敏" style="html=1;rounded=0;" edge="1" parent="1" source="trace" target="mask">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="200" y="180"/><mxPoint x="200" y="220"/><mxPoint x="200" y="220"/><mxPoint x="200" y="220"/><mxPoint x="190" y="220"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="写日志" style="html=1;rounded=0;" edge="1" parent="1" source="mask" target="jsonl">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="110" y="250"/><mxPoint x="110" y="270"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="token统计" style="html=1;rounded=0;" edge="1" parent="1" source="trace" target="cost">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="270" y="150"/><mxPoint x="270" y="180"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="上报" style="html=1;rounded=0;" edge="1" parent="1" source="trace" target="opik">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="400" y="120"/><mxPoint x="480" y="120"/><mxPoint x="480" y="120"/><mxPoint x="480" y="120"/><mxPoint x="480" y="180"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="运行数据" style="html=1;rounded=0;" edge="1" parent="1" source="opik" target="monitor">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="480" y="250"/><mxPoint x="480" y="270"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="触发" style="html=1;rounded=0;" edge="1" parent="1" source="monitor" target="alert">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="480" y="350"/><mxPoint x="480" y="370"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

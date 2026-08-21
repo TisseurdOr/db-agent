@@ -1,25 +1,18 @@
 """Self-Query 单元 / 集成测试。
 
 parse_self_query 用 mock LLM，不耗 API。
-self_query_retrieve 的过滤/降级路径需要 embedding API。
+self_query_retrieve 的过滤/降级路径用离线确定性 embedding
+（tests/fake_embedding.py 注入 VectorMemory），不依赖网络。
 """
 
 import json
-import os
 import uuid
 from types import SimpleNamespace
 
 import pytest
-from dotenv import load_dotenv
+from tests.fake_embedding import fake_embedding
 
-load_dotenv()
-
-from rag.self_query import parse_self_query, self_query_retrieve, _sanitize_filters
-
-requires_embedding = pytest.mark.skipif(
-    not os.getenv("EMBEDDING_API_KEY"),
-    reason="需要 EMBEDDING_API_KEY 才能跑向量检索测试",
-)
+from harness.context.self_query import parse_self_query, self_query_retrieve, _sanitize_filters
 
 
 class _FakeLLM:
@@ -39,9 +32,9 @@ class _FakeLLM:
 
 @pytest.fixture
 def vector_mem():
-    from memory.vector_store import VectorMemory
+    from harness.memory.vector_store import VectorMemory
     col_name = f"test_self_query_{uuid.uuid4().hex[:8]}"
-    mem = VectorMemory(collection_name=col_name)
+    mem = VectorMemory(collection_name=col_name, embed_fn=fake_embedding)
     yield mem
     mem.client.delete_collection(col_name)
 
@@ -89,7 +82,6 @@ def test_parse_self_query_invalid_json_fallback():
 # ─── retrieve：过滤命中 + 降级 ─────────────────────────────────
 
 
-@requires_embedding
 @pytest.mark.asyncio
 async def test_self_query_retrieve_filters_by_year(vector_mem):
     vector_mem.remember(
@@ -121,7 +113,6 @@ async def test_self_query_retrieve_filters_by_year(vector_mem):
     assert all(r["metadata"].get("year") == "2026" for r in results)
 
 
-@requires_embedding
 @pytest.mark.asyncio
 async def test_self_query_retrieve_degrades_when_filters_too_strict(vector_mem):
     """filters 过严 0 命中 → 去掉业务 filters 后仍应返回结果。"""
@@ -143,7 +134,6 @@ async def test_self_query_retrieve_degrades_when_filters_too_strict(vector_mem):
     assert "北京" in results[0]["text"]
 
 
-@requires_embedding
 @pytest.mark.asyncio
 async def test_self_query_memory_type_override(vector_mem):
     """Tool 显式传入 memory_type 应覆盖 LLM 抽取。"""

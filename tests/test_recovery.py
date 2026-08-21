@@ -5,10 +5,10 @@
 
 import pytest
 
-from utils.retry import is_retriable, call_with_retry, acall_with_retry
-from multi_agent.orchestrator import _maybe_replan, MAX_REPLAN_ATTEMPTS
-from multi_agent.agents import SQL_AGENT_PROMPT, HIVE_AGENT_PROMPT
-from tools.query import run_query
+from harness.constraints.retry import is_retriable, call_with_retry, acall_with_retry
+from harness.orchestration.multi.orchestrator import _maybe_replan, MAX_REPLAN_ATTEMPTS
+from harness.orchestration.multi.agents import SQL_AGENT_PROMPT, HIVE_AGENT_PROMPT
+from harness.tools.query import run_query
 
 
 # ── 假异常：带 status_code 属性，is_retriable 靠它判断 ──
@@ -143,7 +143,7 @@ def test_replan_budget_exhausted():
 
 def test_task_board_marks_failure(tmp_path):
     """Agent 失败时任务标 failed（✗），而不是谎报 completed；下游任务保持阻塞。"""
-    from multi_agent.task_system import TaskManager
+    from harness.orchestration.multi.task_system import TaskManager
 
     tm = TaskManager(tasks_dir=tmp_path)
     tasks = tm.materialize_from_plan(
@@ -157,7 +157,7 @@ def test_task_board_marks_failure(tmp_path):
 
 def test_trace_elapsed_never_negative():
     """trace 总耗时必须非负——回归：finished_at 曾用 monotonic 混了 time.time 基准。"""
-    from utils.tracer import TraceContext
+    from harness.observation.tracer import TraceContext
 
     trace = TraceContext("测试查询")
     span = trace.start_span("sql", "任务")
@@ -173,7 +173,7 @@ def test_graph_has_replan_edges():
     背景：_maybe_replan 返回 next="router"，但 targets 映射里最初漏了
     "router" 键，运行时 KeyError——单测只测纯逻辑抓不到，必须测图本身。
     """
-    from multi_agent.orchestrator import build_multi_agent_graph
+    from harness.orchestration.multi.orchestrator import build_multi_agent_graph
 
     graph = build_multi_agent_graph()
     edges = {(e.source, e.target) for e in graph.get_graph().edges}
@@ -188,7 +188,7 @@ def test_graph_has_replan_edges():
 
 from types import SimpleNamespace
 
-from agent import streaming_agent
+from harness.orchestration.single.agent import streaming_agent
 
 
 class StubBudget:

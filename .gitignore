@@ -21,7 +21,7 @@ db/*.db-wal
 pipeline_monitor/*.db
 
 # ChromaDB 向量库（本地数据，可重新生成，不入库）
-memory/chroma_db/
+harness/memory/chroma_db/
 
 # 生成的图表 / 运行产物
 charts/
@@ -53,10 +53,7 @@ scripts/convert_resume_pdf.py
 *.fdb_latexmk
 
 # 个人学习 / 面试材料（非工程文档）
-lessons/
-learning-records/
-reference/
-assets/
+learning/
 
 docs/interview*
 docs/*面试*
@@ -65,9 +62,27 @@ docs/resume-projects.md
 docs/learning-plan*
 docs/7-day-plan.html
 
-# 日期笔记默认忽略；仅保留工程相关操作手册 / 改进日志
+# 日期笔记默认忽略；仅保留工程相关操作手册 / 合集
 docs/2026-*
-!docs/2026-06-24_harness-improvements.md
-!docs/2026-06-24_改进日志.md
 !docs/2026-08-05_错误恢复操作手册.md
 !docs/2026-08-06_自学习闭环操作手册.md
+!docs/2026-08-06_项目复盘报告.md
+!docs/fin-agent.md
+!docs/知识归纳.md
+
+# sidecar may contain large resume/fonts artifacts — tracked selectively
+
+# 运行时 DB / 编辑器状态 / 生成物（不入库）
+**/*.db
+**/*.db-shm
+**/*.db-wal
+docs/.obsidian/
+resume-output/
+docs/mermaid.min.js
+sidecar/memory/
+
+# 个人面试笔记（非工程文档）
+docs/意图识别.md
+docs/模型 Fallback 链.md
+docs/项目详细拆解.md
+docs/anki-评测.tsv

@@ -5,11 +5,11 @@
 #   2. 注册 Tools + Tool Handlers
 #   3. 用 prompts/system_prompt.py 工厂函数生成 System Prompt
 #   4. 创建 Anthropic client（支持 DeepSeek 兼容 endpoint）
-#   5. 进入 CLI 对话循环 → 调 agent.streaming_agent()
+#   5. 进入 CLI 对话循环 → 调 streaming_agent()
 #
 # 设计决策：
-#   - 用 agent.streaming_agent 而非旧 streaming_agent.py：
-#     agent.py 是合并后的统一实现，有 cache_control、temperature=0、
+#   - 用 harness.orchestration.single.streaming_agent：
+#     single_agent/agent.py 是统一实现，有 cache_control、temperature=0、
 #     结构化错误处理、Tool 结果可视化。旧版 streaming_agent.py 已迁到 archive/。
 #   - System Prompt 用 Python 工厂函数而非 MD 文件：
 #     可注入 db_type, user_role, extra_context（Phase 3 memory block 注入点）。
@@ -26,71 +26,19 @@ load_dotenv()
 
 from anthropic import Anthropic
 from db.seed import init_db
-from prompts.system_prompt import build_system_prompt
-from memory.short_term_memory import ConversationManager
-from memory.vector_store import VectorMemory
-from memory.memory_controller import (
+from harness.context.system_prompt import build_system_prompt
+from harness.memory.short_term_memory import ConversationManager
+from harness.memory.vector_store import VectorMemory
+from harness.memory.memory_controller import (
     is_chitchat, is_meta_question, is_meta_memory,
     should_vector_recall, should_remember,
 )
-# 注册所有 Tool —— Tool defs 和 handler 在这里绑定，
-# 传给 agent.streaming_agent() 时作为一个整体。
-# 好处：测试时可以传 mock handler，main.py 传真实 handler，agent.py 不感知。
-from tools.schema import (
-    LIST_TABLES_TOOL, list_tables,
-    DESCRIBE_TABLE_TOOL, describe_table,
-    GET_SCHEMA_SUMMARY_TOOL, get_schema_summary,
-)
-from tools.query import RUN_QUERY_TOOL, run_query
-from tools.analysis import (
-    ANALYZE_RESULTS_TOOL, analyze_results,
-    COMPARE_PERIODS_TOOL, compare_periods,
-)
-from tools.chart import render_chart
-from tools.knowledge import (
-    search_knowledge_base, save_to_memory, read_memory, search_memory,
-    set_vector_memory, set_llm_client,
-)
-from tools.hive import search_hive_syntax
-from tools.hbase import run_hbase, _seed_hbase_store, generate_hbase_query
-from tools.template_matcher import get_template_matcher, init_metric_registry, match_sql_template
-from multi_agent.schema_discovery import get_schema_discovery
+from harness.tools.knowledge import set_vector_memory, set_llm_client
+from harness.tools.hbase import _seed_hbase_store
+from harness.context.template_matcher import get_template_matcher, init_metric_registry
+from harness.context.schema_discovery import get_schema_discovery
+from harness.orchestration.single.tools_bundle import TOOLS, TOOL_HANDLERS
 
-TOOLS = [
-    LIST_TABLES_TOOL,
-    DESCRIBE_TABLE_TOOL,
-    GET_SCHEMA_SUMMARY_TOOL,
-    RUN_QUERY_TOOL,
-    ANALYZE_RESULTS_TOOL,
-    COMPARE_PERIODS_TOOL,
-    render_chart.tool_schema,
-    search_knowledge_base.tool_schema,
-    save_to_memory.tool_schema,
-    read_memory.tool_schema,
-    search_memory.tool_schema,
-    generate_hbase_query.tool_schema,
-    search_hive_syntax.tool_schema,
-    run_hbase.tool_schema,
-    match_sql_template.tool_schema,
-]
-
-TOOL_HANDLERS = {
-    "list_tables": list_tables,
-    "describe_table": describe_table,
-    "get_schema_summary": get_schema_summary,
-    "run_query": run_query,
-    "analyze_results": analyze_results,
-    "compare_periods": compare_periods,
-    "render_chart": render_chart,
-    "search_knowledge_base": search_knowledge_base,
-    "save_to_memory": save_to_memory,
-    "read_memory": read_memory,
-    "search_memory": search_memory,
-    "generate_hbase_query": generate_hbase_query,
-    "search_hive_syntax": search_hive_syntax,
-    "run_hbase": run_hbase,
-    "match_sql_template": match_sql_template,
-}
 # 用户输入
 #   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
 #   → runner.run(query, memories_text)
@@ -168,7 +116,7 @@ async def main():
         api_key=os.environ["ANTHROPIC_API_KEY"],
         base_url=os.environ.get("ANTHROPIC_BASE_URL"),
     )
-    from utils.opik_tracing import wrap_anthropic_client
+    from harness.observation.opik_tracing import wrap_anthropic_client
     client = wrap_anthropic_client(client)
 
     # 对话记忆管理器——最近 N 轮保留原文，更早的压缩成摘要。
@@ -192,7 +140,7 @@ async def main():
     print("  [制度]  销售人员的提成比例是多少")
     print("输入 quit / 退出 结束会话（Ctrl+C / Ctrl+D 同样有效）\n")
 
-    from agent import streaming_agent
+    from harness.orchestration.single import streaming_agent
 
     # ── multi 模式：进程内只建一次 Runner ──
     # Checkpointer 靠 thread_id 识别"同一本笔记本"——
@@ -201,7 +149,7 @@ async def main():
     # 内部用 AsyncSqliteSaver，state 存到 db/agent_state.db，进程重启后还在。
     multi_runner = None
     if args.mode == "multi":
-        from multi_agent.orchestrator import MultiAgentRunner
+        from harness.orchestration.multi.orchestrator import MultiAgentRunner
         multi_runner = await MultiAgentRunner.create(
             client, model=args.model,
             enable_data_quality=args.dq,
@@ -302,7 +250,7 @@ async def main():
                     result = await multi_runner.resume(approved=approved)
                     # 自学习：用户批准的 SQL（敏感列 HITL / 置信度门）有人工背书
                     if approved and interrupt_data.get("sql"):
-                        from rag.feedback import learn_from_hitl
+                        from harness.memory.feedback import learn_from_hitl
                         learn_from_hitl(user_input, interrupt_data.get("sql", ""))
                     print(f"\nAgent: {result}")
                 else:
@@ -339,7 +287,7 @@ async def main():
             checkpoint_info = ""
             if args.mode == "multi":
                 checkpoint_info = f", checkpoint={multi_runner.checkpoint_db.name}"
-                from utils.opik_tracing import opik_tag_memory
+                from harness.observation.opik_tracing import opik_tag_memory
                 opik_tag_memory(est)
             print(
                 f"[memory] 本轮 tokens≈{est['total']} "

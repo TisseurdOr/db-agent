@@ -1,7 +1,7 @@
 """测试 HBase 内存模拟引擎: run_hbase + _seed_hbase_store。"""
 
 import pytest
-from tools.hbase import (
+from harness.tools.hbase import (
     run_hbase, _seed_hbase_store, _HBASE_STORE, _HBASE_META, _HBASE_ROW_ORDER,
     _HBASE_DISABLED, _apply_prefix_filter, _parse_simple_filter,
 )

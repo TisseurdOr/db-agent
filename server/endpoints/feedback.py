@@ -34,12 +34,12 @@ async def submit_feedback(req: FeedbackRequest):
     # Wire thumbs-up to self-learning feedback loop
     if req.rating == "up":
         try:
-            from rag.feedback import learn_from_success
+            from harness.memory.feedback import learn_from_success
             learn_from_success(req.query, result_text=req.answer, sql=req.sql or None, source="user")
         except Exception:
             pass  # self-learning is best-effort
 
-    from utils.opik_tracing import log_user_feedback
+    from harness.observation.opik_tracing import log_user_feedback
     opik_result = log_user_feedback(
         trace_ref=req.opik_trace_id or req.trace_id,
         rating=req.rating,

@@ -1,6 +1,6 @@
 """Task System 冒烟：create / claim / blockedBy / complete 解锁。"""
 
-from multi_agent.task_system import TaskManager
+from harness.orchestration.multi.task_system import TaskManager
 
 
 def test_create_get_list(tmp_path):

@@ -26,11 +26,11 @@ load_dotenv()
 
 from anthropic import Anthropic
 from db.seed import init_db
-from tools.hbase import _seed_hbase_store
-from tools.template_matcher import init_metric_registry
-from multi_agent.schema_discovery import get_schema_discovery
-from multi_agent.orchestrator import MultiAgentRunner
-from utils.opik_tracing import wrap_anthropic_client, track_entrypoint, flush_opik
+from harness.tools.hbase import _seed_hbase_store
+from harness.context.template_matcher import init_metric_registry
+from harness.context.schema_discovery import get_schema_discovery
+from harness.orchestration.multi.orchestrator import MultiAgentRunner
+from harness.observation.opik_tracing import wrap_anthropic_client, track_entrypoint, flush_opik
 
 _runner: MultiAgentRunner | None = None
 _loop = asyncio.new_event_loop()

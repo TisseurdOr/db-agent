@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 load_dotenv()
 os.environ.setdefault("AGENT_USER", "dba")  # dba 可 run_query，演示不被权限拦截
 
-from utils.retry import acall_with_retry
+from harness.constraints.retry import acall_with_retry
 
 
 def banner(title: str):
@@ -60,7 +60,7 @@ async def demo_retry():
 async def demo_heal():
     banner("第 2 幕 · SQL 自愈：故意执行字段名错误的 SQL")
     from anthropic import Anthropic
-    from multi_agent.agents import sql_agent
+    from harness.orchestration.multi.agents import sql_agent
 
     client = Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],
@@ -87,8 +87,8 @@ TIMEOUT_MARK = "(Agent 在 8 轮内未完成)"
 async def demo_replan():
     banner("第 3 幕 · 失败重规划：给 SQL Agent 注入一次假超时")
     from anthropic import Anthropic
-    from multi_agent.agents import sql_agent
-    from multi_agent.orchestrator import MultiAgentRunner
+    from harness.orchestration.multi.agents import sql_agent
+    from harness.orchestration.multi.orchestrator import MultiAgentRunner
 
     client = Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],

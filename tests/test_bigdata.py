@@ -1,8 +1,8 @@
 """测试 bigdata 工具: generate_hbase_query + search_hive_syntax + Router 路由。"""
 
-from tools.hbase import generate_hbase_query
-from tools.hive import search_hive_syntax
-from multi_agent.router import route_override
+from harness.tools.hbase import generate_hbase_query
+from harness.tools.hive import search_hive_syntax
+from harness.orchestration.multi.router import route_override
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -196,7 +196,7 @@ def test_router_pasted_plain_select():
 def test_list_hive_tables_only_hive_sim():
     """Hive list_tables 只返回模拟数仓表，不含业务表。"""
     import os
-    from tools.schema import list_hive_tables, HIVE_SIM_TABLES
+    from harness.tools.schema import list_hive_tables, HIVE_SIM_TABLES
 
     os.environ["AGENT_USER"] = "analyst"
     result = list_hive_tables()

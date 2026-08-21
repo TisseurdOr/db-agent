@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from server.main import client, DEFAULT_MODEL
+from server.main import get_client, DEFAULT_MODEL
 from server.runner_wrapper import StreamingRunner, runner_registry
 from server.sse import SSEEvent, format_sse
 
@@ -40,7 +40,7 @@ async def run_query(req: QueryRequest):
         # Get or create runner for this session
         runner = await runner_registry.get_or_create(
             session_id=req.session_id,
-            client=client,
+            client=get_client(),
             model=model,
         )
 

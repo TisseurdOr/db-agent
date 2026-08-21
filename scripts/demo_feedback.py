@@ -26,7 +26,7 @@ def banner(title: str):
 def demo_quality():
     """第 1 幕：质量门（零 API）——该拦的拦、该放的放。"""
     banner("第 1 幕 · 质量门：脏样例绝不入库")
-    from rag.feedback import should_learn, extract_sql
+    from harness.memory.feedback import should_learn, extract_sql
 
     cases = [
         ("超时垃圾", "各部门订单", "(Agent 在 8 轮内未完成)", False),
@@ -61,8 +61,8 @@ async def demo_loop():
         print("   ⏭ 未配置 EMBEDDING_API_KEY，跳过本幕")
         return
 
-    from rag.feedback import learn_from_success
-    from rag.sql_examples import get_sql_fewshot, SQLExampleStore
+    from harness.memory.feedback import learn_from_success
+    from harness.context.sql_examples import get_sql_fewshot, SQLExampleStore
 
     # 用唯一问法，避免和种子样例混淆
     tag = uuid.uuid4().hex[:6]
@@ -99,7 +99,7 @@ WHERE d.name = '市场部'
         print(fewshot[:400])
 
     # 顺带验证 HITL 入口
-    from rag.feedback import learn_from_hitl
+    from harness.memory.feedback import learn_from_hitl
     hitl_q = f"员工平均工资_{tag}"
     hitl_sql = "SELECT ROUND(AVG(salary), 0) AS 平均工资 FROM employees WHERE status = 'active'"
     if learn_from_hitl(hitl_q, hitl_sql):
@@ -113,7 +113,7 @@ async def demo_live_agent():
         print("   ⏭ 未配置 ANTHROPIC_API_KEY，跳过")
         return
     from anthropic import Anthropic
-    from multi_agent.orchestrator import MultiAgentRunner
+    from harness.orchestration.multi.orchestrator import MultiAgentRunner
 
     client = Anthropic(
         api_key=os.environ["ANTHROPIC_API_KEY"],

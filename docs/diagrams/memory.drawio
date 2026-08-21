@@ -1,0 +1,46 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="group_0" value="自学习闭环" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontColor=#82b366;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="146" y="6" width="398" height="108" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_1" value="记忆存储" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="556" y="56" width="398" height="108" as="geometry"/>
+        </mxCell>
+        <mxCell id="conv" value="对话&#xa;query + answer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="0" y="80" width="130" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="short" value="短期记忆&#xa;ConversationManager&#xa;近10条 + 摘要" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="long" value="长期记忆&#xa;ChromaDB 向量库&#xa;HyDE + rerank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_1">
+          <mxGeometry x="214" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="feedback" value="自学习 feedback.py&#xa;成功/HITL信号&#xa;质量门控" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="fewshot" value="SQLExampleStore&#xa;新样例回流&#xa;(喂回上下文)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_0">
+          <mxGeometry x="214" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="会话内读写" style="html=1;rounded=0;" edge="1" parent="1" source="conv" target="short">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="130" y="110"/><mxPoint x="570" y="110"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="压缩沉淀" style="html=1;rounded=0;" edge="1" parent="1" source="short" target="long">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="740" y="110"/><mxPoint x="760" y="110"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="成功/失败信号" style="html=1;rounded=0;" edge="1" parent="1" source="conv" target="feedback">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="130" y="90"/><mxPoint x="150" y="90"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="合格样例" style="html=1;rounded=0;" edge="1" parent="1" source="feedback" target="fewshot">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="330" y="60"/><mxPoint x="350" y="60"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="下轮注入" style="html=1;rounded=0;" edge="1" parent="1" source="fewshot" target="short">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="520" y="80"/><mxPoint x="570" y="80"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

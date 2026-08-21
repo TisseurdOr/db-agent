@@ -6,11 +6,11 @@ import time
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
-from multi_agent.orchestrator import MultiAgentRunner
-from multi_agent.guardrails import guard_input
-from multi_agent.state import MultiAgentState
-from utils.tracer import TraceContext
-from utils.opik_tracing import (
+from harness.orchestration.multi.orchestrator import MultiAgentRunner
+from harness.constraints.guardrails import guard_input
+from harness.orchestration.multi.state import MultiAgentState
+from harness.observation.tracer import TraceContext
+from harness.observation.opik_tracing import (
     flush_opik,
     get_current_opik_trace_id,
     capture_opik_trace_id_for_graph,

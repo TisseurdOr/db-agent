@@ -1,0 +1,79 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="group_0" value="工具定义" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="276" y="6" width="218" height="398" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_1" value="工具执行" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontColor=#82b366;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="6" y="416" width="758" height="203" as="geometry"/>
+        </mxCell>
+        <mxCell id="pyfunc" value="普通 Python 函数&#xa;(type hints + docstring)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="34" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="decorator" value="@tool 装饰器&#xa;inspect 反射&#xa;自动生成 Schema" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="34" y="124" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="schema" value="JSON Schema&#xa;name/description&#xa;input_schema" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="214" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="agent" value="Agent&#xa;schema(给LLM看)&#xa;handler(自己跑)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="34" y="314" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="data" value="数据工具&#xa;run_query · list_tables&#xa;describe · discover" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="24" width="170" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="analysis" value="分析工具&#xa;analyze · compare&#xa;render_chart" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="214" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="knowledge" value="知识工具&#xa;search_knowledge&#xa;lookup_metric" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="394" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="storage" value="存储工具&#xa;run_hbase&#xa;search_hive_syntax" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="574" y="24" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="entitle" value="权限过滤&#xa;entitlement 检查" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="group_1">
+          <mxGeometry x="314" y="124" width="140" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="包裹" style="html=1;rounded=0;" edge="1" parent="1" source="pyfunc" target="decorator">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="390" y="90"/><mxPoint x="390" y="120"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="生成" style="html=1;rounded=0;" edge="1" parent="1" source="decorator" target="schema">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="380" y="190"/><mxPoint x="380" y="210"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="handler" style="html=1;rounded=0;" edge="1" parent="1" source="decorator" target="agent">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="460" y="190"/><mxPoint x="460" y="310"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="给LLM" style="html=1;rounded=0;" edge="1" parent="1" source="schema" target="agent">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="380" y="280"/><mxPoint x="380" y="310"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="调" style="html=1;rounded=0;" edge="1" parent="1" source="agent" target="data">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="230" y="350"/><mxPoint x="120" y="350"/><mxPoint x="120" y="350"/><mxPoint x="120" y="350"/><mxPoint x="120" y="420"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="调" style="html=1;rounded=0;" edge="1" parent="1" source="agent" target="analysis">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="340" y="380"/><mxPoint x="340" y="430"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="调" style="html=1;rounded=0;" edge="1" parent="1" source="agent" target="knowledge">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="430" y="380"/><mxPoint x="430" y="430"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="调" style="html=1;rounded=0;" edge="1" parent="1" source="agent" target="storage">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="550" y="350"/><mxPoint x="660" y="350"/><mxPoint x="660" y="350"/><mxPoint x="660" y="350"/><mxPoint x="660" y="430"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="先过滤" style="html=1;rounded=0;" edge="1" parent="1" source="data" target="entitle">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="120" y="530"/><mxPoint x="120" y="560"/><mxPoint x="120" y="560"/><mxPoint x="120" y="560"/><mxPoint x="310" y="560"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e9" value="先过滤" style="html=1;rounded=0;" edge="1" parent="1" source="analysis" target="entitle">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="350" y="500"/><mxPoint x="350" y="530"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e10" value="先过滤" style="html=1;rounded=0;" edge="1" parent="1" source="knowledge" target="entitle">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="430" y="500"/><mxPoint x="430" y="530"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e11" value="先过滤" style="html=1;rounded=0;" edge="1" parent="1" source="storage" target="entitle">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="660" y="530"/><mxPoint x="660" y="560"/><mxPoint x="660" y="560"/><mxPoint x="660" y="560"/><mxPoint x="470" y="560"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

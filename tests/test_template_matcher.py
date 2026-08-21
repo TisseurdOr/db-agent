@@ -17,7 +17,7 @@ import pytest
 # 确保项目根在 path 里
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tools.template_matcher import (
+from harness.context.template_matcher import (
     TemplateMatcher,
     MetricTemplate,
     MatchResult,
@@ -199,7 +199,7 @@ def test_fill_fails_gracefully(matcher):
 def test_tool_matched(matcher):
     """Tool 命中返回正确结构。"""
     # 注入模板到全局单例
-    import tools.template_matcher as tm
+    import harness.context.template_matcher as tm
     old = tm._matcher
     tm._matcher = matcher
     try:
@@ -214,7 +214,7 @@ def test_tool_matched(matcher):
 
 def test_tool_not_matched(matcher):
     """Tool 未命中返回正确结构。"""
-    import tools.template_matcher as tm
+    import harness.context.template_matcher as tm
     old = tm._matcher
     tm._matcher = matcher
     try:
@@ -276,7 +276,7 @@ def test_init_metric_registry():
     """初始化后模板库非空。"""
     import tempfile
     from pathlib import Path as P
-    import tools.template_matcher as tm
+    import harness.context.template_matcher as tm
 
     old_db = tm.METRIC_DB
     with tempfile.TemporaryDirectory() as tmpdir:

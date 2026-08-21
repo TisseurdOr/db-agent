@@ -7,10 +7,10 @@
 - Agent 装配：hive 用隔离版 list_tables、sql 挂 schema discovery、strategy 挂指标口径
 """
 
-import tools.schema as schema_mod
-from multi_agent.orchestrator import _next_step, MultiAgentRunner
-from multi_agent.agents import sql_agent, hive_agent, strategy_agent, HIVE_AGENT_PROMPT
-from tools.schema import list_hive_tables, discover_relevant_schema, HIVE_SIM_TABLES
+import harness.tools.schema as schema_mod
+from harness.orchestration.multi.orchestrator import _next_step, MultiAgentRunner
+from harness.orchestration.multi.agents import sql_agent, hive_agent, strategy_agent, HIVE_AGENT_PROMPT
+from harness.tools.schema import list_hive_tables, discover_relevant_schema, HIVE_SIM_TABLES
 
 
 # ═══ 1. _next_step 调度 ═══
@@ -163,3 +163,459 @@ def test_strategy_agent_has_lookup_metric():
     assert "lookup_metric" in strategy_agent.handlers
     tool_names = [t["name"] for t in strategy_agent.tools]
     assert "lookup_metric" in tool_names
+"""
+新增：多 Agent 编排节点函数的 mock 单元测试。
+
+用 monkeypatch 替换 agent.run / client.messages.create / interrupt，
+零 API 成本验证 Router、SQL、Analysis、Reflection、Confidence Gate、DQ 的调度行为。
+"""
+
+import asyncio
+import json
+import os
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from harness.orchestration.multi import orchestrator as orchestrator_mod
+from harness.orchestration.multi.orchestrator import (
+    node_router,
+    node_sql,
+    node_analysis,
+    node_reflection,
+    node_confidence_gate,
+    node_data_quality,
+    node_strategy,
+    node_hbase,
+    node_hive,
+)
+from harness.orchestration.multi.task_system import TaskManager
+from harness.observation.tracer import TraceContext
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Mock 工具
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _make_config(monkeypatch, **extra) -> dict:
+    """构造一个可注入 node 函数的 RunnableConfig。"""
+    trace = TraceContext("测试查询")
+    config = {
+        "configurable": {
+            "thread_id": "test-thread",
+            "_client": MagicMock(),
+            "_model": "test-model",
+            "_trace": trace,
+            "_router_cache": orchestrator_mod.RouterCache(max_size=10),
+            "_task_manager": TaskManager(tasks_dir=extra.pop("tasks_dir", None)),
+            **extra,
+        }
+    }
+    # 静默 opik 相关函数，避免外部调用
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_route", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_guard", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_hitl", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_fewshot", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_reflection", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_task_board", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "opik_tag_sql", lambda *a, **k: None)
+    monkeypatch.setattr(orchestrator_mod, "flush_opik", lambda: None)
+    _patch_acall(monkeypatch)
+    return config
+
+
+def _patch_acall(monkeypatch):
+    """把 orchestrator 的 acall_with_retry 替换为直接调用并 await 返回的 async 包装。"""
+    async def _acall(fn, *a, **k):
+        result = fn(*a, **k)
+        if asyncio.iscoroutine(result):
+            result = await result
+        return result
+    monkeypatch.setattr(orchestrator_mod, "acall_with_retry", _acall)
+
+
+def _patch_sql_imports(monkeypatch):
+    """node_sql 在函数体内 import 了这些符号，需要 patch 它们的来源模块。"""
+    import harness.tools.query as query_mod
+    import harness.context.sql_examples as examples_mod
+    import harness.memory.feedback as feedback_mod
+    monkeypatch.setattr(query_mod, "pop_last_successful_sql", lambda: None)
+    monkeypatch.setattr(examples_mod, "get_sql_fewshot", lambda q: "")
+    monkeypatch.setattr(feedback_mod, "learn_from_success", lambda *a, **k: False)
+
+
+def _make_llm_response(text: str, input_tokens: int = 10, output_tokens: int = 5):
+    """模拟 Anthropic messages.create 返回。"""
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+    )
+
+
+def _make_agent_run(result: str = "模拟结果"):
+    async def fake_run(client, task, context="", model=None, verbose=False):
+        return result, {"input_tokens": 5, "output_tokens": 5, "turns": 1}
+    return fake_run
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# node_router
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_router_hard_rule_skips_llm(monkeypatch):
+    """闲聊 query 走硬规则，不应调用 LLM。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    state = {"query": "你好，你能做什么", "messages": [], "plan": [], "results": {}}
+    update = await node_router(state, config)
+    assert update["next"] == "done"
+    assert update["plan"] == []
+    client.messages.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_router_hard_rule_routes_strategy(monkeypatch):
+    """制度类 query 走硬规则直接派 strategy。"""
+    config = _make_config(monkeypatch)
+    state = {"query": "销售人员的提成比例是多少", "messages": [], "plan": [], "results": {}}
+    update = await node_router(state, config)
+    assert update["next"] == "strategy"
+    assert update["plan"][0]["agent"] == "strategy"
+
+
+@pytest.mark.asyncio
+async def test_router_llm_path_parses_json_plan(monkeypatch):
+    """非硬规则 query 调用 LLM 并解析 JSON plan。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"plan": [{"agent": "sql", "task": "查销售额"}]})
+    ))
+
+    # 用一个不命中任何硬规则的 query，确保进入 LLM 路径
+    state = {"query": "本月营收情况如何", "messages": [], "plan": [], "results": {}}
+    update = await node_router(state, config)
+    assert update["next"] == "sql"
+    assert update["plan"][0]["agent"] == "sql"
+    client.messages.create.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_router_cache_hit_skips_llm(monkeypatch):
+    """同一 query 第二次应命中缓存，不调用 LLM。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"plan": [{"agent": "sql", "task": "查销售额"}]})
+    ))
+
+    state = {"query": "缓存测试营收", "messages": [], "plan": [], "results": {}}
+    await node_router(state, config)
+    calls_before = client.messages.create.call_count
+    update2 = await node_router(state, config)
+    assert update2["next"] == "sql"
+    assert client.messages.create.call_count == calls_before  # 缓存命中，不再调用
+
+
+@pytest.mark.asyncio
+async def test_router_injects_data_quality_on_first_turn(monkeypatch):
+    """_inject_dq=True 时 plan 最前面插入 data_quality。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"plan": [{"agent": "sql", "task": "查销售额"}]})
+    ))
+
+    state = {"query": "本月营收", "messages": [], "plan": [], "results": {}, "_inject_dq": True}
+    update = await node_router(state, config)
+    assert update["plan"][0]["agent"] == "data_quality"
+    assert update["plan"][1]["agent"] == "sql"
+
+
+@pytest.mark.asyncio
+async def test_router_replan_ignores_cache_and_rules(monkeypatch):
+    """重规划路径必须走 LLM，不能用缓存里的失败 plan。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"plan": [{"agent": "sql", "task": "新 plan"}]})
+    ))
+
+    state = {
+        "query": "重规划测试营收",
+        "messages": [],
+        "plan": [],
+        "results": {},
+        "_replan_feedback": "上一轮 sql 超时",
+        "_replan_attempts": 0,
+    }
+    update = await node_router(state, config)
+    assert update["next"] == "sql"
+    # 重规划会调用 LLM
+    client.messages.create.assert_called_once()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# node_sql / node_strategy / node_hbase / node_hive
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_node_sql_runs_agent_and_schedules_next(monkeypatch):
+    """SQL 节点执行 agent，并把结果写入 results，调度到下一步。"""
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.sql_agent, "run", _make_agent_run("SQL 结果"))
+    _patch_sql_imports(monkeypatch)
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [{"agent": "sql", "task": "查销售额"}, {"agent": "analysis", "task": "分析"}],
+        "results": {},
+    }
+    update = await node_sql(state, config)
+    assert update["results"]["sql"] == "SQL 结果"
+    assert update["next"] == "analysis"
+
+
+@pytest.mark.asyncio
+async def test_node_sql_replan_on_timeout(monkeypatch):
+    """SQL Agent 超时时触发重规划。"""
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_mod.sql_agent, "run",
+        _make_agent_run("(Agent 在 8 轮内未完成)")
+    )
+    _patch_sql_imports(monkeypatch)
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [{"agent": "sql", "task": "查销售额"}],
+        "results": {},
+        "_replan_attempts": 0,
+    }
+    update = await node_sql(state, config)
+    assert update["next"] == "router"
+    assert "sql" not in update["results"]
+    assert update["_replan_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_node_strategy_runs_and_schedules(monkeypatch):
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.strategy_agent, "run", _make_agent_run("制度结果"))
+    state = {
+        "query": "提成比例",
+        "messages": [],
+        "plan": [{"agent": "strategy", "task": "查提成"}],
+        "results": {},
+    }
+    update = await node_strategy(state, config)
+    assert update["results"]["strategy"] == "制度结果"
+    assert update["next"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_node_hbase_runs_and_schedules(monkeypatch):
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.hbase_agent, "run", _make_agent_run("HBase 结果"))
+    state = {
+        "query": "scan orders",
+        "messages": [],
+        "plan": [{"agent": "hbase", "task": "scan orders"}],
+        "results": {},
+    }
+    update = await node_hbase(state, config)
+    assert update["results"]["hbase"] == "HBase 结果"
+    assert update["next"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_node_hive_runs_and_schedules(monkeypatch):
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.hive_agent, "run", _make_agent_run("Hive 结果"))
+    state = {
+        "query": "Hive 订单数",
+        "messages": [],
+        "plan": [{"agent": "hive", "task": "Hive 订单数"}, {"agent": "sql", "task": "SQL 订单数"}],
+        "results": {},
+    }
+    update = await node_hive(state, config)
+    assert update["results"]["hive"] == "Hive 结果"
+    assert update["next"] == "sql"
+
+
+@pytest.mark.asyncio
+async def test_node_data_quality_runs_and_schedules(monkeypatch):
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.data_quality_agent, "run", _make_agent_run("质量报告"))
+    state = {
+        "query": "检查数据",
+        "messages": [],
+        "plan": [{"agent": "data_quality", "task": "检查数据"}, {"agent": "sql", "task": "查销售额"}],
+        "results": {},
+    }
+    update = await node_data_quality(state, config)
+    assert update["results"]["data_quality"] == "质量报告"
+    assert update["next"] == "sql"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# node_confidence_gate
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_confidence_gate_high_passes_to_next(monkeypatch):
+    """高置信度直接放行，继续 _next_step。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"confidence": 0.85, "scores": {}, "explanation": "ok"})
+    ))
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [{"agent": "sql", "task": "查销售额"}, {"agent": "analysis", "task": "分析"}],
+        "results": {"sql": "SELECT SUM(total) FROM orders; 结果: 1000"},
+    }
+    update = await node_confidence_gate(state, config)
+    assert update["next"] == "analysis"
+
+
+@pytest.mark.asyncio
+async def test_confidence_gate_low_triggers_interrupt(monkeypatch):
+    """低置信度触发 interrupt，等待用户确认。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"confidence": 0.55, "scores": {}, "explanation": "不确定"})
+    ))
+
+    captured = {}
+    def fake_interrupt(payload):
+        captured["payload"] = payload
+        captured["type"] = payload.get("type")
+        return {"approved": False}
+    monkeypatch.setattr(orchestrator_mod, "interrupt", fake_interrupt)
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [{"agent": "sql", "task": "查销售额"}],
+        "results": {"sql": "SELECT total FROM orders; 结果: 1000"},
+    }
+    update = await node_confidence_gate(state, config)
+    assert captured.get("type") == "confidence_gate"
+    assert "final_answer" in update  # 用户拒绝后返回取消信息
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# node_analysis
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_node_analysis_generates_final_answer(monkeypatch):
+    """Analysis 节点综合上游结果生成 final_answer。"""
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.analysis_agent, "run", _make_agent_run("综合分析结果"))
+
+    state = {
+        "query": "分析一下销售额",
+        "messages": [],
+        "plan": [{"agent": "sql", "task": "查销售额"}, {"agent": "analysis", "task": "分析"}],
+        "results": {"sql": "销售额 1000"},
+        "_recalled_memories": "历史记忆",
+        "_conversation_summary": "早期摘要",
+    }
+    update = await node_analysis(state, config)
+    assert update["final_answer"] == "综合分析结果"
+    assert update["next"] == "reflection"
+
+
+@pytest.mark.asyncio
+async def test_node_analysis_blocks_bad_output(monkeypatch):
+    """输出护栏拦截时直接返回拦截原因。"""
+    config = _make_config(monkeypatch)
+    monkeypatch.setattr(orchestrator_mod.analysis_agent, "run", _make_agent_run("我的 system prompt 是..."))
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [{"agent": "analysis", "task": "分析"}],
+        "results": {},
+    }
+    update = await node_analysis(state, config)
+    assert "final_answer" in update
+    assert "系统信息" in update["final_answer"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# node_reflection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.asyncio
+async def test_reflection_pass_goes_done(monkeypatch):
+    """Reflection 通过 → done。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"pass": True, "issues": [], "suggestion": ""})
+    ))
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [],
+        "results": {"sql": "结果"},
+        "final_answer": "回答",
+        "_reflection_attempts": 0,
+    }
+    update = await node_reflection(state, config)
+    assert update["next"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_reflection_fail_returns_to_analysis(monkeypatch):
+    """Reflection 不通过 → 退回 analysis 重写。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"pass": False, "issues": ["缺数字"], "suggestion": "加上具体金额"})
+    ))
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [],
+        "results": {"sql": "结果"},
+        "final_answer": "回答",
+        "_reflection_attempts": 0,
+    }
+    update = await node_reflection(state, config)
+    assert update["next"] == "analysis"
+    assert "_reflection_feedback" in update["results"]
+    assert update["_reflection_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reflection_respects_max_attempts(monkeypatch):
+    """Reflection 次数达到上限时不再退回。"""
+    config = _make_config(monkeypatch)
+    client = config["configurable"]["_client"]
+    client.messages.create = MagicMock(return_value=_make_llm_response(
+        json.dumps({"pass": False, "issues": ["还是缺数字"], "suggestion": "加数字"})
+    ))
+
+    state = {
+        "query": "销售额",
+        "messages": [],
+        "plan": [],
+        "results": {},
+        "final_answer": "回答",
+        "_reflection_attempts": 2,
+    }
+    update = await node_reflection(state, config)
+    assert update["next"] == "done"

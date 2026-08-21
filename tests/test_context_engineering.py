@@ -7,9 +7,9 @@
 
 import sqlite3
 
-import rag.sql_examples as sql_examples
-from rag.sql_examples import SEED_EXAMPLES, format_examples, get_sql_fewshot
-from multi_agent.schema_discovery import profile_column_values, _VALUE_PROFILE_MAX
+import harness.context.sql_examples as sql_examples
+from harness.context.sql_examples import SEED_EXAMPLES, format_examples, get_sql_fewshot
+from harness.context.schema_discovery import profile_column_values, _VALUE_PROFILE_MAX
 from db.seed import DB_PATH
 
 

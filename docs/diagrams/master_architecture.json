@@ -1,0 +1,83 @@
+{
+  "direction": "TB",
+  "nodes": [
+    {"id": "entry", "label": "用户 Query\n自然语言提问", "group": "入口", "width": 140, "height": 60},
+    {"id": "runner", "label": "MultiAgentRunner\nLangGraph StateGraph", "group": "编排", "width": 160, "height": 60},
+    {"id": "router", "label": "Router 路由\n规则→缓存→LLM→继承", "group": "编排", "width": 160, "height": 60},
+    {"id": "clarify", "label": "Clarify 澄清\nHITL interrupt()", "group": "编排", "width": 140, "height": 60},
+    {"id": "agents", "label": "6 专业 Agent\nsql / analysis / strategy\nhbase / hive / data_quality", "group": "编排", "width": 170, "height": 70},
+    {"id": "reflection", "label": "Reflection 反思\n完整性·真实性·可用性", "group": "编排", "width": 160, "height": 60},
+    {"id": "confidence", "label": "Confidence Gate\n置信度阈值 0.7", "group": "约束", "width": 150, "height": 60},
+    {"id": "taskmgr", "label": "TaskManager\n磁盘任务图 blockedBy", "group": "编排", "width": 160, "height": 55},
+    {"id": "answer", "label": "最终回答\ntrace_id + SQL + 图表", "group": "入口", "width": 140, "height": 60},
+
+    {"id": "tool_query", "label": "run_query\nSELECT 只读执行", "group": "工具", "width": 140, "height": 55},
+    {"id": "tool_schema", "label": "list_tables\ndescribe_table\ndiscover_schema", "group": "工具", "width": 150, "height": 60},
+    {"id": "tool_analysis", "label": "analyze_results\ncompare_periods\nrender_chart", "group": "工具", "width": 150, "height": 60},
+    {"id": "tool_knowledge", "label": "search_knowledge_base\nlookup_metric", "group": "工具", "width": 150, "height": 55},
+    {"id": "tool_hbase", "label": "run_hbase\ngenerate_hbase_query", "group": "工具", "width": 150, "height": 55},
+    {"id": "tool_hive", "label": "search_hive_syntax", "group": "工具", "width": 140, "height": 55},
+
+    {"id": "guard", "label": "Guardrails\n输入/SQL/输出三层", "group": "约束", "width": 150, "height": 55},
+    {"id": "entitle", "label": "Entitlement\n4级 + 行级重写", "group": "约束", "width": 150, "height": 55},
+    {"id": "retry", "label": "Retry\n指数退避 + jitter", "group": "约束", "width": 140, "height": 55},
+
+    {"id": "token", "label": "TokenBudget\n50k / 70% 告警", "group": "上下文", "width": 140, "height": 55},
+    {"id": "window", "label": "HybridWindow\n3 层滑动压缩", "group": "上下文", "width": 140, "height": 55},
+    {"id": "schema_disc", "label": "SchemaDiscovery\nembedding 选表", "group": "上下文", "width": 140, "height": 55},
+    {"id": "fewshot", "label": "SQLExampleStore\nVanna 少样本", "group": "上下文", "width": 140, "height": 55},
+    {"id": "selfquery", "label": "Self-Query RAG\n语义 + 元数据过滤", "group": "上下文", "width": 150, "height": 55},
+    {"id": "sysprompt", "label": "build_system_prompt\n5 层组装", "group": "上下文", "width": 150, "height": 55},
+
+    {"id": "short", "label": "短期记忆\nConversationManager", "group": "记忆", "width": 150, "height": 55},
+    {"id": "long", "label": "长期记忆\nChromaDB + HyDE", "group": "记忆", "width": 150, "height": 55},
+    {"id": "learn", "label": "自学习闭环\nfeedback → SQL", "group": "记忆", "width": 150, "height": 55},
+
+    {"id": "trace", "label": "TraceContext\nJSONL + SQL 掩码", "group": "观测", "width": 150, "height": 55},
+    {"id": "cost", "label": "Cost 计费\n按模型定价", "group": "观测", "width": 130, "height": 55},
+    {"id": "opik", "label": "Opik\n全链路追踪", "group": "观测", "width": 130, "height": 55},
+    {"id": "monitor", "label": "Pipeline Monitor\nSLA/失败/异常", "group": "观测", "width": 150, "height": 55}
+  ],
+  "edges": [
+    {"source": "entry", "target": "runner", "label": "run(query)"},
+    {"source": "runner", "target": "router", "label": "首节点"},
+    {"source": "router", "target": "clarify", "label": "意图模糊"},
+    {"source": "router", "target": "agents", "label": "选中 agent"},
+    {"source": "agents", "target": "reflection", "label": "产出结果"},
+    {"source": "reflection", "target": "confidence", "label": "过审"},
+    {"source": "reflection", "target": "router", "label": "不满意→replan(≤1)"},
+    {"source": "confidence", "target": "clarify", "label": "<0.7 暂停"},
+    {"source": "confidence", "target": "answer", "label": "≥0.7 放行"},
+    {"source": "runner", "target": "taskmgr", "label": "plan→任务图"},
+
+    {"source": "agents", "target": "tool_query", "label": "调"},
+    {"source": "agents", "target": "tool_schema", "label": "调"},
+    {"source": "agents", "target": "tool_analysis", "label": "调"},
+    {"source": "agents", "target": "tool_knowledge", "label": "调"},
+    {"source": "agents", "target": "tool_hbase", "label": "调"},
+    {"source": "agents", "target": "tool_hive", "label": "调"},
+
+    {"source": "tool_query", "target": "guard", "label": "先过"},
+    {"source": "tool_query", "target": "entitle", "label": "先过"},
+    {"source": "tool_schema", "target": "entitle", "label": "过滤"},
+    {"source": "guard", "target": "retry", "label": "调用层"},
+
+    {"source": "sysprompt", "target": "agents", "label": "注入"},
+    {"source": "schema_disc", "target": "sysprompt", "label": "schema 上下文"},
+    {"source": "fewshot", "target": "sysprompt", "label": "相似 SQL"},
+    {"source": "selfquery", "target": "sysprompt", "label": "检索"},
+    {"source": "token", "target": "window", "label": "预算"},
+    {"source": "window", "target": "sysprompt", "label": "压缩后消息"},
+
+    {"source": "agents", "target": "short", "label": "读写"},
+    {"source": "short", "target": "long", "label": "沉淀"},
+    {"source": "learn", "target": "fewshot", "label": "新样例"},
+    {"source": "reflection", "target": "learn", "label": "成功/失败"},
+
+    {"source": "runner", "target": "trace", "label": "埋点"},
+    {"source": "agents", "target": "trace", "label": "埋点"},
+    {"source": "trace", "target": "opik", "label": "上报"},
+    {"source": "trace", "target": "cost", "label": "统计"},
+    {"source": "opik", "target": "monitor", "label": "SLA 数据"}
+  ]
+}

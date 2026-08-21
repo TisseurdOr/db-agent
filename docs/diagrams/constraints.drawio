@@ -1,0 +1,70 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="group_0" value="安全防线" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="6" y="6" width="988" height="183" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_1" value="质量与可靠性" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontColor=#82b366;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="796" y="196" width="378" height="108" as="geometry"/>
+        </mxCell>
+        <mxCell id="input" value="用户输入&#xa;(query)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="44" y="24" width="120" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="guard_in" value="guard_input&#xa;注入/超长/SQL写" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="224" y="24" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="entitle" value="Entitlement 权限&#xa;4级 + 行级重写&#xa;自动追加 WHERE dept_id" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="404" y="64" width="170" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="guard_sql" value="guard_sql&#xa;SELECT-only&#xa;多语句/系统表拦截" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="614" y="94" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="hitl" value="HITL 审批&#xa;敏感列 salary/cost" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="group_0">
+          <mxGeometry x="814" y="94" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="guard_out" value="guard_output&#xa;PII / 系统prompt泄露" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="94" width="160" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="output" value="输出&#xa;(安全回答)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="234" y="104" width="120" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="confidence" value="Confidence Gate&#xa;6维度·阈值0.7" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="24" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="retry" value="Retry 重试&#xa;指数退避+jitter&#xa;429/5xx" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="group_1">
+          <mxGeometry x="204" y="24" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="进" style="html=1;rounded=0;" edge="1" parent="1" source="input" target="guard_in">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="170" y="60"/><mxPoint x="220" y="60"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="过" style="html=1;rounded=0;" edge="1" parent="1" source="guard_in" target="entitle">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="380" y="80"/><mxPoint x="400" y="80"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="授权后SQL" style="html=1;rounded=0;" edge="1" parent="1" source="entitle" target="guard_sql">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="580" y="120"/><mxPoint x="610" y="120"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="命中敏感列" style="html=1;rounded=0;" edge="1" parent="1" source="guard_sql" target="hitl">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="780" y="140"/><mxPoint x="800" y="140"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="非敏感" style="html=1;rounded=0;" edge="1" parent="1" source="guard_sql" target="confidence">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="700" y="200"/><mxPoint x="700" y="240"/><mxPoint x="700" y="240"/><mxPoint x="700" y="240"/><mxPoint x="800" y="240"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="批准" style="html=1;rounded=0;" edge="1" parent="1" source="hitl" target="confidence">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="890" y="170"/><mxPoint x="890" y="210"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="≥0.7" style="html=1;rounded=0;" edge="1" parent="1" source="confidence" target="guard_out">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="620" y="260"/><mxPoint x="110" y="260"/><mxPoint x="110" y="260"/><mxPoint x="110" y="260"/><mxPoint x="110" y="180"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e7" value="过" style="html=1;rounded=0;" edge="1" parent="1" source="guard_out" target="output">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="190" y="140"/><mxPoint x="230" y="140"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e8" value="调用失败" style="html=1;rounded=0;" edge="1" parent="1" source="confidence" target="retry">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="970" y="250"/><mxPoint x="990" y="250"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

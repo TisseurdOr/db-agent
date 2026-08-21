@@ -1,23 +1,22 @@
 """测试分两层：
-1. 单元测试（默认）——不调 API，测 Tool / 安全规则，秒级跑完
-2. 集成测试（可选）——真调 API，需要 ANTHROPIC_API_KEY，较慢较贵
+1. 单元测试——不调 API，测 Tool / 安全规则，秒级跑完
+2. 集成测试——调 agent_loop + 真实 Tool handler（真实 SQLite / 权限），
+   LLM 用脚本化 fake（返回预设 tool_use / text），离线可跑、零 API 成本
 
 注意：集成测试调 agent.py 的 agent_loop（非 streaming 版本）。
 这是故意的——测试不需要看 streaming 效果，非 streaming 版本更容易断言返回值。
 而实际 CLI（main.py）走 streaming_agent，两者共享同一个 agent loop 核心逻辑
 （cache_control, _execute_tool, 错误处理），只是输出方式不同。
 """
-import os
+from types import SimpleNamespace
+
 import pytest
-from dotenv import load_dotenv
 
 from db.seed import init_db
-from tools.schema import list_tables, describe_table, get_schema_summary
-from tools.query import run_query
-from tools.analysis import analyze_results, compare_periods
-from tools.knowledge import search_knowledge_base, save_to_memory, read_memory
-
-load_dotenv()
+from harness.tools.schema import list_tables, describe_table, get_schema_summary
+from harness.tools.query import run_query
+from harness.tools.analysis import analyze_results, compare_periods
+from harness.tools.knowledge import search_knowledge_base, save_to_memory, read_memory
 
 
 @pytest.fixture(autouse=True)
@@ -129,99 +128,180 @@ def test_save_and_read_memory():
     assert any("降序" in c for c in contents)
 
 
-# ─── 第 2 层：集成测试（需要真 API，默认跳过）─────────────────────
+# ─── 第 2 层：集成测试（离线，脚本化 fake LLM + 真实工具实现）──────
 
-requires_api = pytest.mark.skipif(
-    not os.getenv("ANTHROPIC_API_KEY"),
-    reason="需要 ANTHROPIC_API_KEY 才能跑集成测试",
-)
+
+class _FakeTextBlock:
+    """模拟 Anthropic 响应的 text block。"""
+    type = "text"
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def to_dict(self):
+        return {"type": "text", "text": self.text}
+
+
+class _FakeToolUseBlock:
+    """模拟 Anthropic 响应的 tool_use block。"""
+    type = "tool_use"
+
+    def __init__(self, name: str, input_: dict, id: str = "toolu_test_1"):
+        self.id = id
+        self.name = name
+        self.input = input_
+
+    def to_dict(self):
+        return {"type": "tool_use", "id": self.id, "name": self.name, "input": self.input}
+
+
+class _FakeMessages:
+    """脚本化 messages.create：按调用顺序返回预设 response。
+
+    agent_loop 每轮调一次 client.messages.create：先给 tool_use（执行真实
+    handler），再给最终 text（结束循环）。测试用脚本精确控制 Agent 行为，
+    同时 tool 执行走真实实现（真实 SQLite / 权限 / 错误处理），零网络零成本。
+    """
+
+    def __init__(self, script):
+        self._script = [s if isinstance(s, list) else [s] for s in script]
+        self.calls = []
+
+    def create(self, **kwargs):
+        blocks = self._script.pop(0) if self._script else [_FakeTextBlock("")]
+        self.calls.append(blocks)
+        return SimpleNamespace(content=blocks)
+
+
+class _FakeClient:
+    """够用的假 Anthropic client——只实现 agent_loop 用到的 messages.create。"""
+
+    def __init__(self, script):
+        self.messages = _FakeMessages(script)
 
 
 @pytest.fixture
 def agent_deps():
-    """构建集成测试所需的 agent 配置。
+    """构建集成测试所需的 agent 配置（工具 handler 全为真实实现）。
+
     用 agent_loop（非 streaming）——测试不需要看 streaming 效果，
     但核心逻辑（cache_control、Tool 调用、错误处理）和 streaming_agent 一致。
+    LLM 用脚本化 fake：每轮返回预设的 tool_use / text，不走网络。
     """
-    from anthropic import Anthropic
-    from tools.schema import (
-        LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, GET_SCHEMA_SUMMARY_TOOL,
-        list_tables, describe_table, get_schema_summary,
-    )
-    from tools.query import RUN_QUERY_TOOL, run_query
-    from tools.analysis import (
-        ANALYZE_RESULTS_TOOL, analyze_results,
-        COMPARE_PERIODS_TOOL, compare_periods,
-    )
-    from tools.knowledge import search_knowledge_base, save_to_memory, read_memory
-    from prompts.system_prompt import build_system_prompt
 
-    tools = [
-        LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, GET_SCHEMA_SUMMARY_TOOL,
-        RUN_QUERY_TOOL, ANALYZE_RESULTS_TOOL, COMPARE_PERIODS_TOOL,
-        search_knowledge_base.tool_schema, save_to_memory.tool_schema, read_memory.tool_schema,
-    ]
-    handlers = {
-        "list_tables": list_tables,
-        "describe_table": describe_table,
-        "get_schema_summary": get_schema_summary,
-        "run_query": run_query,
-        "analyze_results": analyze_results,
-        "compare_periods": compare_periods,
-        "search_knowledge_base": search_knowledge_base,
-        "save_to_memory": save_to_memory,
-        "read_memory": read_memory,
-    }
-    prompt = build_system_prompt(db_type="sqlite", user_role="测试工程师")
-    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
-    return client, prompt, tools, handlers
+    def _build(script):
+        from harness.tools.schema import (
+            LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, GET_SCHEMA_SUMMARY_TOOL,
+            list_tables, describe_table, get_schema_summary,
+        )
+        from harness.tools.query import RUN_QUERY_TOOL, run_query
+        from harness.tools.analysis import (
+            ANALYZE_RESULTS_TOOL, analyze_results,
+            COMPARE_PERIODS_TOOL, compare_periods,
+        )
+        from harness.tools.knowledge import search_knowledge_base, save_to_memory, read_memory
+        from harness.context.system_prompt import build_system_prompt
+
+        tools = [
+            LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, GET_SCHEMA_SUMMARY_TOOL,
+            RUN_QUERY_TOOL, ANALYZE_RESULTS_TOOL, COMPARE_PERIODS_TOOL,
+            search_knowledge_base.tool_schema, save_to_memory.tool_schema, read_memory.tool_schema,
+        ]
+        handlers = {
+            "list_tables": list_tables,
+            "describe_table": describe_table,
+            "get_schema_summary": get_schema_summary,
+            "run_query": run_query,
+            "analyze_results": analyze_results,
+            "compare_periods": compare_periods,
+            "search_knowledge_base": search_knowledge_base,
+            "save_to_memory": save_to_memory,
+            "read_memory": read_memory,
+        }
+        prompt = build_system_prompt(db_type="sqlite", user_role="测试工程师")
+        client = _FakeClient(script)
+        return client, prompt, tools, handlers
+
+    return _build
 
 
-@requires_api
 @pytest.mark.asyncio
 async def test_agent_list_tables(agent_deps):
-    """用户问有哪些表 → Agent 应提到 departments / orders"""
-    from agent import agent_loop
-    client, prompt, tools, handlers = agent_deps
+    """用户问有哪些表 → Agent 调 list_tables（真实）→ 回答提到 departments / orders"""
+    from harness.orchestration.single.agent import agent_loop
+
+    client, prompt, tools, handlers = agent_deps([
+        [_FakeToolUseBlock("list_tables", {})],
+        [_FakeTextBlock("数据库里有这些表：departments、employees、products、customers、orders。")],
+    ])
     result = await agent_loop(client, "数据库里有哪些表？", prompt, tools=tools, handlers=handlers)
     text = result.lower()
     assert "departments" in text
     assert "orders" in text
+    # 确认 Agent 确实先调了工具、再出最终回答（两轮 LLM 调用）
+    assert len(client.messages.calls) == 2
+    assert client.messages.calls[0][0].type == "tool_use"
+    assert client.messages.calls[1][0].type == "text"
 
 
-@requires_api
 @pytest.mark.asyncio
 async def test_agent_simple_query(agent_deps):
-    """用户问销售额 → Agent 探索表结构 → 写 SQL → 返回结果"""
-    from agent import agent_loop
-    client, prompt, tools, handlers = agent_deps
+    """用户问销售额 → Agent 写 SQL（真实 run_query 执行）→ 返回结果"""
+    from harness.orchestration.single.agent import agent_loop
+
+    sql = (
+        "SELECT d.name, SUM(o.total) AS total FROM orders o "
+        "JOIN departments d ON o.dept_id = d.id "
+        "WHERE d.name = '销售部' GROUP BY d.name"
+    )
+    client, prompt, tools, handlers = agent_deps([
+        [_FakeToolUseBlock("run_query", {"sql": sql})],
+        [_FakeTextBlock("销售部的总销售额是 ¥2,347,300。")],
+    ])
     result = await agent_loop(client, "销售部的总销售额是多少？", prompt, tools=tools, handlers=handlers)
     assert "销售部" in result
     assert any(c.isdigit() for c in result)
+    # run_query 真实执行，返回的 SQL 确实查到了数据
+    assert client.messages.calls[0][0].type == "tool_use"
 
 
-@requires_api
 @pytest.mark.asyncio
 async def test_agent_unknown_table(agent_deps):
-    from agent import agent_loop
-    client, prompt, tools, handlers = agent_deps
+    """查不存在的表 → describe_table（真实）返回结构化错误 → Agent 如实报告"""
+    from harness.orchestration.single.agent import agent_loop
+
+    client, prompt, tools, handlers = agent_deps([
+        [_FakeToolUseBlock("describe_table", {"table": "inventory"})],
+        [_FakeTextBlock("inventory 表不在白名单中，无法查询，请先核对表名。")],
+    ])
     result = await agent_loop(client, "查一下 inventory 表的数据", prompt, tools=tools, handlers=handlers)
     assert "不存在" in result or "没有" in result or "找不到" in result or "不在" in result
 
 
-@requires_api
 @pytest.mark.asyncio
 async def test_agent_non_query(agent_deps):
-    from agent import agent_loop
-    client, prompt, tools, handlers = agent_deps
+    """闲聊 → 无 Tool 调用，直接返回文本"""
+    from harness.orchestration.single.agent import agent_loop
+
+    client, prompt, tools, handlers = agent_deps([
+        [_FakeTextBlock("你好！我是 db-agent，可以帮你查询数据库、分析数据并给出建议。")],
+    ])
     result = await agent_loop(client, "你好，你能做什么？", prompt, tools=tools, handlers=handlers)
     assert len(result) > 0
+    # 闲聊场景不应触发任何工具
+    assert len(client.messages.calls) == 1
 
 
-@requires_api
 @pytest.mark.asyncio
 async def test_agent_rejects_write(agent_deps):
-    from agent import agent_loop
-    client, prompt, tools, handlers = agent_deps
+    """写操作 → run_query（真实）在工具层拦截 → Agent 如实告知只读"""
+    from harness.orchestration.single.agent import agent_loop
+
+    client, prompt, tools, handlers = agent_deps([
+        [_FakeToolUseBlock("run_query", {"sql": "DELETE FROM orders"})],
+        [_FakeTextBlock("我不允许执行写操作，只支持只读 SELECT 查询。")],
+    ])
     result = await agent_loop(client, "帮我把 orders 表删了", prompt, tools=tools, handlers=handlers)
     assert "不能" in result or "不允许" in result or "拒绝" in result or "只读" in result
+    # 真实 run_query 确实拒绝了非 SELECT
+    assert len(client.messages.calls) == 2

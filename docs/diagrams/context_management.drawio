@@ -1,0 +1,64 @@
+<mxfile>
+  <diagram id="autolayout" name="Page-1">
+    <mxGraphModel dx="800" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="group_0" value="压缩链" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#6c8ebf;fontColor=#6c8ebf;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="6" y="6" width="208" height="308" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_1" value="检索增强链" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#82b366;fontColor=#82b366;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="226" y="206" width="538" height="113" as="geometry"/>
+        </mxCell>
+        <mxCell id="group_2" value="组装与注入" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#d79b00;fontColor=#d79b00;verticalAlign=top;fontStyle=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="306" y="326" width="218" height="213" as="geometry"/>
+        </mxCell>
+        <mxCell id="raw" value="对话历史&#xa;messages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="44" y="24" width="130" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="budget" value="TokenBudget&#xa;50k · 70%告警&#xa;中文1.5字符/token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="34" y="114" width="150" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="window" value="HybridWindow&#xa;L0 近6条原文&#xa;L1 中程逐条摘要&#xa;L2 全局摘要" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="group_0">
+          <mxGeometry x="24" y="214" width="160" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="schema" value="SchemaDiscovery&#xa;embedding 选表&#xa;值级索引(低基数列)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="24" y="24" width="160" height="65" as="geometry"/>
+        </mxCell>
+        <mxCell id="fewshot" value="SQLExampleStore&#xa;相似SQL少样本&#xa;Vanna 模式" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="204" y="24" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="selfquery" value="Self-Query RAG&#xa;语义 + 元数据过滤" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_1">
+          <mxGeometry x="364" y="24" width="150" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="sysprompt" value="build_system_prompt&#xa;5层组装&#xa;Role/Tools/Workflow&#xa;/Constraints/Output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="group_2">
+          <mxGeometry x="24" y="24" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="agent" value="注入 Agent&#xa;(system prompt)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="group_2">
+          <mxGeometry x="34" y="134" width="140" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" value="估算token" style="html=1;rounded=0;" edge="1" parent="1" source="raw" target="budget">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="110" y="90"/><mxPoint x="110" y="110"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e1" value="超70%→压缩" style="html=1;rounded=0;" edge="1" parent="1" source="budget" target="window">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="110" y="190"/><mxPoint x="110" y="210"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e2" value="压缩后消息" style="html=1;rounded=0;" edge="1" parent="1" source="window" target="sysprompt">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="110" y="330"/><mxPoint x="110" y="390"/><mxPoint x="110" y="390"/><mxPoint x="110" y="390"/><mxPoint x="320" y="390"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e3" value="schema上下文" style="html=1;rounded=0;" edge="1" parent="1" source="schema" target="sysprompt">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="370" y="290"/><mxPoint x="370" y="340"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="少样本" style="html=1;rounded=0;" edge="1" parent="1" source="fewshot" target="sysprompt">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="460" y="290"/><mxPoint x="460" y="340"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e5" value="检索结果" style="html=1;rounded=0;" edge="1" parent="1" source="selfquery" target="sysprompt">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="670" y="330"/><mxPoint x="670" y="390"/><mxPoint x="670" y="390"/><mxPoint x="670" y="390"/><mxPoint x="510" y="390"/></Array></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" value="组装完成" style="html=1;rounded=0;" edge="1" parent="1" source="sysprompt" target="agent">
+          <mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="410" y="420"/><mxPoint x="410" y="440"/></Array></mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

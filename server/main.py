@@ -17,9 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from anthropic import Anthropic
 
 from db.seed import init_db
-from tools.hbase import _seed_hbase_store
-from tools.template_matcher import init_metric_registry
-from multi_agent.schema_discovery import get_schema_discovery
+from harness.tools.hbase import _seed_hbase_store
+from harness.context.template_matcher import init_metric_registry
+from harness.context.schema_discovery import get_schema_discovery
 from server.storage import init_feedback_db
 
 # ── Bootstrap ──────────────────────────────────────────────────────────
@@ -33,12 +33,28 @@ try:
 except Exception:
     pass
 
-client = Anthropic(
-    api_key=os.environ["ANTHROPIC_API_KEY"],
-    base_url=os.environ.get("ANTHROPIC_BASE_URL"),
-)
-from utils.opik_tracing import wrap_anthropic_client
-client = wrap_anthropic_client(client)
+# Anthropic client 惰性创建：import server.main 不应依赖 API key，
+# 否则 CI / 无 .env 环境连 test_server 都无法收集。首次真正处理查询时才创建。
+_client: Anthropic | None = None
+
+
+def get_client() -> Anthropic:
+    """按需创建 Anthropic client（支持 DeepSeek 兼容 endpoint）。"""
+    global _client
+    if _client is None:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "缺少 ANTHROPIC_API_KEY（请在 .env 或环境变量中配置）"
+            )
+        from harness.observation.opik_tracing import wrap_anthropic_client
+        _client = wrap_anthropic_client(Anthropic(
+            api_key=api_key,
+            base_url=os.getenv("ANTHROPIC_BASE_URL"),
+        ))
+    return _client
+
+
 DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 
 # ── FastAPI app ────────────────────────────────────────────────────────

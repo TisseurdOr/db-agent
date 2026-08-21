@@ -1,0 +1,25 @@
+{
+  "direction": "TB",
+  "nodes": [
+    {"id": "raw", "label": "对话历史\nmessages", "group": "压缩链", "width": 130, "height": 55},
+    {"id": "budget", "label": "TokenBudget\n50k · 70%告警\n中文1.5字符/token", "group": "压缩链", "width": 150, "height": 65},
+    {"id": "window", "label": "HybridWindow\nL0 近6条原文\nL1 中程逐条摘要\nL2 全局摘要", "group": "压缩链", "width": 160, "height": 70},
+
+    {"id": "schema", "label": "SchemaDiscovery\nembedding 选表\n值级索引(低基数列)", "group": "检索增强链", "width": 160, "height": 65},
+    {"id": "fewshot", "label": "SQLExampleStore\n相似SQL少样本\nVanna 模式", "group": "检索增强链", "width": 150, "height": 60},
+    {"id": "selfquery", "label": "Self-Query RAG\n语义 + 元数据过滤", "group": "检索增强链", "width": 150, "height": 60},
+
+    {"id": "sysprompt", "label": "build_system_prompt\n5层组装\nRole/Tools/Workflow\n/Constraints/Output", "group": "组装与注入", "width": 170, "height": 70,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;"},
+    {"id": "agent", "label": "注入 Agent\n(system prompt)", "group": "组装与注入", "width": 140, "height": 55}
+  ],
+  "edges": [
+    {"source": "raw", "target": "budget", "label": "估算token"},
+    {"source": "budget", "target": "window", "label": "超70%→压缩"},
+    {"source": "window", "target": "sysprompt", "label": "压缩后消息"},
+    {"source": "schema", "target": "sysprompt", "label": "schema上下文"},
+    {"source": "fewshot", "target": "sysprompt", "label": "少样本"},
+    {"source": "selfquery", "target": "sysprompt", "label": "检索结果"},
+    {"source": "sysprompt", "target": "agent", "label": "组装完成"}
+  ]
+}

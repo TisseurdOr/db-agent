@@ -1,0 +1,19 @@
+{
+  "direction": "LR",
+  "nodes": [
+    {"id": "conv", "label": "对话\nquery + answer", "width": 130, "height": 55},
+
+    {"id": "short", "label": "短期记忆\nConversationManager\n近10条 + 摘要", "group": "记忆存储", "width": 160, "height": 60},
+    {"id": "long", "label": "长期记忆\nChromaDB 向量库\nHyDE + rerank", "group": "记忆存储", "width": 160, "height": 60},
+
+    {"id": "feedback", "label": "自学习 feedback.py\n成功/HITL信号\n质量门控", "group": "自学习闭环", "width": 160, "height": 60},
+    {"id": "fewshot", "label": "SQLExampleStore\n新样例回流\n(喂回上下文)", "group": "自学习闭环", "width": 160, "height": 60}
+  ],
+  "edges": [
+    {"source": "conv", "target": "short", "label": "会话内读写"},
+    {"source": "short", "target": "long", "label": "压缩沉淀"},
+    {"source": "conv", "target": "feedback", "label": "成功/失败信号"},
+    {"source": "feedback", "target": "fewshot", "label": "合格样例"},
+    {"source": "fewshot", "target": "short", "label": "下轮注入"}
+  ]
+}

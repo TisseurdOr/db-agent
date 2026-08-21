@@ -2,6 +2,8 @@
 
 踩过的坑 + 解决办法。遇到报错时用 `Ctrl+F` 搜**报错关键字**或**现象**。
 
+> 相关：[[2026-08-05_错误恢复操作手册]] · [[2026-08-06_自学习闭环操作手册]]
+
 每条格式：**现象 → 原因 → 解决 → 涉及文件**。
 
 ---
@@ -53,14 +55,14 @@ AttributeError: 'ThinkingBlock' object has no attribute 'text'
 
 **解决**
 遍历 `content`，取第一个 `type == "text"` 的块，别死取 `[0]`。
-项目里已封装成 `utils/llm.py` 的 `extract_text()`：
+项目里已封装成 `common/utils/llm.py` 的 `extract_text()`：
 ```python
-from utils.llm import extract_text
+from common.utils.llm import extract_text
 text = extract_text(resp, context="hyde")   # 取不到会记日志并返回 ""
 ```
 
 **涉及文件**
-`utils/llm.py`、`memory/long_term_memory.py`、`memory/short_term_memory.py`、`memory/hybrid_window_manager.py`
+`common/utils/llm.py`、`common/memory/long_term_memory.py`、`common/memory/short_term_memory.py`、`common/memory/hybrid_window_manager.py`
 
 ---
 
@@ -80,7 +82,7 @@ model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 ```
 
 **涉及文件**
-`memory/long_term_memory.py`（`_generate_hypothesis`、`_rerank`）
+`common/memory/long_term_memory.py`（`_generate_hypothesis`、`_rerank`）
 
 ---
 
@@ -128,7 +130,7 @@ def __init__(self, ..., embed_model=None):
 ```
 
 **涉及文件**
-`memory/long_term_memory.py`（`RAGPipeline.__init__`）
+`common/memory/long_term_memory.py`（`RAGPipeline.__init__`）
 
 ---
 
@@ -229,7 +231,7 @@ query_vec = (await self.embed([text_to_embed]))[0]
 （治本可另调大 `_generate_hypothesis` 的 `max_tokens`，给正文留出空间。）
 
 **涉及文件**
-`memory/long_term_memory.py`（`retrieve`）
+`common/memory/long_term_memory.py`（`retrieve`）
 
 ---
 
@@ -265,7 +267,7 @@ memories = [] if _is_chitchat(user_input) else await long_memory.retrieve(user_i
 要更稳可上意图分类小模型，但会增延迟，学习阶段用关键词表即可。
 
 **涉及文件**
-`main.py`（检索前的闲聊门）、`memory/long_term_memory.py`（`retrieve` 的 HyDE 条件）
+`main.py`（检索前的闲聊门）、`common/memory/long_term_memory.py`（`retrieve` 的 HyDE 条件）
 
 ---
 
@@ -294,11 +296,11 @@ Chroma 过滤匹配不到 → 永远返回空。读用 `recall`、写曾用 `add
    `user_id 过滤无命中，退回不过滤（兼容旧数据）`。
 2. **写侧统一**：新对话用 `remember()`（带 `user_id`），不要再用
    `add_conversation` 写同一 collection，避免继续制造无 `user_id` 的脏数据。
-3. （可选）清库重建：删掉 `memory/chroma_db/` 后只走 `remember`，元数据一致。
+3. （可选）清库重建：删掉 `common/memory/chroma_db/` 后只走 `remember`，元数据一致。
 
 **涉及文件**
-`memory/vector_store.py`（`recall`）、`main.py`（`remember` / `recall`）、
-`memory/long_term_memory.py`（旧 `add_conversation`）
+`common/memory/vector_store.py`（`recall`）、`main.py`（`remember` / `recall`）、
+`common/memory/long_term_memory.py`（旧 `add_conversation`）
 
 ---
 
@@ -328,7 +330,7 @@ for turn in range(max_turns):
 ```
 
 **涉及文件**
-`agent.py`（`streaming_agent`）
+`single_agent/agent.py`（`streaming_agent`）
 
 ---
 
@@ -360,7 +362,7 @@ else:
 ```
 
 **涉及文件**
-`memory/hybrid_window_manager.py`（`manage`）
+`common/memory/hybrid_window_manager.py`（`manage`）
 
 ---
 
@@ -395,7 +397,7 @@ messages.append({"role": "user", "content": tool_results})
 同时改用 `len(content)` 而非 `len(str(tr))`——后者把 dict 的 key 也算进去了。
 
 **涉及文件**
-`agent.py`（`streaming_agent`）
+`single_agent/agent.py`（`streaming_agent`）
 
 ---
 
@@ -422,7 +424,7 @@ if conversation is not None and not context_block:
 反之亦然——当 token 预算没触发时，conversation 的摘要正常注入，互补不重叠。
 
 **涉及文件**
-`agent.py`（`streaming_agent`）
+`single_agent/agent.py`（`streaming_agent`）
 
 ---
 
@@ -827,7 +829,7 @@ trace.finished_at = time.monotonic()   # 开机以来的秒数，很小
 
 **涉及文件**
 `multi_agent/orchestrator.py`（`run()` / `resume()` 删手动赋值）、
-`utils/tracer.py`（`save()` 是唯一补 `finished_at` 的地方）
+`common/utils/tracer.py`（`save()` 是唯一补 `finished_at` 的地方）
 
 ---
 
@@ -898,7 +900,7 @@ SQL Agent 超过最大轮数失败，Task board 却显示任务完成：
 3. 文本提取降为兜底；单测覆盖成功捕获 / 报错不捕获。
 
 ```python
-# tools/query.py — 成功路径
+# common/tools/query.py — 成功路径
 _last_successful_sql["sql"] = sql
 
 # orchestrator node_sql
@@ -911,9 +913,9 @@ learn_from_success(query, result, sql=learned_sql, source="auto")
 **教训**：回流信号取**工具执行事实**，不要赌模型在最终回答里复述 SQL。
 
 **涉及文件**
-`tools/query.py`（`pop_last_successful_sql`）、
+`common/tools/query.py`（`pop_last_successful_sql`）、
 `multi_agent/orchestrator.py`（`node_sql`）、
-`rag/feedback.py`、
+`common/rag/feedback.py`、
 `tests/test_feedback.py`、
 `docs/2026-08-06_自学习闭环操作手册.md`
 
@@ -962,4 +964,4 @@ cd frontend && npm run dev -- --port 3000
 本地 JSONL 不受影响：`python -m utils.tracer --today`。
 
 **涉及文件**
-`utils/opik_tracing.py`、`.env` / `.env.example`、`opik-platform/README.md`
+`common/utils/opik_tracing.py`、`.env` / `.env.example`、`opik-platform/README.md`

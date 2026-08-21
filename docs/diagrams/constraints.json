@@ -1,0 +1,29 @@
+{
+  "direction": "LR",
+  "nodes": [
+    {"id": "input", "label": "用户输入\n(query)", "group": "安全防线", "width": 120, "height": 55},
+    {"id": "guard_in", "label": "guard_input\n注入/超长/SQL写", "group": "安全防线", "width": 150, "height": 60},
+    {"id": "entitle", "label": "Entitlement 权限\n4级 + 行级重写\n自动追加 WHERE dept_id", "group": "安全防线", "width": 170, "height": 65},
+    {"id": "guard_sql", "label": "guard_sql\nSELECT-only\n多语句/系统表拦截", "group": "安全防线", "width": 160, "height": 60},
+    {"id": "hitl", "label": "HITL 审批\n敏感列 salary/cost", "group": "安全防线", "width": 150, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;"},
+    {"id": "guard_out", "label": "guard_output\nPII / 系统prompt泄露", "group": "安全防线", "width": 160, "height": 60},
+    {"id": "output", "label": "输出\n(安全回答)", "group": "安全防线", "width": 120, "height": 55},
+
+    {"id": "confidence", "label": "Confidence Gate\n6维度·阈值0.7", "group": "质量与可靠性", "width": 150, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;"},
+    {"id": "retry", "label": "Retry 重试\n指数退避+jitter\n429/5xx", "group": "质量与可靠性", "width": 150, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;"}
+  ],
+  "edges": [
+    {"source": "input", "target": "guard_in", "label": "进"},
+    {"source": "guard_in", "target": "entitle", "label": "过"},
+    {"source": "entitle", "target": "guard_sql", "label": "授权后SQL"},
+    {"source": "guard_sql", "target": "hitl", "label": "命中敏感列"},
+    {"source": "guard_sql", "target": "confidence", "label": "非敏感"},
+    {"source": "hitl", "target": "confidence", "label": "批准"},
+    {"source": "confidence", "target": "guard_out", "label": "≥0.7"},
+    {"source": "guard_out", "target": "output", "label": "过"},
+    {"source": "confidence", "target": "retry", "label": "调用失败"}
+  ]
+}

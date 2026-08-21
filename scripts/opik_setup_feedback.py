@@ -26,7 +26,7 @@ def main() -> int:
         print("OPIK_ENABLED is not set. Add OPIK_ENABLED=1 to .env and retry.")
         return 1
 
-    from utils.opik_tracing import (
+    from harness.observation.opik_tracing import (
         configure_opik,
         ensure_annotation_queue,
         ensure_feedback_definitions,

@@ -1,0 +1,42 @@
+{
+  "direction": "LR",
+  "nodes": [
+    {"id": "start", "label": "用户提问\n(query)", "width": 110, "height": 55},
+    {"id": "router", "label": "Router 路由\n规则→缓存→LLM→继承", "width": 150, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;"},
+    {"id": "clarify", "label": "Clarify 澄清\n🛑 HITL interrupt", "width": 140, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;"},
+    {"id": "data_quality", "label": "DataQuality\n首次扫描质量", "width": 140, "height": 60},
+    {"id": "sql", "label": "SQL Agent\n查数据", "width": 120, "height": 60},
+    {"id": "confidence_gate", "label": "Confidence Gate\n置信度 0.7", "width": 140, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;"},
+    {"id": "strategy", "label": "Strategy Agent\n查制度文档", "width": 130, "height": 60},
+    {"id": "hbase", "label": "HBase Agent\nKV 查询", "width": 120, "height": 60},
+    {"id": "hive", "label": "Hive Agent\n数仓查询", "width": 120, "height": 60},
+    {"id": "analysis", "label": "Analysis Agent\n分析+画图", "width": 130, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;"},
+    {"id": "reflection", "label": "Reflection 反思\nSelf-Refine ≤2次", "width": 140, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;"},
+    {"id": "end", "label": "最终回答\n(END)", "width": 110, "height": 55}
+  ],
+  "edges": [
+    {"source": "start", "target": "router", "label": "entry"},
+    {"source": "router", "target": "clarify", "label": "意图模糊"},
+    {"source": "router", "target": "data_quality", "label": "首次查询"},
+    {"source": "router", "target": "sql", "label": "SQL 类"},
+    {"source": "router", "target": "strategy", "label": "战略类"},
+    {"source": "router", "target": "hbase", "label": "HBase 类"},
+    {"source": "router", "target": "hive", "label": "Hive 类"},
+    {"source": "clarify", "target": "router", "label": "用户回复→重路由"},
+    {"source": "data_quality", "target": "sql", "label": "扫完"},
+    {"source": "sql", "target": "confidence_gate", "label": "产出 SQL"},
+    {"source": "confidence_gate", "target": "clarify", "label": "<0.7 暂停审批"},
+    {"source": "confidence_gate", "target": "analysis", "label": "≥0.7 放行"},
+    {"source": "strategy", "target": "analysis", "label": ""},
+    {"source": "hbase", "target": "analysis", "label": ""},
+    {"source": "hive", "target": "analysis", "label": ""},
+    {"source": "analysis", "target": "reflection", "label": "产出答案"},
+    {"source": "reflection", "target": "analysis", "label": "不通过→重写(≤2)"},
+    {"source": "reflection", "target": "end", "label": "通过/达上限"}
+  ]
+}

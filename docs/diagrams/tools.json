@@ -1,0 +1,32 @@
+{
+  "direction": "TB",
+  "nodes": [
+    {"id": "pyfunc", "label": "普通 Python 函数\n(type hints + docstring)", "group": "工具定义", "width": 160, "height": 60},
+    {"id": "decorator", "label": "@tool 装饰器\ninspect 反射\n自动生成 Schema", "group": "工具定义", "width": 160, "height": 60,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;"},
+    {"id": "schema", "label": "JSON Schema\nname/description\ninput_schema", "group": "工具定义", "width": 150, "height": 60},
+    {"id": "agent", "label": "Agent\nschema(给LLM看)\nhandler(自己跑)", "group": "工具定义", "width": 160, "height": 60},
+
+    {"id": "data", "label": "数据工具\nrun_query · list_tables\ndescribe · discover", "group": "工具执行", "width": 170, "height": 65},
+    {"id": "analysis", "label": "分析工具\nanalyze · compare\nrender_chart", "group": "工具执行", "width": 160, "height": 60},
+    {"id": "knowledge", "label": "知识工具\nsearch_knowledge\nlookup_metric", "group": "工具执行", "width": 160, "height": 60},
+    {"id": "storage", "label": "存储工具\nrun_hbase\nsearch_hive_syntax", "group": "工具执行", "width": 160, "height": 60},
+
+    {"id": "entitle", "label": "权限过滤\nentitlement 检查", "group": "工具执行", "width": 140, "height": 55,
+     "style": "rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;"}
+  ],
+  "edges": [
+    {"source": "pyfunc", "target": "decorator", "label": "包裹"},
+    {"source": "decorator", "target": "schema", "label": "生成"},
+    {"source": "decorator", "target": "agent", "label": "handler"},
+    {"source": "schema", "target": "agent", "label": "给LLM"},
+    {"source": "agent", "target": "data", "label": "调"},
+    {"source": "agent", "target": "analysis", "label": "调"},
+    {"source": "agent", "target": "knowledge", "label": "调"},
+    {"source": "agent", "target": "storage", "label": "调"},
+    {"source": "data", "target": "entitle", "label": "先过滤"},
+    {"source": "analysis", "target": "entitle", "label": "先过滤"},
+    {"source": "knowledge", "target": "entitle", "label": "先过滤"},
+    {"source": "storage", "target": "entitle", "label": "先过滤"}
+  ]
+}
