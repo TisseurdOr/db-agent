@@ -36,7 +36,7 @@ def vector_mem():
     col_name = f"test_self_query_{uuid.uuid4().hex[:8]}"
     mem = VectorMemory(collection_name=col_name, embed_fn=fake_embedding)
     yield mem
-    mem.client.delete_collection(col_name)
+    mem.drop()
 
 
 # ─── parse / sanitize ─────────────────────────────────────────

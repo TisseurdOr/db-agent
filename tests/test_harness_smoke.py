@@ -383,7 +383,7 @@ def test_vector_memory_importable():
     vm = VectorMemory(collection_name="test_harness_smoke")
     assert vm is not None
     try:
-        vm.client.delete_collection("test_harness_smoke")
+        vm.drop()
     except Exception:
         pass
 

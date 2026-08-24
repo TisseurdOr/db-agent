@@ -213,6 +213,7 @@ cd frontend && npm install && npm run dev -- --port 3000
 `docker compose run --rm db-agent` 跑的是 **CLI**，不是 Web。
 
 > **状态外置（可选）**：配置 `REDIS_URL` 后，Web 会话自动存 Redis（多实例共享）；Agent checkpoint 也走 Redis（需 redis-stack，带 RediSearch）。未配置或 Redis 不可用时自动回落内存 / SQLite，不影响运行。
+> **向量后端可切换**：`VECTOR_DB=chroma`（默认）或 `milvus`（Milvus Lite 嵌入式，`MILVUS_URI` 指向集群地址即可连生产 Milvus），接口一致、测试双覆盖。
 
 ---
 
@@ -382,7 +383,7 @@ python tests/eval_runner.py                    # LLM-as-Judge
 |------|------|
 | LLM | DeepSeek（Anthropic 兼容 SDK） |
 | 编排 | LangGraph + AsyncSqliteSaver |
-| 向量 | ChromaDB；Embedding 用 DashScope |
+| 向量 | ChromaDB / Milvus 双后端（`VECTOR_DB` 切换，`MILVUS_URI` 接集群）；Embedding 用 DashScope |
 | Web | FastAPI + SSE + React/Vite |
 | Eval | Kimi 做 Judge |
 

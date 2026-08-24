@@ -22,6 +22,8 @@ pipeline_monitor/*.db
 
 # ChromaDB 向量库（本地数据，可重新生成，不入库）
 harness/memory/chroma_db/
+harness/memory/milvus_lite.db
+milvus_lite.db
 
 # 生成的图表 / 运行产物
 charts/

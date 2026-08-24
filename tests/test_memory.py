@@ -25,7 +25,7 @@ def vector_mem():
     mem = VectorMemory(collection_name=col_name, embed_fn=fake_embedding)
     yield mem
     # 清理：删掉测试 collection
-    mem.client.delete_collection(col_name)
+    mem.drop()
 
 
 def test_vector_memory_empty_recall(vector_mem):
