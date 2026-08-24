@@ -41,6 +41,10 @@ class _FakeRunner:
         self.resume_calls.append(approved)
         return "用户拒绝了该操作" if not approved else "已写入"
 
+    def get_execution_info(self):
+        """模拟 runner 内存接口（HITL 场景 plan_agents 由 interrupt payload 补充）。"""
+        return {"plan_agents": [], "tokens": 0}
+
 
 def test_expect_hitl_passes_on_interrupt_and_rejects():
     case = EvalCase(

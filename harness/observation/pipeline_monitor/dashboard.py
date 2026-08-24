@@ -7,7 +7,7 @@
     python -m pipeline_monitor.dashboard --history 50 # 最近 50 条运行记录
     python -m pipeline_monitor.dashboard --live       # 每 10s 刷新
 
-面试金句:
+设计定位:
 "不是做另一个 Airflow——是做一个只读监控面。任何调度器的
 Metadata DB 接进来就能看状态、成功率、告警。轻到只有 3 个模块。"
 """

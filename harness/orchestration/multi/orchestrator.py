@@ -37,6 +37,7 @@ from harness.constraints.confidence import (
 )
 from harness.observation.llm import extract_text
 from harness.constraints.retry import acall_with_retry
+from harness.constraints.circuit_breaker import CircuitOpenError, DEGRADED_MESSAGE
 from harness.observation.tracer import TraceContext, mask_sql
 from harness.observation.opik_tracing import (
     wrap_langgraph,
@@ -78,7 +79,13 @@ async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_
     if queue:
         await queue.put(("step_start", {"type": "step_start", "node": agent_name.lower(), "task": task[:60], "timestamp": time.time()}))
 
-    result, usage = await agent.run(client, task, context=context, model=model, verbose=True)
+    try:
+        result, usage = await agent.run(client, task, context=context, model=model, verbose=True)
+    except CircuitOpenError:
+        # 熔断降级：模型服务不可用，节点返回可读文案而不是让整张图崩溃
+        trace_span.error = "熔断降级：模型服务不可用"
+        print("⚠️ 熔断降级：模型服务暂时不可用，请稍后重试")
+        return DEGRADED_MESSAGE, {}
 
     if queue:
         elapsed = trace_span.elapsed if hasattr(trace_span, 'elapsed') else 0
@@ -88,6 +95,13 @@ async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_
     if is_agent_timeout(result):
         trace_span.error = f"{agent_name} 超过最大轮数"
         print(f"⚠️ {agent_name} 超过最大轮数，结果不可用。请缩小查询范围后重试。")
+        from harness.observation.alerts import send_alert
+        send_alert(
+            "Agent 超时",
+            f"{agent_name} 超过最大轮数，结果不可用（可能陷入工具调用循环）。",
+            level="warning",
+            tags={"agent": agent_name},
+        )
     return result, usage
 
 
@@ -705,8 +719,8 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
     2. 不通过 → 把改进建议注入 context，退回 Analysis 重写
     3. 最多重试 2 次，避免死循环
 
-    面试金句：
-    "在 Analysis 输出后加了 Reflection 节点——Self-Refine 模式。
+    设计动机：
+    "在 Analysis 输出后加 Reflection 节点——Self-Refine 模式。
     LLM 自审三个维度：完整性、真实性、可用性。不合格就把改进建议
     喂回 Analysis 重写。最多 2 轮，用 token 换质量。"
     """
@@ -927,6 +941,8 @@ class MultiAgentRunner:
         enable_data_quality: bool = True,
         checkpoint_db: Path | str | None = None,
         thread_id: str = "default-session",
+        checkpoint_redis_url: str | None = None,
+        checkpoint_prefix: str | None = None,
     ) -> "MultiAgentRunner":
         """异步工厂方法：初始化 SQLite 连接 + Checkpointer + 编译图。
 
@@ -936,6 +952,8 @@ class MultiAgentRunner:
             enable_data_quality: 首次查询是否自动注入 DataQuality
             checkpoint_db: Checkpointer 数据库路径（默认 db/agent_state.db）
             thread_id: 会话标识——同一 thread_id 共享 messages 历史
+            checkpoint_redis_url: 显式指定 Redis checkpoint URL（覆盖 REDIS_URL 环境变量）
+            checkpoint_prefix: Redis checkpoint key 前缀（测试隔离用）
         """
         self = object.__new__(cls)
         self.client = client
@@ -948,15 +966,40 @@ class MultiAgentRunner:
         self.thread_id = thread_id
         self._last_state = None  # 最近一次 graph 执行完成后的 state（供 UI 读取中间结果）
 
-        db_path = Path(checkpoint_db) if checkpoint_db else CHECKPOINT_DB
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(str(db_path))
-        self.checkpointer = AsyncSqliteSaver(self._conn)
-        await self.checkpointer.setup()  # 建 checkpoints 表
+        # 状态外置（可选）：配置 REDIS_URL 后 checkpoint 存 Redis（多实例共享 + TTL 自动清理）。
+        # 未配置 / Redis 不可用时自动降级回 SQLite——不阻断启动。
+        self._redis_cm = None
+        self.checkpointer = None
+        redis_url = (checkpoint_redis_url or os.getenv("REDIS_URL", "")).strip()
+        if redis_url:
+            try:
+                from langgraph.checkpoint.redis.aio import AsyncRedisSaver
+                ttl_minutes = int(os.getenv("REDIS_CHECKPOINT_TTL_MINUTES", "1440"))
+                saver_kwargs: dict = {"ttl": {"default_ttl": ttl_minutes}}  # 24h 自动过期，防无限膨胀
+                if checkpoint_prefix:
+                    saver_kwargs["checkpoint_prefix"] = checkpoint_prefix
+                cm = AsyncRedisSaver.from_conn_string(redis_url, **saver_kwargs)
+                self.checkpointer = await cm.__aenter__()
+                await self.checkpointer.setup()
+                self._redis_cm = cm
+                self.checkpoint_db = redis_url
+                print(f"📌 Checkpointer: Redis（{redis_url}，TTL {ttl_minutes} 分钟）")
+            except Exception as e:
+                print(f"⚠️ Redis Checkpointer 初始化失败（{type(e).__name__}: {e}），降级到 SQLite")
+                self._redis_cm = None
+                self.checkpointer = None
+
+        if self.checkpointer is None:
+            db_path = Path(checkpoint_db) if checkpoint_db else CHECKPOINT_DB
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = await aiosqlite.connect(str(db_path))
+            self.checkpointer = AsyncSqliteSaver(self._conn)
+            await self.checkpointer.setup()  # 建 checkpoints 表
+            self.checkpoint_db = db_path
+
         self.graph = wrap_langgraph(
             build_multi_agent_graph(checkpointer=self.checkpointer)
         )
-        self.checkpoint_db = db_path
         return self
 
     def _should_inject_dq(self) -> bool:
@@ -1040,6 +1083,9 @@ class MultiAgentRunner:
         # 检查是否被 interrupt 暂停（新/旧版本兼容）
         snapshot = await self.graph.aget_state(self._current_config)
         if snapshot and snapshot.interrupts:
+            # 暂停时也保存 state——这样 HITL 场景下调用方（如 eval_runner）
+            # 能通过 get_execution_info() 读到 plan，不必去翻 trace 文件
+            self._last_state = dict(snapshot.values or {})
             interrupt_data = snapshot.interrupts[0].value if snapshot.interrupts else {}
             hitl_type = interrupt_data.get("type") if isinstance(interrupt_data, dict) else None
             pause_meta = {"hitl_type": hitl_type} if hitl_type else {}
@@ -1120,9 +1166,11 @@ class MultiAgentRunner:
         return result.get("final_answer", "抱歉，无法回答。")
 
     def get_execution_info(self) -> dict:
-        """返回最近一次执行的结构化信息（供 UI 面板展示）。
+        """返回最近一次执行的结构化信息（供 UI / eval_runner 展示）。
 
         从 _last_state 提取：Router 分派方式、执行计划、SQL、Reflection 结果。
+        tokens 从内存中的 TraceContext 读取（不依赖 trace 文件落盘，
+        HITL 暂停时也能拿到已累计的数字）。
         """
         state = self._last_state or {}
         results = state.get("results", {})
@@ -1134,8 +1182,24 @@ class MultiAgentRunner:
             sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
             sql_text = sql_match.group(0).strip() if sql_match else ""
 
+        # plan 里的 agent 名列表（eval 的 agent_in_plan / agent_not_in_plan 断言用）
+        plan = state.get("plan", []) or []
+        plan_agents = [s.get("agent", "") for s in plan if s.get("agent")]
+
+        # token 统计：从内存 trace 读（interrupt 后 resume 前也有值）
+        # 防御性读取：未执行过 run() 的 runner（或测试桩）可能没有 _current_config
+        tokens = 0
+        config = getattr(self, "_current_config", None) or {}
+        trace = config.get("configurable", {}).get("_trace")
+        if trace is not None:
+            tokens = int(getattr(trace, "total_input_tokens", 0) or 0) + int(
+                getattr(trace, "total_output_tokens", 0) or 0
+            )
+
         return {
-            "plan": state.get("plan", []),
+            "plan": plan,
+            "plan_agents": plan_agents,
+            "tokens": tokens,
             "sql": sql_text,
             "reflection": {
                 "attempts": state.get("_reflection_attempts", 0),
@@ -1144,6 +1208,9 @@ class MultiAgentRunner:
         }
 
     async def aclose(self) -> None:
-        """关闭 SQLite 连接。main.py quit 时调用，避免 event loop 关闭后报错。"""
+        """关闭 Checkpointer 连接（Redis 或 SQLite）。main.py quit 时调用。"""
         flush_opik()
-        await self._conn.close()
+        if self._redis_cm is not None:
+            await self._redis_cm.__aexit__(None, None, None)
+        elif hasattr(self, "_conn"):
+            await self._conn.close()

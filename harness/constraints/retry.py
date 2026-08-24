@@ -16,10 +16,61 @@ import random
 import time
 
 import anthropic
+from harness.constraints.circuit_breaker import (
+    CircuitBreaker, CircuitOpenError, DEGRADED_MESSAGE,
+)
 
 # 可重试的 HTTP 状态码：
 #   429 限流 / 500 服务端错误 / 502,503 网关、过载 / 529 Anthropic overloaded
 RETRIABLE_STATUS = {429, 500, 502, 503, 529}
+
+# ── 熔断器（第三层自愈）───────────────────────────────────────────
+# 全局默认熔断器：进程内所有 LLM 调用共享。连续失败达到阈值 → 打开 →
+# 快速失败（抛 CircuitOpenError）→ 上层返回降级文案。
+# 测试通过 reset_circuit_breaker() 在每个用例间重置，避免状态污染。
+
+_default_circuit_breaker: CircuitBreaker | None = None
+
+
+def get_circuit_breaker() -> CircuitBreaker:
+    """获取（必要时创建）全局默认熔断器。"""
+    global _default_circuit_breaker
+    if _default_circuit_breaker is None:
+        _default_circuit_breaker = CircuitBreaker()
+    return _default_circuit_breaker
+
+
+def _alert_circuit_open(cb: CircuitBreaker) -> None:
+    """熔断器刚打开时发一条告警（只发一次，后续快速失败不再重复）。"""
+    from harness.observation.alerts import send_alert
+    send_alert(
+        "LLM 服务熔断",
+        f"连续失败 {cb.consecutive_failures} 次达到阈值，熔断器已打开，"
+        f"后续调用将快速失败降级，冷却 {cb.cooldown_seconds:.0f}s 后半开试探。",
+        level="critical",
+        tags={"breaker": "llm", "threshold": cb.failure_threshold},
+    )
+
+
+def reset_circuit_breaker() -> None:
+    """重置默认熔断器（测试隔离用）。"""
+    global _default_circuit_breaker
+    _default_circuit_breaker = None
+
+
+async def circuit_can_proceed() -> bool:
+    """熔断器是否放行本次调用；异步签名，方便上层 await。"""
+    return get_circuit_breaker().can_proceed()
+
+
+async def circuit_record_success() -> None:
+    get_circuit_breaker().record_success()
+
+
+async def circuit_record_failure() -> None:
+    get_circuit_breaker().record_failure()
+
+
 
 
 def is_retriable(exc: BaseException) -> bool:
@@ -56,11 +107,20 @@ def call_with_retry(fn, *args, max_retries: int | None = None,
     max_retries = max_retries_from_env() if max_retries is None else max_retries
     base_delay = base_delay_from_env() if base_delay is None else base_delay
 
+    cb = get_circuit_breaker()
+    if not cb.can_proceed():
+        raise CircuitOpenError("熔断器打开，快速失败（不发起调用）")
+
     for attempt in range(max_retries + 1):
         try:
-            return fn(*args, **kwargs)
+            result = fn(*args, **kwargs)
+            cb.record_success()
+            return result
         except Exception as e:
             if not is_retriable(e) or attempt >= max_retries:
+                cb.record_failure()
+                if cb.state == "open":
+                    _alert_circuit_open(cb)
                 raise
             delay = backoff_delay(attempt, base_delay)
             print(f"⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
@@ -77,14 +137,22 @@ async def acall_with_retry(fn, *args, max_retries: int | None = None,
     max_retries = max_retries_from_env() if max_retries is None else max_retries
     base_delay = base_delay_from_env() if base_delay is None else base_delay
 
+    cb = get_circuit_breaker()
+    if not cb.can_proceed():
+        raise CircuitOpenError("熔断器打开，快速失败（不发起调用）")
+
     for attempt in range(max_retries + 1):
         try:
             result = fn(*args, **kwargs)
             if inspect.isawaitable(result):
                 result = await result
+            cb.record_success()
             return result
         except Exception as e:
             if not is_retriable(e) or attempt >= max_retries:
+                cb.record_failure()
+                if cb.state == "open":
+                    _alert_circuit_open(cb)
                 raise
             delay = backoff_delay(attempt, base_delay)
             print(f"⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "

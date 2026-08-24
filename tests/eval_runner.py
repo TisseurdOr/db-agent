@@ -78,6 +78,11 @@ JUDGE_PROMPT = """你是 Agent 输出质量评估员。对以下回答从三个�
 2. completeness（完整性）: 是否完整回答了用户问题？有没有遗漏关键信息？
 3. conciseness（简洁性）: 是否直接回答？有没有冗余废话？
 
+【重要】如果题目附带了【标准答案】(ground truth)，accuracy 必须以它为准：
+- 回答包含标准答案的关键数字/名称 → accuracy 打高分（4-5）
+- 回答的关键数字与标准答案不符，或标准答案明确存在但回答说没有 → accuracy 打低分（1-2）
+- 没有附带标准答案时，才凭回答内部一致性判断是否编造
+
 输出格式（严格 JSON，不要任何其他文字）:
 {"accuracy": N, "completeness": N, "conciseness": N, "total": N, "verdict": "pass"|"fail", "comment": "一句话评价"}
 
@@ -226,10 +231,16 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
             result.fail(f"HITL resume 异常: {e}")
             return result, str(answer)
 
-    # 暂停时 trace 尚未落盘，用 interrupt.tool 补 agent；resume 后仍以最新 trace 为准
-    agent_names = _parse_agents_from_trace()
+    # 执行信息从 runner 内存直接读（不解析 trace 文件——文件是全局共享状态，
+    # 并行/连续运行会串读，且 HITL 暂停时 trace 尚未落盘）。
+    # plan 是 Router 的输出计划，正好是 agent_in_plan 断言想验证的东西。
+    exec_info = runner.get_execution_info()
+    agent_names = set(exec_info.get("plan_agents") or [])
     if expect_hitl and hitl_paused:
+        # 兜底：interrupt 发生在工具执行层，plan 里一定包含对应 agent
         agent_names = agent_names | _agents_from_interrupt(interrupt_payload)
+    tokens = int(exec_info.get("tokens") or 0)
+    result.tokens = tokens
 
     # 安全转换：resume 后仍可能是 dict（边缘情况）
     if isinstance(answer, dict):
@@ -273,10 +284,19 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
             else:
                 result.ok(f"回答不含 '{keyword}'")
 
-    # max_tokens: token 预算上限
+    # 事实断言（expected 非空才检查）：标准答案片段必须出现在回答里。
+    # 这是从「回答里有没有提关键词」升级到「回答的事实对不对」的关键一环。
+    if case.expected:
+        if case.expected.lower() in answer.lower():
+            result.ok(f"事实正确: 回答包含标准答案「{case.expected}」")
+        else:
+            result.fail(
+                f"事实错误: 回答不包含标准答案「{case.expected}」。\n"
+                f"    实际回答（前 200 字）: {answer[:200]}"
+            )
+
+    # max_tokens: token 预算上限（从 runner 内存 trace 读，不依赖文件）
     if "max_tokens" in assertions:
-        tokens = _parse_tokens_from_trace()
-        result.tokens = tokens
         limit = assertions["max_tokens"]
         if tokens <= limit:
             result.ok(f"token 用量 {tokens} ≤ {limit}")
@@ -294,58 +314,21 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
     return result, answer
 
 
-def _parse_agents_from_trace() -> set[str]:
-    """从最新 trace 文件中解析实际执行的 agent 列表。"""
-    trace_dir = PROJECT_ROOT / "logs" / "traces"
-    files = sorted(trace_dir.glob("*.jsonl"))
-    if not files:
-        return set()
-
-    with open(files[-1], "r") as f:
-        lines = f.readlines()
-    if not lines:
-        return set()
-
-    try:
-        trace = json.loads(lines[-1].strip())
-    except json.JSONDecodeError:
-        return set()
-
-    agents = set()
-    for span in trace.get("spans", []):
-        node = span.get("node", "")
-        if node in ("sql", "strategy", "analysis", "data_quality", "hbase", "hive"):
-            agents.add(node)
-    return agents
-
-
-def _parse_tokens_from_trace() -> int:
-    """从最新 trace 文件中解析总 token 数。"""
-    trace_dir = PROJECT_ROOT / "logs" / "traces"
-    files = sorted(trace_dir.glob("*.jsonl"))
-    if not files:
-        return 0
-
-    with open(files[-1], "r") as f:
-        lines = f.readlines()
-    if not lines:
-        return 0
-
-    try:
-        trace = json.loads(lines[-1].strip())
-    except json.JSONDecodeError:
-        return 0
-
-    return trace.get("totals", {}).get("total_tokens", 0)
-
-
 async def judge_answer(client: Anthropic, case: EvalCase, answer: str, model: str = KIMI_MODEL) -> dict:
-    """LLM-as-Judge: 让模型对回答打分。"""
+    """LLM-as-Judge: 让模型对回答打分。
+
+    如果用例带 expected（标准答案片段），把它注入给 Judge——
+    让 accuracy 变成「对着标准答案核对」，而不是凭感觉判断数字像不像编的。
+    """
+    expected_note = ""
+    if case.expected:
+        expected_note = f"\n标准答案（ground truth）: {case.expected}"
     user_msg = (
         f"用户问题: {case.query}\n"
-        f"Agent 回答: {answer[:2000]}\n\n"
+        f"Agent 回答: {answer[:2000]}\n"
         f"用例预期: {case.description}\n"
         f"断言规则: {json.dumps(case.assertions, ensure_ascii=False)}"
+        f"{expected_note}"
     )
     resp = client.messages.create(
         model=model,
@@ -549,6 +532,20 @@ async def main():
 
     print_summary(results)
 
+    # ── 回归基线：与上次同模式通过率对比，退步自动告警 ──
+    # 像体检报告存档：改代码后跑评测，立刻知道有没有把系统改坏。
+    eval_mode = "full" if (args.full or full_cases) else "fast"
+    if args.category:
+        eval_mode = args.category
+    elif args.id:
+        eval_mode = "single"
+    passed_count = sum(1 for r in results if r.passed)
+    rate = passed_count / len(results) if results else 0.0
+    from harness.observation.regression import check_regression, save_baseline
+    for warning in check_regression(eval_mode, {"pass_rate": rate, "case_count": len(results)}):
+        print(f"{RED}{warning}{RESET}")
+    save_baseline(eval_mode, {"pass_rate": rate, "case_count": len(results)})
+
     # ── Judge: LLM-as-Judge 打分（使用 Kimi，独立于被测模型） ──
     judge_by_id: dict[str, dict] = {}
     if args.judge:
@@ -584,11 +581,7 @@ async def main():
 
     # ── Opik: sync dataset + upload experiment ──
     if use_opik:
-        mode = "full" if (args.full or full_cases) else "fast"
-        if args.category:
-            mode = args.category
-        elif args.id:
-            mode = "single"
+        mode = eval_mode
         try:
             from harness.observation.opik_eval import sync_eval_dataset, upload_eval_experiment
             from tests.eval_cases import ALL_CASES as _ALL

@@ -21,7 +21,13 @@ from anthropic import Anthropic, APIStatusError
 from harness.memory.vector_store import VectorMemory
 from harness.context.token_budget import TokenBudget
 from harness.context.hybrid_window_manager import HybridWindowManager
-from harness.constraints.retry import acall_with_retry, is_retriable, backoff_delay, base_delay_from_env, max_retries_from_env
+from harness.constraints.retry import (
+    acall_with_retry, is_retriable, backoff_delay,
+    base_delay_from_env, max_retries_from_env,
+    circuit_can_proceed, circuit_record_success, circuit_record_failure,
+)
+from harness.constraints.circuit_breaker import CircuitOpenError, DEGRADED_MESSAGE
+from harness.constraints.idempotency import run_tool_with_guard
 
 # 不从模块级拿 TOOLS / TOOL_HANDLERS——tools 和 handlers 一律由调用方显式传入。
 # 好处：
@@ -40,12 +46,13 @@ async def _execute_tool(name: str, tool_input: dict, handlers: dict) -> tuple[st
     不抛异常——Tool 失败是正常情况（SQL 写错、表不存在等），
     把错误信息返回给模型，让它自己纠正，比直接 crash agent loop 好。
     这是 lesson 0008 的"结构化错误返回"原则。
+    写/副作用类工具走幂等守卫：重试/重规划重复发出同一调用时不重复执行。
     """
     handler = handlers[name]
     try:
-        result = handler(**tool_input)
-        if inspect.isawaitable(result):
-            result = await result
+        result, replayed = await run_tool_with_guard(name, tool_input, handler)
+        if replayed:
+            print(f"   ⏭ 幂等命中，跳过重复执行: {name}")
         return json.dumps(result, ensure_ascii=False), False
     except Exception as e:
         # 结构化错误：告诉模型发生了什么 + 建议下一步
@@ -156,6 +163,10 @@ async def streaming_agent(
 
         # streaming 的重试策略：只有"还没输出任何内容"时才重试——
         # 一旦有文字打到终端，重试会导致重复输出，此时直接抛错更诚实。
+        # 熔断检查：模型服务连续失败时快速降级，不再白烧 token
+        if not await circuit_can_proceed():
+            return DEGRADED_MESSAGE
+
         final_msg = None
         for attempt in range(max_retries_from_env() + 1):
             # 用于积累 streaming 中到达的 tool_use 和 text
@@ -206,10 +217,12 @@ async def streaming_agent(
 
                     # stream 结束后，get_final_message() 返回完整、解析好的 message 对象
                     final_msg = stream.get_final_message()
+                await circuit_record_success()
                 break
             except Exception as e:
                 emitted = bool(text_content or tool_use_blocks)
                 if emitted or not is_retriable(e) or attempt >= max_retries_from_env():
+                    await circuit_record_failure()
                     raise
                 delay = backoff_delay(attempt, base_delay_from_env())
                 print(f"\n⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
@@ -289,15 +302,19 @@ async def agent_loop(
     cacheable_system_blocks = _build_cacheable_system(system_prompt)
 
     for turn in range(max_turns):
-        response = await acall_with_retry(
-            client.messages.create,
-            model=model,
-            max_tokens=4096,
-            temperature=temperature,
-            system=cacheable_system_blocks,
-            messages=messages,
-            tools=tools,
-        )
+        try:
+            response = await acall_with_retry(
+                client.messages.create,
+                model=model,
+                max_tokens=4096,
+                temperature=temperature,
+                system=cacheable_system_blocks,
+                messages=messages,
+                tools=tools,
+            )
+        except CircuitOpenError:
+            # 熔断降级：不再重试，直接返回可读文案
+            return DEGRADED_MESSAGE
 
         text_parts = []
         tool_calls = []

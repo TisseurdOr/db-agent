@@ -210,6 +210,8 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 `docker compose run --rm db-agent` 跑的是 **CLI**，不是 Web。
 
+> **状态外置（可选）**：配置 `REDIS_URL` 后，Web 会话自动存 Redis（多实例共享）；Agent checkpoint 也走 Redis（需 redis-stack，带 RediSearch）。未配置或 Redis 不可用时自动回落内存 / SQLite，不影响运行。
+
 ---
 
 ## 两种运行模式
@@ -274,8 +276,14 @@ cd frontend && npm install && npm run dev -- --port 3000
 | API 重试 | 429 / 5xx / 超时 | 指数退避 + 抖动 | `LLM_MAX_RETRIES`（默认 3） |
 | SQL 自愈 | `run_query` 报错 | 错误回喂 → 对表结构 → 重写 | prompt 约束 2 次 |
 | 失败重规划 | Agent 超轮数 | 带反馈回 Router；跳过硬规则与脏缓存 | 1 次 |
+| **熔断降级** | 连续失败 ≥ 阈值 | 快速失败不调 API，返回可读降级文案；冷却后半开试探 | `CIRCUIT_BREAKER_THRESHOLD`（默认 5） |
 
 400/401 不重试。手册：[`docs/2026-08-05_错误恢复操作手册.md`](docs/2026-08-05_错误恢复操作手册.md)
+
+生产级加固：
+- **熔断降级**（`harness/constraints/circuit_breaker.py`）：连续失败达阈值 → 快速失败不调 API，返回可读降级文案；冷却后半开试探恢复
+- **工具幂等**（`harness/constraints/idempotency.py`）：写/副作用工具（保存记忆、HBase put/delete）同参数在 TTL 窗口内不重复执行，防止重试/重规划造成重复副作用
+- **告警**（`harness/observation/alerts.py`）：熔断打开、Agent 超时自动告警；默认写日志，配置 `ALERT_WEBHOOK_URL` 后推送 Slack/钉钉/飞书
 
 ---
 
@@ -351,7 +359,7 @@ python tests/eval_runner.py                    # LLM-as-Judge
 |----|------|
 | 本地审计 | `TraceContext` → `logs/traces/*.jsonl`（SQL 参数脱敏） |
 | 平台 | Opik：LangGraph 树、Feedback、Dataset |
-| 断点 | LangGraph Checkpointer → `db/agent_state.db` |
+| 断点 | LangGraph Checkpointer → `db/agent_state.db`（配置 `REDIS_URL` 后自动换 RedisSaver，TTL 自动清理） |
 
 `.env` 里 `OPIK_ENABLED=1` 才上报平台；JSONL 始终写。
 

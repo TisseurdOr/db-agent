@@ -201,7 +201,7 @@ def test_auto_chart_from_empty_text():
 def client(monkeypatch):
     """重置全局 session store 并提供 TestClient。"""
     import server.endpoints.sessions as sessions_mod
-    sessions_mod._sessions.clear()
+    sessions_mod.clear_sessions()
     with TestClient(app) as c:
         yield c
 
@@ -212,10 +212,11 @@ def test_health_endpoint(client):
     assert resp.json()["status"] == "ok"
 
 
-def test_sessions_list_and_messages(client):
+@pytest.mark.asyncio
+async def test_sessions_list_and_messages(client):
     import server.endpoints.sessions as sessions_mod
-    sessions_mod.record_message("s1", "user", "你好")
-    sessions_mod.record_message("s1", "assistant", "你好，请问需要什么帮助？")
+    await sessions_mod.record_message("s1", "user", "你好")
+    await sessions_mod.record_message("s1", "assistant", "你好，请问需要什么帮助？")
 
     resp = client.get("/api/sessions")
     assert resp.status_code == 200

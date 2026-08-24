@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>db-agent 面试架构图</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; margin: 24px; background: #fafafa; color: #222; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 16px; margin-top: 28px; border-left: 4px solid #4d6bfe; padding-left: 8px; }
+  .mermaid { background: #fff; border: 1px solid #e2e2e2; border-radius: 8px; padding: 16px; overflow-x: auto; }
+  ul { line-height: 1.7; }
+  code { background: #eef1f7; padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+  .tip { background: #fff8e6; border: 1px solid #f0d68a; border-radius: 8px; padding: 10px 14px; margin-top: 12px; font-size: 14px; }
+  .sec { background:#fff; border:1px solid #e2e2e2; border-radius:8px; padding: 4px 16px; margin-top: 10px; }
+</style>
+</head>
+<body>
+
+<h1>db-agent 面试架构图</h1>
+<p>打开方式：直接双击本文件在浏览器查看。面试前在白板上按「主干 → 安全线 → 记忆/观测」三步手绘。</p>
+
+<div class="mermaid">
+flowchart TD
+    U["用户提问（自然语言）"] --> G1["Layer1 输入护栏<br/>正则 · 零 token · 注入检测"]
+    G1 --> R{"Router 三级分派"}
+    R -->|"① 硬规则"| R1["正则兜底<br/>闲聊/元问题/制度/HBase/Hive<br/>拼音容错"]
+    R -->|"② 缓存"| R2["LRU 缓存<br/>同 query 复用 plan<br/>省一次 LLM 调用"]
+    R -->|"③ LLM 兜底"| R3["LLM 路由<br/>失败可回 Router 重规划(≤1次)"]
+    R1 --> P["执行计划 plan"]
+    R2 --> P
+    R3 --> P
+    P --> A1["SQL Agent"]
+    P --> A2["Strategy Agent<br/>制度/指标口径"]
+    P --> A3["HBase Agent<br/>scan/get 命令"]
+    P --> A4["Hive Agent<br/>HiveQL 方言"]
+    P --> A5["DataQuality<br/>首轮扫描"]
+    P --> A6["Analysis Agent<br/>综合/可视化"]
+    A1 --> CG["Confidence Gate<br/>LLM 6 项自评 &lt;0.7 暂停"]
+    CG --> AN["Analysis 综合<br/>注入 4 层上下文"]
+    A2 --> AN
+    A3 --> AN
+    A4 --> AN
+    A5 --> AN
+    AN --> RF{"Reflection 自审<br/>完整/真实/可用"}
+    RF -->|"不合格(≤2次)"| AN
+    RF -->|"通过"| G2["Layer3 输出护栏<br/>PII / system prompt 泄露"]
+    G2 --> D["最终回答"]
+    S["安全线：5 角色 RBAC<br/>表级白名单 + 行级改写<br/>HITL interrupt() 审批"] -.-> A1
+    S -.-> A3
+    S -.-> G2
+    M["记忆：短期滑动窗口 + 摘要<br/>长期 ChromaDB 向量召回<br/>自学习：成功 SQL 回流 few-shot"] -.-> AN
+    O["观测：TraceContext→JSONL(脱敏)<br/>Opik 执行树 + Feedback"] -.-> R
+    O -.-> AN
+</div>
+
+<h2>白板手绘三步法（面试时照着画）</h2>
+<div class="sec">
+<ol>
+  <li><b>第一步画主干</b>：用户 → Router（写"三级：规则/缓存/LLM"）→ 6 个 Agent 盒子 → Analysis → Reflection → 回答。边画边说："plan→execute→synthesize 标准流程"。</li>
+  <li><b>第二步画安全线</b>：用<b>虚线下挂</b>一条贯穿的线："5 角色 RBAC + 表级/行级隔离 + 敏感查询 HITL 人工审批"——强调"Tool 层硬拦截，不是只靠 prompt"。</li>
+  <li><b>第三步补记忆和观测</b>：右上角画"ChromaDB 长期记忆 + 自学习回流"，右下角画"JSONL + Opik 双写"。</li>
+</ol>
+</div>
+
+<h2>每层面试要点（一句话）</h2>
+<div class="sec">
+<ul>
+  <li><b>Router</b>："简单意图不烧 token——硬规则和缓存都是确定性的，只有兜底才调 LLM。"</li>
+  <li><b>6 个 Agent</b>："每个 Agent 是 prompt + tools + handlers 打包，执行循环和工具完全解耦，加工具不动循环。"</li>
+  <li><b>Confidence Gate</b>："SQL 生成后不直接执行，LLM 按 6 项标准自评，低于阈值暂停人工确认。"</li>
+  <li><b>Reflection</b>："Self-Refine 模式：自审完整性/真实性/可用性，不合格退回重写，最多 2 次——用 token 换质量。"</li>
+  <li><b>安全线</b>："双层生效：System Prompt 软约束 + Tool 层硬拦截；权限存数据库，改表即生效。"</li>
+  <li><b>记忆</b>："短期滑动窗口 + 摘要压缩；长期 ChromaDB 向量召回；成功 SQL 过质量门回流 few-shot，系统越用越准。"</li>
+  <li><b>观测</b>："本地 JSONL 审计（SQL 参数脱敏）+ Opik 执行树双写；成本按模型价格核算。"</li>
+</ul>
+</div>
+
+<h2>主动自曝三件事（防被戳穿）</h2>
+<div class="sec">
+<ul>
+  <li><b>HBase/Hive 是本地模拟器</b>：API 对齐、接口可替换，demo 不需要真集群——主动说，别等问。</li>
+  <li><b>行级隔离是 SQL 改写</b>：不解析完整 AST，生产应落数据库原生 RLS——先自曝再给演进方向。</li>
+  <li><b>护栏是正则</b>：定位成"零成本第一道闸"，真正兜底是 Tool 层白名单 + HITL 的纵深防御。</li>
+</ul>
+</div>
+
+<div class="tip">
+💡 面试前完整话术见 <code>docs/面试话术.md</code>；数字口径（361 单测 / 35 eval / 15 tools / 6 Agent / 5 角色）以 <code>docs/面试准备.md</code> 顶部勘误表为准。
+</div>
+
+<script src="../mermaid.min.js"></script>
+<script>mermaid.initialize({ startOnLoad: true, theme: "default" });</script>
+</body>
+</html>

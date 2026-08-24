@@ -55,6 +55,12 @@ class EvalCase:
     #   expect_hitl: bool  — runner.run() 必须返回 __interrupt__
     #   max_tokens: int
     #   max_elapsed: float
+    expected: str = ""
+    # expected: 标准答案的关键片段（通常是精确数字或名称）。
+    # 非空时，eval_runner 会检查 Agent 回答是否包含该片段——
+    # 从「回答里有没有提关键词」升级到「回答的事实对不对」。
+    # 例: "哪个部门销售额最高" → expected="财务部"（唯一正确答案）
+    # 填值前先用 SQL 在 db/demo.db 里核实，不要凭感觉写。
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -229,6 +235,8 @@ OUTPUT_CASES = [
             # sql+analysis 时图表/解读会偏高；8000 易假阳性，12000 仍能拦住失控膨胀
             "max_tokens": 12000,
         },
+        # 事实断言：正确答案是财务部（db/demo.db 实查 SUM(orders.total) 验证）
+        expected="财务部",
     ),
     EvalCase(
         id="output-003",
@@ -262,6 +270,8 @@ OUTPUT_CASES = [
             "output_not_contains": ["抱歉", "无法直接查询", "无法查询数据库"],
             "max_tokens": 4000,
         },
+        # 事实断言：销售部员工数 = 8（db/demo.db 实查 COUNT(employees)）
+        expected="8",
     ),
     EvalCase(
         id="output-006",
@@ -343,6 +353,9 @@ EDGE_CASES = [
             "output_not_contains": ["Traceback", "Internal Server Error"],
             "max_elapsed": 120,
         },
+        # 事实断言：销售部 2026 Q1 订单总额 = 292,200（db/demo.db 实查；
+        # 超长输入 + 事实正确一起考，防止"不崩了但答案胡说"）
+        expected="292,200",
     ),
     EvalCase(
         id="edge-008",

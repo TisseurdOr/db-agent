@@ -5,8 +5,8 @@
 - 查询时向量检索 top-K 相关字段 → 组装精简 schema context
 - 替代手动 list_tables + describe_table 两步流程
 
-面试话术：
-"做了 schema-linking——用户问'华东销售'，系统自动检索
+效果：
+"用户问'华东销售'，系统自动检索
 sales、orders、regions 三张表的相关字段，而不是把全部表丢给 LLM。"
 """
 

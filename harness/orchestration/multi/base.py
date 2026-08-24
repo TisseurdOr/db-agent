@@ -10,6 +10,7 @@ from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
 from harness.constraints.retry import acall_with_retry
+from harness.constraints.idempotency import run_tool_with_guard
 
 
 class AgentRunError(Exception):
@@ -93,11 +94,9 @@ async def _simple_agent_run(
                 content = f"错误: 未知 Tool '{tc.name}'"
             else:
                 try:
-                    import asyncio
-                    if asyncio.iscoroutinefunction(handler):
-                        content = str(await handler(**tc.input))
-                    else:
-                        content = str(handler(**tc.input))
+                    # 幂等守卫：写/副作用工具重复调用时直接返回缓存，不重复执行
+                    result, _replayed = await run_tool_with_guard(tc.name, tc.input, handler)
+                    content = str(result)
                 except GraphInterrupt:
                     raise
                 except Exception as e:
