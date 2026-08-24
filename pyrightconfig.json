@@ -1,6 +1,23 @@
 {
   "typeCheckingMode": "basic",
   "pythonVersion": "3.12",
-  "include": ["harness", "server", "db", "main.py", "app.py", "scripts"],
-  "exclude": ["**/__pycache__", "**/node_modules", ".venv", "frontend", "sidecar", "archive", "tests"]
+  "include": [
+    "harness",
+    "server",
+    "db",
+    "main.py",
+    "app.py",
+    "scripts"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    "frontend",
+    "sidecar",
+    "archive",
+    "tests"
+  ],
+  "venvPath": ".",
+  "venv": ".venv"
 }

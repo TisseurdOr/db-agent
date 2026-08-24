@@ -6,8 +6,8 @@
 
 from typing import Annotated, Any, TypedDict, cast
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph.message import add_messages
-from langgraph.types import RunnableConfig
 
 
 def _merge_stats(left: dict, right: dict) -> dict:

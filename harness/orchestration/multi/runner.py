@@ -50,6 +50,24 @@ class MultiAgentRunner:
     __init__ 是同步的做不到。create() 是 async classmethod，可以 await。
     """
 
+    # ── 实例属性声明（create() 用 object.__new__ 构造，pyright 需要类级注解）──
+    client: object
+    graph: object
+    model: str
+    enable_data_quality: bool
+    router_cache: object
+    task_manager: object
+    thread_id: str
+    checkpointer: object
+    checkpoint_db: object
+    _redis_cm: object
+    _conn: object
+    _current_config: dict | None
+    _last_state: dict | None
+    _dq_done: bool
+    _dq_time: float
+
+
     def __init__(self, *args, **kwargs):
         raise TypeError(
             "请使用 `runner = await MultiAgentRunner.create(...)`，"

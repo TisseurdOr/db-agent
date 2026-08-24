@@ -9,7 +9,8 @@ import re
 import time
 
 from langchain_core.messages import AIMessage
-from langgraph.types import RunnableConfig, interrupt
+from langchain_core.runnables import RunnableConfig
+from langgraph.types import interrupt
 
 from harness.constraints.confidence import (
     CONFIDENCE_PROMPT,
@@ -100,6 +101,7 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
         cached_plan = router_cache.get(state["query"]) if (router_cache and not replan_feedback) else None
 
         if cached_plan is not None:
+            assert router_cache is not None  # 缓存命中必有缓存
             plan_data = {"plan": cached_plan}
             span.task = f"缓存命中 ({router_cache.hit_rate})"
         else:
@@ -131,9 +133,10 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
             )
             llm_latency = time.time() - t_llm
             router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1, "elapsed": llm_latency}
-            if hasattr(resp, "usage") and resp.usage:
-                router_usage["input_tokens"] = resp.usage.input_tokens or 0
-                router_usage["output_tokens"] = resp.usage.output_tokens or 0
+            _usage = getattr(resp, "usage", None)
+            if _usage is not None:
+                router_usage["input_tokens"] = _usage.input_tokens or 0
+                router_usage["output_tokens"] = _usage.output_tokens or 0
 
             text = extract_text(resp, context="router")
             try:
@@ -180,6 +183,7 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
         route_source = "rule"
         print(f"   ⚡ 硬规则路由 ({route_latency*1000:.1f}ms)")
     elif cached_plan is not None:
+        assert router_cache is not None
         route_source = "cache"
         print(f"   💾 缓存命中 ({router_cache.hit_rate})")
     elif route_source_fallback:

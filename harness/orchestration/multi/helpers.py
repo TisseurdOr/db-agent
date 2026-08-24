@@ -6,7 +6,7 @@
 import os
 import time
 
-from langgraph.types import RunnableConfig
+from langchain_core.runnables import RunnableConfig
 
 from harness.constraints.circuit_breaker import DEGRADED_MESSAGE, CircuitOpenError
 from harness.observation.opik_tracing import (
