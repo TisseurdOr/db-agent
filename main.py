@@ -19,6 +19,7 @@ import asyncio
 import argparse
 import difflib
 import os
+import sys
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -73,6 +74,23 @@ def _exit_intent(text: str) -> str:
     return "no"
 
 
+def _require_env(name: str) -> str:
+    """启动时校验必需配置：缺了就友好退出，而不是运行到一半 KeyError。"""
+    value = os.getenv(name, "").strip()
+    if not value:
+        sys.exit(
+            f"❌ 缺少环境变量 {name}。\n"
+            f"   请先执行: cp .env.example .env\n"
+            f"   然后在 .env 里填入 {name}，或 export {name}=... 后重试。"
+        )
+    return value
+
+
+def cli_main() -> None:
+    """console_scripts 入口（`db-agent` 命令）。"""
+    asyncio.run(main())
+
+
 async def main():
     parser = argparse.ArgumentParser(description="自然语言数据库分析 Agent")
     parser.add_argument(
@@ -99,6 +117,9 @@ async def main():
     args = parser.parse_args()
     os.environ["AGENT_USER"] = args.user
 
+    # 启动校验：必需配置缺失立即友好退出（fail fast）
+    api_key = _require_env("ANTHROPIC_API_KEY")
+
     init_db()
     _seed_hbase_store()
     init_metric_registry()  # 初始化业务指标模板库
@@ -113,7 +134,7 @@ async def main():
     #   ANTHROPIC_API_KEY=sk-xxx
     # SDK 的 messages.stream() 需要 endpoint 支持 SSE streaming。
     client = Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
+        api_key=api_key,
         base_url=os.environ.get("ANTHROPIC_BASE_URL"),
     )
     from harness.observation.opik_tracing import wrap_anthropic_client
@@ -301,4 +322,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    cli_main()

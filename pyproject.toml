@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "db-agent"
 version = "0.1.0"
@@ -36,3 +40,13 @@ dev = [
 pythonpath = ["."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# ── CLI 入口：安装后可直接用 `db-agent` 命令 ──
+[project.scripts]
+db-agent = "main:cli_main"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+include = ["harness*", "server*", "db*"]

@@ -134,7 +134,9 @@ cd db-agent
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 cp .env.example .env             # 填 API key
-python main.py                   # 初始化 DB，进入 CLI
+uv sync && source .venv/bin/activate
+pip install -e .                  # 或 uv sync（生成 db-agent 命令）
+db-agent                          # 初始化 DB，进入 CLI（等价于 python main.py）
 ```
 
 ```bash
