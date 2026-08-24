@@ -16,10 +16,18 @@ from harness.orchestration.multi.cache import RouterCache
 from harness.orchestration.multi.graph import build_multi_agent_graph, edge_router
 from harness.orchestration.multi.helpers import (
     MAX_REPLAN_ATTEMPTS,
+    _annotate_route,
+    _finish_agent_task,
+    _fmt_time,
     _maybe_replan,
     _next_step,
+    _next_step_after_sql,
+    _run_agent_node,
+    _run_agent_with_timeout,
 )
 from harness.orchestration.multi.nodes import (
+    CLARIFY_PROMPT,
+    REFLECTION_PROMPT,
     node_analysis,
     node_clarify,
     node_confidence_gate,
@@ -31,10 +39,11 @@ from harness.orchestration.multi.nodes import (
     node_sql,
     node_strategy,
 )
-from harness.orchestration.multi.runner import MultiAgentRunner
+from harness.orchestration.multi.runner import CHECKPOINT_DB, MultiAgentRunner
 
 __all__ = [
     "MultiAgentRunner",
+    "CHECKPOINT_DB",
     "build_multi_agent_graph",
     "edge_router",
     "node_router",
@@ -50,6 +59,14 @@ __all__ = [
     "MAX_REPLAN_ATTEMPTS",
     "_maybe_replan",
     "_next_step",
+    "_fmt_time",
+    "_run_agent_with_timeout",
+    "_annotate_route",
+    "_finish_agent_task",
+    "_next_step_after_sql",
+    "_run_agent_node",
+    "CLARIFY_PROMPT",
+    "REFLECTION_PROMPT",
     "RouterCache",
     "sql_agent",
     "strategy_agent",
