@@ -156,6 +156,13 @@ class MilvusBackend:
         if self._created and self._dim == dim:
             return
         from pymilvus import DataType
+        if self._client.has_collection(self.collection_name):
+            # 进程重启/实例重建后复用同一持久化文件：集合已存在，
+            # 直接标记复用，不再 create_collection（否则抛 already exists）。
+            # 若 dim 与既有集合不一致，后续 insert 会由 Milvus 给出明确报错。
+            self._created = True
+            self._dim = dim
+            return
         schema = self._client.create_schema(auto_id=False)
         schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=255)
         schema.add_field("text", DataType.VARCHAR, max_length=65535)

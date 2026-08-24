@@ -13,6 +13,7 @@
 #   没配 EMBEDDING_API_KEY / Chroma 不可用 / 检索报错 → 返回空串，
 #   SQL Agent 退回纯 schema 模式，绝不因为 few-shot 挂掉主流程。
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -82,6 +83,18 @@ SEED_EXAMPLES = [
 _MIN_SCORE = 0.35
 
 
+def _example_id(question: str, source: str) -> str:
+    """样例稳定 ID。
+
+    不能用 Python 内置 hash()：字符串 hash 每进程随机化（PYTHONHASHSEED），
+    跨重启同一问题会生成不同 ID，Chroma upsert 退化为插入，
+    样例库会无限堆积重复项。用 hashlib 摘要——跨进程/重启恒定，
+    同一问题（同 source）后写覆盖先写，库随使用收敛而非膨胀。
+    """
+    digest = hashlib.sha1(question.encode("utf-8")).hexdigest()[:16]
+    return f"{source}_{digest}"
+
+
 def format_examples(examples: list[dict]) -> str:
     """把样例列表格式化成可注入 prompt 的 few-shot 文本。纯函数，零依赖。"""
     if not examples:
@@ -137,7 +150,7 @@ class SQLExampleStore:
     def add_example(self, question: str, sql: str, source: str = "user") -> str:
         """回流入口：把验证过的 Q→SQL 写入样例库（自学习闭环的写路径）。"""
         self._ensure_clients()
-        ex_id = f"{source}_{abs(hash(question)) % 10**8}"
+        ex_id = _example_id(question, source)
         self._collection.upsert(
             ids=[ex_id],
             documents=[question],

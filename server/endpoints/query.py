@@ -17,7 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from server.main import DEFAULT_MODEL, get_client
-from server.runner_wrapper import runner_registry
+from server.runner_wrapper import StreamingRunner, runner_registry
 from server.sse import SSEEvent, format_sse
 
 router = APIRouter()
@@ -94,8 +94,11 @@ async def _stream_query(request: Request, req: QueryRequest, query_id: str,
 
     yield format_sse("connected", {"query_id": query_id, "session_id": req.session_id})
 
+    # run_streaming / resume_streaming 在 StreamingRunner 上（包装 MultiAgentRunner 发 SSE 事件），
+    # 不能直接在 MultiAgentRunner 上调——回归：此前漏掉包装直接调 runner.run_streaming 必崩。
+    streaming = StreamingRunner(runner)
     bg_task = asyncio.create_task(
-        _run_and_collect(lambda: runner.run_streaming(req.query, queue), queue)
+        _run_and_collect(lambda: streaming.run_streaming(req.query, queue), queue)
     )
     state: dict = {}
     try:
@@ -123,7 +126,9 @@ async def _stream_resume(request: Request, req: ResumeRequest, registry) -> Asyn
         return
 
     bg_task = asyncio.create_task(
-        _run_and_collect(lambda: runner.resume_streaming(req.approved, queue), queue)
+        _run_and_collect(
+            lambda: StreamingRunner(runner).resume_streaming(req.approved, queue), queue
+        )
     )
     state: dict = {}
     try:

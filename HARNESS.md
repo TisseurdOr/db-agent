@@ -210,6 +210,38 @@ Tools: list_tables, describe_table, run_query
 
 ---
 
+## 可靠性 / 状态外置
+
+生产化加固层：**不让单点故障变成不可用，也不让状态锁死在单机进程里**。
+
+### 可靠性机制
+
+| 机制 | 文件 | 行为 | 配置 |
+|------|------|------|------|
+| 熔断器 | `constraints/circuit_breaker.py` | 连续失败 ≥ 阈值 → open 快速失败（返回降级文案，不再白烧 token）；冷却后半开试探 1 次，成功关闭 / 失败重开 | `CIRCUIT_BREAKER_ENABLED/THRESHOLD/COOLDOWN`（默认 5 次 / 30s） |
+| 工具幂等 | `constraints/idempotency.py` | 写类工具（save_to_memory / run_hbase）按 (工具, 规范化参数) 去重，TTL 窗口内命中直接返回缓存结果；**失败不缓存**，允许重试真执行 | `TOOL_IDEMPOTENCY_ENABLED/TTL`（默认 300s） |
+| 告警 | `observation/alerts.py` | 日志必写；配 Webhook 后后台线程推 Slack/钉钉/飞书，绝不阻塞事件循环 | `ALERT_ENABLED`、`ALERT_WEBHOOK_URL` |
+| 回归基线 | `observation/regression.py` | eval 结束对比上次 pass_rate，下降 >5pp 自动告警；基线存 `logs/eval_baseline.json` | — |
+
+告警触发点：熔断打开、Agent 超时（`orchestrator.py`）、评测退化（`eval_runner.py`）。
+
+### 状态外置（Redis / 双后端）
+
+统一原则：**Redis 不可用自动降级本地，绝不阻断启动。**
+
+| 状态 | 默认 | 配置 `REDIS_URL` 后 | 降级 |
+|------|------|-------------------|------|
+| Web 会话（`server/endpoints/sessions.py`） | 内存（重启即清） | Redis 列表 + TTL 24h，多实例共享 | 回内存 |
+| LangGraph checkpoint（`orchestrator.py`） | SQLite `db/agent_state.db` | `AsyncRedisSaver`，TTL 默认 24h 自动清理 | 初始化失败回 SQLite |
+| 向量库（`memory/vector_store.py`） | Chroma 本地嵌入式 | `VECTOR_DB=milvus`：Milvus Lite（本地文件）或集群（`MILVUS_URI` 仅 http(s)） | — |
+
+其他加固：
+
+- Runner 注册表（`server/runner_wrapper.py`）：空闲 30min 自动回收，防并发内存泄漏；HITL resume 按 `session_id` 定位，不再依赖全局 active。
+- SSE 断流（`server/endpoints/query.py` + `frontend/useSSE.ts`）：15s 心跳保活；`is_disconnected()` 感知断连并取消后台 Agent 任务（不烧 token）；前端指数退避重连（1s→2s→4s，默认 3 次）。
+
+---
+
 ## 上下文管理 — `harness/context/`
 
 | 组件 | 作用 |

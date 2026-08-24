@@ -214,27 +214,40 @@ def _make_config(monkeypatch, **extra) -> dict:
             **extra,
         }
     }
-    # 静默 opik 相关函数，避免外部调用
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_route", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_guard", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_hitl", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_fewshot", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_reflection", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_task_board", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "opik_tag_sql", lambda *a, **k: None)
-    monkeypatch.setattr(orchestrator_mod, "flush_opik", lambda: None)
+    # 静默 opik / 重试函数——拆分后按代码实际所在模块 patch（nodes/helpers/runner）
+    _quiet_opik(monkeypatch)
     _patch_acall(monkeypatch)
     return config
 
 
+def _quiet_opik(monkeypatch):
+    """拆分 orchestrator 后，opik 标签按实际使用模块静默。"""
+    import harness.orchestration.multi.helpers as helpers_mod
+    import harness.orchestration.multi.nodes as nodes_mod
+    import harness.orchestration.multi.runner as runner_mod
+
+    def noop(*a, **k):
+        return None
+    names = (
+        "opik_tag_route", "opik_tag_guard", "opik_tag_hitl", "opik_tag_fewshot",
+        "opik_tag_reflection", "opik_tag_task_board", "opik_tag_sql", "flush_opik",
+    )
+    for mod in (nodes_mod, helpers_mod, runner_mod):
+        for name in names:
+            if hasattr(mod, name):
+                monkeypatch.setattr(mod, name, noop)
+
+
 def _patch_acall(monkeypatch):
-    """把 orchestrator 的 acall_with_retry 替换为直接调用并 await 返回的 async 包装。"""
+    """拆分后 acall_with_retry 按实际使用模块（nodes）替换。"""
+    import harness.orchestration.multi.nodes as nodes_mod
+
     async def _acall(fn, *a, **k):
         result = fn(*a, **k)
         if asyncio.iscoroutine(result):
             result = await result
         return result
-    monkeypatch.setattr(orchestrator_mod, "acall_with_retry", _acall)
+    monkeypatch.setattr(nodes_mod, "acall_with_retry", _acall)
 
 
 def _patch_sql_imports(monkeypatch):
@@ -501,7 +514,8 @@ async def test_confidence_gate_low_triggers_interrupt(monkeypatch):
         captured["payload"] = payload
         captured["type"] = payload.get("type")
         return {"approved": False}
-    monkeypatch.setattr(orchestrator_mod, "interrupt", fake_interrupt)
+    # interrupt() 只在 nodes.py 被实际调用（runner 仅注释提及）
+    monkeypatch.setattr("harness.orchestration.multi.nodes.interrupt", fake_interrupt)
 
     state = {
         "query": "销售额",

@@ -22,7 +22,7 @@ from server.endpoints.query import (
     _stream_query,
     _stream_resume,
 )
-from server.runner_wrapper import RunnerRegistry
+from server.runner_wrapper import RunnerRegistry, StreamingRunner
 
 
 class _FakeRequest:
@@ -90,7 +90,9 @@ async def test_stream_query_cancels_bg_task_on_disconnect(monkeypatch):
     runner = _make_fake_runner()
     cancelled = asyncio.Event()
 
-    async def run_streaming(query, queue):
+    # 在 StreamingRunner 类上打补丁：_stream_query 必须走 StreamingRunner 包装
+    # （回归：此前直接调 runner.run_streaming，MultiAgentRunner 无此方法必崩）
+    async def run_streaming(self, query, queue):
         await asyncio.sleep(0)  # 确保任务已启动
         try:
             await asyncio.Event().wait()  # 模拟长任务
@@ -98,7 +100,7 @@ async def test_stream_query_cancels_bg_task_on_disconnect(monkeypatch):
             cancelled.set()
             raise
 
-    runner.run_streaming = run_streaming
+    monkeypatch.setattr(StreamingRunner, "run_streaming", run_streaming)
     async def fake_create(client, model, enable_data_quality, thread_id):
         return runner
     monkeypatch.setattr("server.runner_wrapper.MultiAgentRunner.create", fake_create)
@@ -118,11 +120,11 @@ async def test_stream_query_normal_completion(monkeypatch):
     registry = RunnerRegistry()
     runner = _make_fake_runner()
 
-    async def run_streaming(query, queue):
+    async def run_streaming(self, query, queue):
         await queue.put(("text_delta", {"text": "答案"}))
         await queue.put(("done_sentinel", None))
 
-    runner.run_streaming = run_streaming
+    monkeypatch.setattr(StreamingRunner, "run_streaming", run_streaming)
     async def fake_create(client, model, enable_data_quality, thread_id):
         return runner
     monkeypatch.setattr("server.runner_wrapper.MultiAgentRunner.create", fake_create)
@@ -152,11 +154,11 @@ async def test_resume_uses_session_runner(monkeypatch):
     registry = RunnerRegistry()
     runner = _make_fake_runner()
 
-    async def resume_streaming(approved, queue):
+    async def resume_streaming(self, approved, queue):
         await queue.put(("text_delta", {"text": "已批准继续"}))
         await queue.put(("done_sentinel", None))
 
-    runner.resume_streaming = resume_streaming
+    monkeypatch.setattr(StreamingRunner, "resume_streaming", resume_streaming)
     async def fake_create(client, model, enable_data_quality, thread_id):
         return runner
     monkeypatch.setattr("server.runner_wrapper.MultiAgentRunner.create", fake_create)

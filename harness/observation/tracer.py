@@ -19,8 +19,8 @@
     trace.save()  # 写入 logs/traces/YYYY-MM-DD.jsonl
 
 查看:
-    python -m utils.tracer --today     # 今天的 trace
-    python -m utils.tracer --last 3    # 最近 3 条
+    python -m harness.observation.tracer --today     # 今天的 trace
+    python -m harness.observation.tracer --last 3    # 最近 3 条
 """
 
 import json
@@ -214,7 +214,7 @@ class TraceContext:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CLI 查看工具: python -m utils.tracer --today / --last 3 / --id xxx
+# CLI 查看工具: python -m harness.observation.tracer --today / --last 3 / --id xxx
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _read_traces(filepath: Path) -> list[dict]:

@@ -35,11 +35,19 @@ class CircuitBreaker:
         failure_threshold: 连续失败多少次打开（默认读 CIRCUIT_BREAKER_THRESHOLD，默认 5）
         cooldown_seconds: 打开后冷却多久进入半开（默认读 CIRCUIT_BREAKER_COOLDOWN，默认 30s）
         half_open_max: 半开状态最多同时放行几个试探请求（默认 1）
+        enabled: 是否启用熔断（默认读 CIRCUIT_BREAKER_ENABLED，默认 1 = 启用）。
+                 关闭时 can_proceed 恒放行、不计失败，行为等同无熔断。
     """
 
     def __init__(self, failure_threshold: int | None = None,
                  cooldown_seconds: float | None = None,
-                 half_open_max: int = 1):
+                 half_open_max: int = 1, enabled: bool | None = None):
+        self.enabled = (
+            enabled
+            if enabled is not None
+            else os.getenv("CIRCUIT_BREAKER_ENABLED", "1").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         self.failure_threshold = (
             failure_threshold
             if failure_threshold is not None
@@ -64,6 +72,8 @@ class CircuitBreaker:
     @property
     def state(self) -> str:
         """当前对外状态：open 且冷却期已过 → 视为 half_open。"""
+        if not self.enabled:
+            return "closed"  # 关闭熔断时对外永远 closed
         with self._lock:
             if self._state == "open" and self._opened_at is not None:
                 if time.monotonic() - self._opened_at >= self.cooldown_seconds:
@@ -79,6 +89,8 @@ class CircuitBreaker:
 
     def can_proceed(self) -> bool:
         """是否允许发起一次真实调用。"""
+        if not self.enabled:
+            return True  # 关闭熔断：恒放行
         with self._lock:
             s = self.state
             if s == "closed":
@@ -95,6 +107,8 @@ class CircuitBreaker:
 
     def record_success(self) -> None:
         """调用成功：连续失败清零，回到 closed。"""
+        if not self.enabled:
+            return
         with self._lock:
             self._consecutive_failures = 0
             self._opened_at = None
@@ -103,6 +117,8 @@ class CircuitBreaker:
 
     def record_failure(self) -> None:
         """调用失败：累计连续失败，达到阈值则打开。"""
+        if not self.enabled:
+            return  # 关闭熔断：不计失败
         with self._lock:
             self._half_open_inflight = 0
             self._consecutive_failures += 1

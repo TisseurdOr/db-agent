@@ -129,3 +129,41 @@ def test_run_query_error_does_not_capture_sql():
     pop_last_successful_sql()
     run_query("SELECT no_such_col FROM orders", user_id="dba")
     assert pop_last_successful_sql() is None
+
+
+# ═══ 样例 ID 稳定性（自学习闭环的写路径去重）══════════════════════════
+
+
+def test_example_id_stable_across_processes():
+    """同一问题跨进程（不同 PYTHONHASHSEED）必须生成相同 ID——upsert 才真正去重。
+
+    回归：此前用 abs(hash(question))，字符串 hash 每进程随机化，
+    重启后同一问题 ID 变化，Chroma upsert 退化为插入，样例库无限堆积重复项。
+    """
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "from harness.context.sql_examples import _example_id; "
+        "print(_example_id('查一下各地区的销售额', 'auto'))"
+    )
+    ids = set()
+    for seed in ("1", "2", "3"):
+        p = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        assert p.returncode == 0, p.stderr
+        ids.add(p.stdout.strip())
+    assert len(ids) == 1, f"跨进程 ID 不稳定: {ids}"
+
+
+def test_example_id_distinguishes_question_and_source():
+    from harness.context.sql_examples import _example_id
+
+    assert _example_id("查一下销售额", "auto") == _example_id("查一下销售额", "auto")
+    assert _example_id("查一下销售额", "auto") != _example_id("查一下销售额", "user")
+    assert _example_id("查一下销售额", "auto") != _example_id("查一下成本", "auto")
+    assert _example_id("查一下销售额", "auto").startswith("auto_")

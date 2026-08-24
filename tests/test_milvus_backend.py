@@ -95,3 +95,41 @@ def test_milvus_unknown_backend_raises():
     from harness.memory.vector_store import make_backend
     with pytest.raises(ValueError):
         make_backend("bogus", "x", "y")
+
+
+def test_milvus_persisted_collection_reuse(tmp_path):
+    """进程重启后复用同一持久化文件 + 同名集合不应崩溃。
+
+    回归：此前 `_ensure_collection` 无条件 create_collection，
+    重启后第一次写入抛 `MilvusException: collection already exists`。
+    """
+    from harness.memory.vector_store import MilvusBackend, VectorMemory
+    uri = str(tmp_path / "reuse.db")
+    coll = f"test_reuse_{uuid.uuid4().hex[:8]}"
+
+    try:
+        b1 = MilvusBackend(collection_name=coll, uri=uri)
+        m1 = VectorMemory(embed_fn=fake_embedding, backend=b1)
+    except Exception as e:
+        pytest.skip(f"Milvus 不可用: {e}")
+
+    # 第一次运行：建集合并写入（不 drop，保留落盘数据）
+    m1.remember(content="第一条记忆", memory_type="conversation", user_id="u_reuse")
+    assert m1.count(user_id="u_reuse") == 1
+    del b1, m1  # 模拟进程结束
+
+    # 第二次运行：同一文件 + 同一集合名，全新实例
+    b2 = MilvusBackend(collection_name=coll, uri=uri)
+    m2 = VectorMemory(embed_fn=fake_embedding, backend=b2)
+    m2.remember(content="第二条记忆", memory_type="conversation", user_id="u_reuse")
+    assert m2.count(user_id="u_reuse") == 2  # 旧 1 条 + 新 1 条
+    recent = m2.list_recent(user_id="u_reuse", limit=5)
+    assert any("第一条" in r["text"] for r in recent)  # 旧数据仍在
+    m2.drop()
+
+    # drop 后集合已删，重建应能正常创建
+    b3 = MilvusBackend(collection_name=coll, uri=uri)
+    m3 = VectorMemory(embed_fn=fake_embedding, backend=b3)
+    m3.remember(content="重建后写入", memory_type="conversation", user_id="u_reuse")
+    assert m3.count(user_id="u_reuse") == 1
+    m3.drop()

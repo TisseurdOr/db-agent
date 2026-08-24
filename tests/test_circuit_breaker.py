@@ -150,3 +150,36 @@ async def test_streaming_agent_degrades_when_circuit_open():
         _ExplodingClient(), "查一下销售额", "prompt", tools=[], handlers={},
     )
     assert result == DEGRADED_MESSAGE
+
+
+# ═══ 4. 开关（CIRCUIT_BREAKER_ENABLED）════════════════════════════════
+
+
+def test_disabled_breaker_never_opens():
+    """关闭熔断：失败再多也不打开、不计失败、恒放行。"""
+    cb = CircuitBreaker(failure_threshold=2, cooldown_seconds=0.01, enabled=False)
+    for _ in range(10):
+        cb.record_failure()
+    assert cb.state == "closed"
+    assert cb.consecutive_failures == 0
+    assert cb.can_proceed() is True
+    cb.record_success()
+    assert cb.can_proceed() is True
+
+
+def test_disabled_via_env(monkeypatch):
+    """CIRCUIT_BREAKER_ENABLED=0 时熔断关闭（.env.example 承诺的开关）。"""
+    monkeypatch.setenv("CIRCUIT_BREAKER_ENABLED", "0")
+    cb = CircuitBreaker(failure_threshold=2, cooldown_seconds=60)
+    assert cb.enabled is False
+    cb.record_failure()
+    cb.record_failure()
+    assert cb.state == "closed"
+    assert cb.can_proceed() is True
+
+
+def test_enabled_default_on(monkeypatch):
+    """默认启用（与 .env.example 默认值 1 一致）。"""
+    monkeypatch.delenv("CIRCUIT_BREAKER_ENABLED", raising=False)
+    cb = CircuitBreaker()
+    assert cb.enabled is True
