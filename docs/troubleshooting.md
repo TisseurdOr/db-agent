@@ -37,6 +37,14 @@
 25. [自学习无 `📥`：SQL Agent 答对了却不回流](#25-自学习无--sql-agent-答对了却不回流)
 26. [前端打不开 / Vite 端口被占](#26-前端打不开--vite-端口被占)
 27. [`OPIK_ENABLED=1` 但 Opik 里没有 Trace](#27-opik_enabled1-但-opik-里没有-trace)
+28. [orchestrator 拆分后测试 `AttributeError: module has no attribute 'opik_tag_route'`](#28-orchestrator-拆分后测试-attributeerror)
+29. [orchestrator 拆分后 `NameError: node_router is not defined`](#29-orchestrator-拆分后-nameerror)
+30. [pyright `Could not access item in TypedDict`（configurable 自定义键）](#30-pyright-could-not-access-item-in-typeddict)
+31. [Milvus URI 本地文件路径报 `Illegal uri`](#31-milvus-uri-本地文件路径报-illegal-uri)
+32. [Milvus Lite 重启后 `create_collection` already exists](#32-milvus-lite-重启后-create_collection-already-exists)
+33. [样例库 ID 跨进程不稳定（自学习回流堆积）](#33-样例库-id-跨进程不稳定)
+34. [RedisSaver `Cannot create index on db != 0`](#34-redissaver-cannot-create-index-on-db--0)
+35. [docker pull Milvus 报 `failed size validation`](#35-docker-pull-milvus-报-failed-size-validation)
 
 ---
 
@@ -965,3 +973,168 @@ cd frontend && npm run dev -- --port 3000
 
 **涉及文件**
 `common/utils/opik_tracing.py`、`.env` / `.env.example`、`opik-platform/README.md`
+
+---
+
+## 28. orchestrator 拆分后测试 `AttributeError: module has no attribute 'opik_tag_route'`
+
+**现象**
+拆分 orchestrator 后 `tests/test_orchestration.py` 大量失败：
+```
+AttributeError: module '...multi.orchestrator' has no attribute 'opik_tag_route'
+```
+还有 `acall_with_retry` / `interrupt` / `flush_opik` 同款。
+
+**原因**
+测试用 `monkeypatch.setattr(orchestrator_mod, "opik_tag_route", ...)` patch **旧模块**；
+代码拆到 `nodes/helpers/runner` 后，各模块有**自己的绑定**，patch 旧模块不生效。
+
+**解决**
+patch 改为代码实际所在模块（拆分后按职责定位）：
+- opik 标签 → `nodes.py` / `helpers.py` / `runner.py`（写个 `_quiet_opik` 按模块遍历静默）
+- `acall_with_retry` → `nodes.py`
+- `interrupt` → `nodes.py`（runner 只是注释提到，不调它）
+
+**涉及文件**
+`tests/test_orchestration.py`、`harness/orchestration/multi/{nodes,helpers,runner}.py`
+
+---
+
+## 29. orchestrator 拆分后 `NameError: node_router is not defined`
+
+**现象**
+`build_multi_agent_graph` 报 `NameError: name 'node_router' is not defined`。
+
+**原因**
+原来 node 函数和构图在**同一个文件**里直接引用；拆到不同模块后
+缺跨模块 import——而且 **ruff 只会删多余 import，不会帮你加缺失的**。
+
+**解决**
+手动补跨模块引用：
+- `graph.py` ← `from .nodes import node_*`
+- `nodes.py` ← `from .helpers import _finish_agent_task / _maybe_replan / _next_step ...`
+- `runner.py` ← `from .graph import build_multi_agent_graph`
+
+**涉及文件**
+`harness/orchestration/multi/{graph,nodes,runner}.py`
+
+---
+
+## 30. pyright `Could not access item in TypedDict`（configurable 自定义键）
+
+**现象**
+```
+nodes.py:70 - error: Could not access item in TypedDict
+```
+都在 `config["configurable"]["_client"]` / `.get("_model")` 这类访问上。
+
+**原因**
+LangGraph 的 `RunnableConfig` 是 TypedDict，**不声明**项目注入的自定义键
+`_client / _model / _trace / _router_cache / _task_manager / _event_queue`。
+
+**解决**
+在 `state.py` 定义 `ConfigurablePayload(TypedDict, total=False)` + `agent_config()` 辅助：
+```python
+def agent_config(config: RunnableConfig) -> ConfigurablePayload:
+    return cast(ConfigurablePayload, config["configurable"])
+```
+然后统一替换 `config["configurable"]["_X"]` → `agent_config(config)["_X"]`。
+（本轮 238→223，消除 15 个；剩余 optional-member-access / missing-imports 是下一步。）
+
+**涉及文件**
+`harness/orchestration/multi/state.py`、`{nodes,helpers,runner}.py`
+
+---
+
+## 31. Milvus URI 本地文件路径报 `Illegal uri`
+
+**现象**
+```
+ConnectionConfigException: Illegal uri: [/path/x.db], expected form 'http[s]://...'
+```
+
+**原因**
+pymilvus **导入时**会解析环境变量 `MILVUS_URI`，本地文件路径被 ORM 连接器拒绝。
+
+**解决**
+本地嵌入式文件路径**只走构造参数** `uri=...`；`MILVUS_URI` 环境变量只放 `http(s)://` 集群地址。
+
+**涉及文件**
+`harness/memory/vector_store.py`（`MilvusBackend`）
+
+---
+
+## 32. Milvus Lite 重启后 `create_collection` already exists
+
+**现象**
+进程重启/实例重建后，同一 collection 再 `create_collection` 报 already exists。
+
+**原因**
+Milvus Lite 持久化文件还在，集合已存在。
+
+**解决**
+`add()` 前先 `client.has_collection(name)`，存在则标记复用不再创建
+（dim 与既有集合不一致时由 Milvus 在 insert 时报明确错误）。
+
+**涉及文件**
+`harness/memory/vector_store.py`
+
+---
+
+## 33. 样例库 ID 跨进程不稳定（自学习回流堆积）
+
+**现象**
+重启后同一问题反复写入样例库，few-shot 无限膨胀。
+
+**原因**
+内置 `hash(question)` 每进程随机化（PYTHONHASHSEED），跨重启 ID 变化，
+Chroma `upsert` 退化成 `insert`，永远"新增"不覆盖。
+
+**解决**
+改用 `hashlib` 稳定摘要生成 ID（同 question + source 恒定 → upsert 真正覆盖）：
+```python
+digest = hashlib.sha1(question.encode()).hexdigest()[:16]
+return f"{source}_{digest}"
+```
+
+**涉及文件**
+`harness/context/sql_examples.py`
+
+---
+
+## 34. RedisSaver `Cannot create index on db != 0`
+
+**现象**
+checkpoint 用 RedisSaver 初始化失败：
+```
+Cannot create index on db != 0
+```
+
+**原因**
+RediSearch（RedisSaver 建索引依赖）只允许在 **DB 0** 建索引。
+
+**解决**
+checkpoint 连 DB 0；测试用**独立 key 前缀**隔离，避免污染应用数据
+（`checkpoint_prefix` 参数）。
+
+**涉及文件**
+`harness/orchestration/multi/runner.py`、`tests/test_redis_state.py`
+
+---
+
+## 35. docker pull Milvus 报 `failed size validation`
+
+**现象**
+```
+docker pull milvusdb/milvus:... → failed size validation: 1383 != 1233
+```
+
+**原因**
+Docker daemon 内容存储 blob 校验失败（常见于磁盘/缓存损坏，连续重试同错）。
+
+**解决**
+换 **milvus-lite** 嵌入式（同一 Milvus 引擎，`MILVUS_URI` 指向本地文件即 Lite、
+指向集群地址即生产），绕开 Docker；或 `docker system prune` 清缓存后重试。
+
+**涉及文件**
+`pyproject.toml`（milvus-lite）、`harness/memory/vector_store.py`
