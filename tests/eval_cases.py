@@ -1,4 +1,4 @@
-"""Agent 评估用例库 — 20+ 结构化测试用例。
+"""Agent 评估用例库 — 60+ 结构化测试用例。
 
 用例分类:
 - guardrail: 安全护栏测试（不调 LLM，秒级跑完）
@@ -283,6 +283,87 @@ OUTPUT_CASES = [
             "max_tokens": 4000,
         },
     ),
+    # ── SQL 正确性扩展（expected 均为 db/demo.db 实查值）──
+    EvalCase(
+        id="output-007",
+        category="output_quality",
+        query="一共下了多少笔订单",
+        description="订单总数：338（db 实查）",
+        assertions={"output_contains": ["338"], "max_tokens": 4000},
+        expected="338",
+    ),
+    EvalCase(
+        id="output-008",
+        category="output_quality",
+        query="公司总共有多少名员工",
+        description="员工总数：39（db 实查）",
+        assertions={"output_contains": ["39"], "max_tokens": 4000},
+        expected="39",
+    ),
+    EvalCase(
+        id="output-009",
+        category="output_quality",
+        query="哪个部门的员工人数最多",
+        description="研发部 12 人（db 实查）",
+        assertions={"output_contains": ["员工"], "max_tokens": 4000},
+        expected="研发部",
+    ),
+    EvalCase(
+        id="output-010",
+        category="output_quality",
+        query="销量最高的产品是哪个",
+        description="品牌设计套餐 72 件（db 实查 SUM(quantity)）",
+        assertions={"output_contains": ["产品"], "max_tokens": 4000},
+        expected="品牌设计套餐",
+    ),
+    EvalCase(
+        id="output-011",
+        category="output_quality",
+        query="销售额最高的产品是哪个",
+        description="定制开发服务（db 实查 SUM(total)）",
+        assertions={"output_contains": ["产品"], "max_tokens": 4000},
+        expected="定制开发服务",
+    ),
+    EvalCase(
+        id="output-012",
+        category="output_quality",
+        query="哪种状态的订单数量最多",
+        description="completed 217 笔（db 实查）",
+        assertions={"output_contains": ["订单"], "max_tokens": 4000},
+        expected="completed",
+    ),
+    EvalCase(
+        id="output-013",
+        category="output_quality",
+        query="2025 年和 2026 年，哪一年的订单总额更高",
+        description="2025 年 774.75 万 > 2026 年 574.32 万（db 实查）",
+        assertions={"output_contains": ["2025", "2026"], "max_tokens": 6000},
+        expected="2025",
+    ),
+    EvalCase(
+        id="output-014",
+        category="output_quality",
+        query="已完成（completed）的订单有多少笔",
+        description="completed 217 笔（db 实查）",
+        assertions={"output_contains": ["217"], "max_tokens": 4000},
+        expected="217",
+    ),
+    EvalCase(
+        id="output-015",
+        category="output_quality",
+        query="公司里薪资最高的员工是谁",
+        description="林怡，47483（db 实查）",
+        assertions={"output_contains": ["员工"], "max_tokens": 4000},
+        expected="林怡",
+    ),
+    EvalCase(
+        id="output-016",
+        category="output_quality",
+        query="2026 年一共下了多少笔订单",
+        description="2026 年 152 笔（db 实查）",
+        assertions={"output_contains": ["152"], "max_tokens": 4000},
+        expected="152",
+    ),
 ]
 
 
@@ -401,6 +482,24 @@ EDGE_CASES = [
         assertions={
             "agent_not_in_plan": ["sql", "strategy", "hbase", "hive"],
         },
+    ),
+    EvalCase(
+        id="edge-013",
+        category="edge",
+        query="查询 2027 年 1 月的订单总额",
+        description="真实表但该时间范围无数据，应如实说明而非编造",
+        assertions={
+            "output_contains": ["没有", "不存在", "无数据", "暂无", "0"],
+            "output_not_contains": ["Traceback", "Internal Server Error"],
+            "max_tokens": 4000,
+        },
+    ),
+    EvalCase(
+        id="edge-014",
+        category="edge",
+        query="SQL 和 Hive 里分别有哪些表",
+        description="多引擎同时分派：必须 sql + hive 都进 plan",
+        assertions={"agent_in_plan": ["sql", "hive"]},
     ),
 ]
 

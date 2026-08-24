@@ -27,3 +27,6 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v --tb=short
+
+      - name: Eval guardrails (zero API)
+        run: uv run python tests/eval_runner.py --fast

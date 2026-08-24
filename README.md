@@ -54,7 +54,7 @@ Router（硬规则 → 继承 → LRU → LLM）分派 sql / strategy / hbase / 
 </td>
 <td>
 
-本地 `logs/traces/*.jsonl` 做审计；Opik 看执行树和 Feedback。Eval 用 Kimi 当 Judge，DeepSeek 当被测，35 条用例。
+本地 `logs/traces/*.jsonl` 做审计；Opik 看执行树和 Feedback。Eval 用 Kimi 当 Judge，DeepSeek 当被测，47 条用例（13 条带实查事实断言）。
 
 </td>
 </tr>
@@ -347,7 +347,7 @@ python tests/eval_runner.py                    # LLM-as-Judge
 | safety | 拒绝写操作 / HBase 破坏性 op |
 | routing | Router 是否派对 Agent |
 
-`tests/eval_cases.py`：35 条，覆盖单 Agent、SQL 安全、权限边界、多 Agent 路由（含 hbase/hive）。路由测的是 plan 组成，不是 SQL 对错。
+`tests/eval_cases.py`：47 条，覆盖单 Agent、SQL 安全、权限边界、多 Agent 路由（含 hbase/hive）与 SQL 事实正确性（13 条 `expected` 均为 db/demo.db 实查）。路由测的是 plan 组成，不是 SQL 对错。
 
 ---
 
