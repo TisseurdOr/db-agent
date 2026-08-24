@@ -286,3 +286,46 @@ async def test_runner_registry_get_or_create(monkeypatch):
 
 import pytest
 from langgraph.errors import GraphInterrupt
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. Web 鉴权（WEB_API_TOKEN）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_health_open_even_with_token(monkeypatch):
+    """配置 WEB_API_TOKEN 后 /api/health 仍应开放（探针用）。"""
+    monkeypatch.setenv("WEB_API_TOKEN", "secret123")
+    with TestClient(app) as c:
+        resp = c.get("/api/health")
+    assert resp.status_code == 200
+
+
+def test_business_api_401_without_token(monkeypatch):
+    """配置 WEB_API_TOKEN 后，不带 token 访问业务接口 → 401。"""
+    monkeypatch.setenv("WEB_API_TOKEN", "secret123")
+    with TestClient(app) as c:
+        resp = c.get("/api/sessions")
+    assert resp.status_code == 401
+
+
+def test_business_api_ok_with_bearer(monkeypatch):
+    """带正确 Bearer token → 200。"""
+    monkeypatch.setenv("WEB_API_TOKEN", "secret123")
+    with TestClient(app) as c:
+        resp = c.get("/api/sessions", headers={"Authorization": "Bearer secret123"})
+    assert resp.status_code == 200
+
+
+def test_business_api_ok_with_api_key_header(monkeypatch):
+    """X-API-Key 头同样有效。"""
+    monkeypatch.setenv("WEB_API_TOKEN", "secret123")
+    with TestClient(app) as c:
+        resp = c.get("/api/sessions", headers={"X-API-Key": "secret123"})
+    assert resp.status_code == 200
+
+
+def test_business_api_ok_without_token_env(monkeypatch):
+    """未配置 WEB_API_TOKEN → 鉴权关闭，业务接口可直接访问。"""
+    monkeypatch.delenv("WEB_API_TOKEN", raising=False)
+    with TestClient(app) as c:
+        resp = c.get("/api/sessions")
+    assert resp.status_code == 200

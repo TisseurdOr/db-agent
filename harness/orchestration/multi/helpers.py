@@ -13,6 +13,7 @@ from harness.observation.opik_tracing import (
     opik_tag_route,
     opik_tag_task_board,
 )
+from harness.observation.ops_metrics import record_error, record_tokens
 from harness.observation.tracer import TraceContext
 from harness.orchestration.multi.base import is_agent_timeout
 from harness.orchestration.multi.state import MultiAgentState, agent_config
@@ -42,6 +43,7 @@ async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_
         result, usage = await agent.run(client, task, context=context, model=model, verbose=True)
     except CircuitOpenError:
         # 熔断降级：模型服务不可用，节点返回可读文案而不是让整张图崩溃
+        record_error(agent_name, "熔断降级")
         trace_span.error = "熔断降级：模型服务不可用"
         print("⚠️ 熔断降级：模型服务暂时不可用，请稍后重试")
         return DEGRADED_MESSAGE, {}
@@ -51,7 +53,9 @@ async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_
         tokens = usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
         await queue.put(("step_end", {"type": "step_end", "node": agent_name.lower(), "task": task[:60], "elapsed": round(elapsed, 3), "tokens": tokens}))
 
+    record_tokens(usage.get("input_tokens", 0) + usage.get("output_tokens", 0))
     if is_agent_timeout(result):
+        record_error(agent_name, "超过最大轮数")
         trace_span.error = f"{agent_name} 超过最大轮数"
         print(f"⚠️ {agent_name} 超过最大轮数，结果不可用。请缩小查询范围后重试。")
         from harness.observation.alerts import send_alert

@@ -30,3 +30,5 @@ def _reset_global_guards():
     import server.endpoints.sessions as sessions_mod
     sessions_mod._redis_client = None
     sessions_mod.clear_sessions()
+    from harness.observation.ops_metrics import reset_metrics
+    reset_metrics()

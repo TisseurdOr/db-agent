@@ -92,7 +92,7 @@ def test_learn_from_success_skips_bad(monkeypatch):
 def test_learn_from_hitl(monkeypatch):
     calls = []
     monkeypatch.setattr(feedback, "record_sql_example", lambda q, s, source="user": calls.append((q, s, source)) or True)
-    sql = "SELECT name, salary FROM employees LIMIT 5"
+    sql = "SELECT name, dept_id FROM employees LIMIT 5"  # 非敏感列
     assert learn_from_hitl("查一下员工工资", sql)
     assert calls[0][2] == "hitl"
 
@@ -167,3 +167,27 @@ def test_example_id_distinguishes_question_and_source():
     assert _example_id("查一下销售额", "auto") != _example_id("查一下销售额", "user")
     assert _example_id("查一下销售额", "auto") != _example_id("查一下成本", "auto")
     assert _example_id("查一下销售额", "auto").startswith("auto_")
+
+
+# ═══ 敏感列审计（自学习回流防线）══════════════════════════════════════
+
+def test_sensitive_sql_blocks_learning(monkeypatch):
+    """含薪资列的 SQL 不应回流样例库。"""
+    from harness.memory.feedback import is_sensitive_sql, should_learn
+
+    assert is_sensitive_sql("SELECT name, salary FROM employees") == (True, "薪资")
+    assert is_sensitive_sql("SELECT name FROM employees") == (False, "")
+
+    # 质量门也要拦
+    assert should_learn("查员工薪资", "SELECT name, salary FROM employees", "SELECT name, salary FROM employees") is False
+
+
+def test_sensitive_sql_blocks_hitl(monkeypatch):
+    """HITL 批准路径同样拦敏感列。"""
+    from harness.memory.feedback import learn_from_hitl
+
+    calls = []
+    monkeypatch.setattr("harness.memory.feedback.record_sql_example", lambda q, s, source="user": calls.append(s) or True)
+    monkeypatch.setattr("harness.memory.feedback.sql_executes", lambda sql: True)
+    assert learn_from_hitl("查手机号", "SELECT phone FROM customers") is False
+    assert calls == []

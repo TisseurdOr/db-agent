@@ -10,6 +10,7 @@
 #   3. 文本里不能带 SQL 执行错误标记
 #   4. 提取出的 SQL 必须能在真实库上跑通（可选硬校验）
 #   5. 环境变量 AUTO_LEARN_SQL=0 可关掉自动回流
+#   6. 涉及敏感列（薪资/手机/证件/账户等）的 SQL 不自动回流（审计）
 
 from __future__ import annotations
 
@@ -28,6 +29,26 @@ _SQL_STMT_RE = re.compile(r"(?is)\b((?:WITH|SELECT)\b[\s\S]+?;)")
 _SQL_LOOSE_RE = re.compile(
     r"(?is)\b((?:WITH|SELECT)\b.+?)(?=\n\s*\n|\n结果|\n查询|\n首次|\n重写|\n>|\n#|\Z)"
 )
+
+
+# 敏感列审计——命中即跳过回流，防止敏感数据进 few-shot 库
+_SENSITIVE_PATTERNS = [
+    (r"(?i)\bsalary\b", "薪资"),
+    (r"(?i)\bphone\b|\bmobile\b", "手机号"),
+    (r"(?i)\b(id_card|idno|identity|passport|证件)\b", "证件号"),
+    (r"(?i)\b(bank|account_no|card_no|卡号)\b", "银行账户"),
+    (r"(?i)\b(password|pwd|secret)\b", "密码/密钥"),
+    (r"(?i)\bemail\b", "邮箱"),
+    (r"(?i)\b(address|住址)\b", "住址"),
+]
+
+
+def is_sensitive_sql(sql: str) -> tuple[bool, str]:
+    """检查 SQL 是否涉及敏感列。返回 (是否敏感, 命中的敏感项)。"""
+    for pattern, label in _SENSITIVE_PATTERNS:
+        if re.search(pattern, sql):
+            return True, label
+    return False, ""
 
 
 def extract_sql(text: str) -> str | None:
@@ -105,6 +126,11 @@ def should_learn(question: str, result_text: str, sql: str | None = None) -> boo
     sql = sql or extract_sql(result_text or "")
     if not sql:
         return False
+    # 审计：敏感列 SQL 不入样例库
+    sensitive, label = is_sensitive_sql(sql)
+    if sensitive:
+        print(f"   🚫 自学习: 跳过敏感 SQL 回流（{label}）")
+        return False
     return sql_executes(sql)
 
 
@@ -138,6 +164,10 @@ def learn_from_hitl(question: str, sql: str) -> bool:
     if os.getenv("AUTO_LEARN_SQL", "1") in ("0", "false", "False"):
         return False
     if not sql_executes(sql):
+        return False
+    sensitive, label = is_sensitive_sql(sql)
+    if sensitive:
+        print(f"   🚫 自学习: HITL 批准但含敏感列（{label}），不入样例库")
         return False
     ok = record_sql_example(question.strip(), sql.strip().rstrip(";"), source="hitl")
     if ok:

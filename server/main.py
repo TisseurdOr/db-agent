@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from anthropic import Anthropic
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -75,17 +75,28 @@ async def health():
     return {"status": "ok", "model": DEFAULT_MODEL, "mode": "multi"}
 
 
+@app.get("/api/metrics")
+async def metrics():
+    """Prometheus 文本格式运维指标（开放，供抓取）。"""
+    from fastapi.responses import PlainTextResponse
+
+    from harness.observation.ops_metrics import prometheus_text
+    return PlainTextResponse(prometheus_text(), media_type="text/plain; version=0.0.4")
+
+
 # ── Router registration (deferred to avoid circular imports) ───────────
 
+# 业务接口统一加可选鉴权（WEB_API_TOKEN；/api/health 保持开放供探针）
+from server.auth import require_auth  # noqa: E402
 from server.endpoints.datasource import router as datasource_router
 from server.endpoints.feedback import router as feedback_router
 from server.endpoints.query import router as query_router
 from server.endpoints.sessions import router as sessions_router
 
-app.include_router(query_router, prefix="/api")
-app.include_router(feedback_router, prefix="/api")
-app.include_router(sessions_router, prefix="/api")
-app.include_router(datasource_router, prefix="/api")
+app.include_router(query_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(feedback_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(sessions_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(datasource_router, prefix="/api", dependencies=[Depends(require_auth)])
 
 # ── Static file serving (React build output) ───────────────────────────
 

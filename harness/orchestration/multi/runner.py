@@ -25,6 +25,7 @@ from harness.observation.opik_tracing import (
     opik_tag_hitl,
     wrap_langgraph,
 )
+from harness.observation.ops_metrics import record_elapsed, record_query
 from harness.observation.tracer import TraceContext
 from harness.orchestration.multi.cache import RouterCache
 from harness.orchestration.multi.graph import build_multi_agent_graph
@@ -143,6 +144,19 @@ class MultiAgentRunner:
         return True
 
     async def run(self, query: str, recalled_memories: str = "", conversation_summary: str = "") -> str:
+        """执行一次查询（带运维指标记录：耗时 / 成败）。"""
+        import time as _t
+        _t0 = _t.monotonic()
+        _ok = False
+        try:
+            _result = await self._run_impl(query, recalled_memories, conversation_summary)
+            _ok = True
+            return _result
+        finally:
+            record_query(succeeded=_ok)
+            record_elapsed(_t.monotonic() - _t0)
+
+    async def _run_impl(self, query: str, recalled_memories: str = "", conversation_summary: str = "") -> str:
         """执行一次多 Agent 查询，返回 final_answer 文本。
 
         如果遇到 HITL 审批中断，返回 {"__interrupt__": True, "data": {...}}。
