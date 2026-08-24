@@ -1,19 +1,35 @@
-"""POST /api/query — SSE streaming endpoint for natural language queries."""
+"""POST /api/query — SSE streaming endpoint for natural language queries.
+
+SSE 断流处理：
+- 每轮循环检测 `request.is_disconnected()`，客户端断线立即停止推送；
+- 断线时取消后台 Agent 任务（不再白烧 token），runner 保留在注册表供 HITL resume；
+- 无事件时每 HEARTBEAT_INTERVAL 秒发心跳，防止代理/网络设备掐断长连接。
+"""
 
 import asyncio
-import json
+import contextlib
 import time
 import uuid
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from server.main import get_client, DEFAULT_MODEL
-from server.runner_wrapper import StreamingRunner, runner_registry
+from server.runner_wrapper import runner_registry
 from server.sse import SSEEvent, format_sse
 
 router = APIRouter()
+
+# 无事件时的心跳间隔（秒）：既保活，也让断连能被及时发现
+HEARTBEAT_INTERVAL = 15.0
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 class QueryRequest(BaseModel):
@@ -26,96 +42,121 @@ class QueryRequest(BaseModel):
 class ResumeRequest(BaseModel):
     query_id: str
     approved: bool = True
+    session_id: str = "default"  # 按会话定位 runner，避免全局 active 串线
+
+
+def _heartbeat_chunk() -> str:
+    return format_sse("heartbeat", {"ts": time.time()})
+
+
+async def _drain_and_stream(queue: asyncio.Queue, request: Request, state: dict):
+    """从 queue 转发事件到 SSE；带断连检测与心跳。
+
+    通过 state["completed"] 反馈是否正常完成（收到 done_sentinel），
+    供调用方决定是等后台任务收尾还是直接取消。
+    """
+    state["completed"] = False
+    while True:
+        if await request.is_disconnected():
+            return
+        try:
+            item = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
+        except asyncio.TimeoutError:
+            yield _heartbeat_chunk()  # 没有新事件也发心跳保活
+            continue
+        if item[0] == "done_sentinel":
+            state["completed"] = True
+            return
+        yield format_sse(item[0], item[1])
+
+
+async def _run_and_collect(coro_factory, queue: asyncio.Queue):
+    """后台执行 Agent 任务，把事件喂进 queue；异常转 error 事件。"""
+    try:
+        await coro_factory()
+    except Exception as e:
+        await queue.put(("error", SSEEvent.error(str(e), type(e).__name__)))
+    finally:
+        await queue.put(("done_sentinel", None))
+
+
+async def _stream_query(request: Request, req: QueryRequest, query_id: str,
+                      registry, client) -> AsyncIterator[str]:
+    """单次查询的完整 SSE 事件流：创建 runner → 后台执行 → 断连感知转发 → 清理。"""
+    queue: asyncio.Queue = asyncio.Queue()
+    model = req.model or DEFAULT_MODEL
+
+    runner = await registry.get_or_create(
+        session_id=req.session_id,
+        client=client,
+        model=model,
+    )
+
+    yield format_sse("connected", {"query_id": query_id, "session_id": req.session_id})
+
+    bg_task = asyncio.create_task(
+        _run_and_collect(lambda: runner.run_streaming(req.query, queue), queue)
+    )
+    state: dict = {}
+    try:
+        async for chunk in _drain_and_stream(queue, request, state):
+            yield chunk
+        # 正常结束：等后台任务收尾；断连则跳过（finally 里会取消）
+        if state.get("completed") and not bg_task.done():
+            await bg_task
+    finally:
+        # 断连/异常：取消后台 Agent 任务，避免孤儿任务继续烧 token
+        if not bg_task.done():
+            bg_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bg_task
+        registry.touch(req.session_id)  # 保留 runner 供 HITL resume
+
+
+async def _stream_resume(request: Request, req: ResumeRequest, registry) -> AsyncIterator[str]:
+    """HITL 恢复的事件流：按 session_id 定位 runner，断连感知转发。"""
+    queue: asyncio.Queue = asyncio.Queue()
+    runner = registry.get(req.session_id)
+
+    if runner is None:
+        yield format_sse("error", SSEEvent.error("没有可恢复的查询，请重新发起"))
+        return
+
+    bg_task = asyncio.create_task(
+        _run_and_collect(lambda: runner.resume_streaming(req.approved, queue), queue)
+    )
+    state: dict = {}
+    try:
+        async for chunk in _drain_and_stream(queue, request, state):
+            yield chunk
+        if state.get("completed") and not bg_task.done():
+            await bg_task
+    finally:
+        if not bg_task.done():
+            bg_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bg_task
+        registry.touch(req.session_id)
 
 
 @router.post("/query")
-async def run_query(req: QueryRequest):
+async def run_query(request: Request, req: QueryRequest):
     """SSE streaming endpoint. Returns text/event-stream."""
     query_id = uuid.uuid4().hex[:8]
 
     async def event_stream():
-        queue: asyncio.Queue = asyncio.Queue()
-        model = req.model or DEFAULT_MODEL
+        async for chunk in _stream_query(request, req, query_id, runner_registry, get_client()):
+            yield chunk
 
-        # Get or create runner for this session
-        runner = await runner_registry.get_or_create(
-            session_id=req.session_id,
-            client=get_client(),
-            model=model,
-        )
-
-        # Emit preamble
-        yield format_sse("connected", {"query_id": query_id, "session_id": req.session_id})
-
-        # Run query in background task, feeding events to queue
-        async def run_and_collect():
-            try:
-                await runner.run_streaming(req.query, queue)
-            except Exception as e:
-                await queue.put(("error", SSEEvent.error(str(e), type(e).__name__)))
-            finally:
-                await queue.put(("done_sentinel", None))
-
-        bg_task = asyncio.create_task(run_and_collect())
-
-        # Stream events from queue to client
-        while True:
-            item = await queue.get()
-            if item[0] == "done_sentinel":
-                break
-            event_type, data = item
-            yield format_sse(event_type, data)
-
-        await bg_task
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @router.post("/query/resume")
-async def resume_query(req: ResumeRequest):
+async def resume_query(request: Request, req: ResumeRequest):
     """Resume a HITL-paused query. Returns SSE stream continuation."""
 
     async def event_stream():
-        queue: asyncio.Queue = asyncio.Queue()
-        runner = runner_registry.get_active()
+        async for chunk in _stream_resume(request, req, runner_registry):
+            yield chunk
 
-        if runner is None:
-            yield format_sse("error", SSEEvent.error("No active query to resume"))
-            return
-
-        async def resume_and_collect():
-            try:
-                await runner.resume_streaming(req.approved, queue)
-            except Exception as e:
-                await queue.put(("error", SSEEvent.error(str(e), type(e).__name__)))
-            finally:
-                await queue.put(("done_sentinel", None))
-
-        bg_task = asyncio.create_task(resume_and_collect())
-
-        while True:
-            item = await queue.get()
-            if item[0] == "done_sentinel":
-                break
-            event_type, data = item
-            yield format_sse(event_type, data)
-
-        await bg_task
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)

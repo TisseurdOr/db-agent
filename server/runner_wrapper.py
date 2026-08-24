@@ -19,10 +19,18 @@ from server.sse import SSEEvent
 
 
 class RunnerRegistry:
-    """Manages MultiAgentRunner instances keyed by session_id."""
+    """Manages MultiAgentRunner instances keyed by session_id.
+
+    带空闲 TTL 回收：长期不活跃的 runner 会被关闭，防止并发下内存泄漏。
+    同一 session 的 HITL resume 按 session_id 精确定位，不再依赖全局 active。
+    """
+
+    # 空闲多久回收（秒）；HITL 暂停中的会话也会在超过该时间后回收
+    RUNNER_TTL_SECONDS = 60 * 30
 
     def __init__(self):
-        self._runners: dict[str, MultiAgentRunner] = {}
+        # session_id -> (runner, last_active_monotonic)
+        self._runners: dict[str, tuple[MultiAgentRunner, float]] = {}
         self._active: MultiAgentRunner | None = None
 
     async def get_or_create(
@@ -31,24 +39,65 @@ class RunnerRegistry:
         client: Anthropic,
         model: str,
     ) -> MultiAgentRunner:
-        if session_id not in self._runners:
+        now = time.monotonic()
+        await self._sweep(now)
+        entry = self._runners.get(session_id)
+        if entry is None:
             runner = await MultiAgentRunner.create(
                 client,
                 model=model,
                 enable_data_quality=True,
                 thread_id=f"web-{session_id}",
             )
-            self._runners[session_id] = runner
-        self._active = self._runners[session_id]
-        return self._active
+            self._runners[session_id] = (runner, now)
+        else:
+            runner = entry[0]
+            self._runners[session_id] = (runner, now)
+        self._active = runner
+        return runner
+
+    def get(self, session_id: str) -> MultiAgentRunner | None:
+        """按 session_id 取 runner（HITL resume 用），没有则 None。"""
+        entry = self._runners.get(session_id)
+        return entry[0] if entry else None
+
+    def touch(self, session_id: str) -> None:
+        """更新会话活跃时间（避免被 TTL 误回收）。"""
+        entry = self._runners.get(session_id)
+        if entry is not None:
+            self._runners[session_id] = (entry[0], time.monotonic())
 
     def get_active(self) -> MultiAgentRunner | None:
         return self._active
 
+    async def _sweep(self, now: float | None = None) -> None:
+        """关闭并移除空闲超过 TTL 的 runner。"""
+        now = now or time.monotonic()
+        expired = [
+            sid for sid, (_, ts) in self._runners.items()
+            if now - ts > self.RUNNER_TTL_SECONDS
+        ]
+        for sid in expired:
+            runner, _ = self._runners.pop(sid)
+            try:
+                await runner.aclose()
+            except Exception:
+                pass
+
+    async def remove(self, session_id: str) -> None:
+        """移除并关闭指定会话的 runner（客户端断连/会话结束时调用）。"""
+        entry = self._runners.pop(session_id, None)
+        if entry is not None:
+            try:
+                await entry[0].aclose()
+            except Exception:
+                pass
+
     async def close_all(self):
-        for runner in self._runners.values():
+        for runner, _ in self._runners.values():
             await runner.aclose()
         self._runners.clear()
+        self._active = None
 
 
 runner_registry = RunnerRegistry()

@@ -5,70 +5,112 @@ interface UseSSEOptions {
   onEvent: (event: SSEEvent) => void;
   onError?: (error: string) => void;
   onDone?: () => void;
+  /** 网络断流时的重连次数（默认 3；HTTP 错误不重试） */
+  reconnectAttempts?: number;
+  /** 重连基础延迟 ms（指数退避：1s → 2s → 4s） */
+  reconnectDelayMs?: number;
 }
 
-export function useSSE({ onEvent, onError, onDone }: UseSSEOptions) {
+export function useSSE({
+  onEvent,
+  onError,
+  onDone,
+  reconnectAttempts = 3,
+  reconnectDelayMs = 1000,
+}: UseSSEOptions) {
   const abortRef = useRef<AbortController | null>(null);
+
+  /** 可被 abort 打断的等待，重连退避期间用户停止要能立即生效 */
+  const sleep = useCallback((ms: number, signal: AbortSignal) => {
+    return new Promise<void>((resolve, reject) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      signal.addEventListener("abort", onAbort);
+    });
+  }, []);
 
   const connect = useCallback(
     async (url: string, body: unknown) => {
       const controller = new AbortController();
       abortRef.current = controller;
+      let attempt = 0;
 
       try {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-
-        if (!response.ok) {
-          onError?.(`HTTP ${response.status}: ${response.statusText}`);
-          return;
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) {
-          onError?.("Response body is not readable");
-          return;
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
         while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+          try {
+            const response = await fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            });
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+            if (!response.ok) {
+              onError?.(`HTTP ${response.status}: ${response.statusText}`);
+              return;
+            }
 
-          let currentEvent = "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              currentEvent = line.slice(7).trim();
-            } else if (line.startsWith("data: ")) {
-              try {
-                const data = JSON.parse(line.slice(6));
-                data._eventType = currentEvent || data.type;
-                onEvent(data);
-              } catch {
-                // skip malformed JSON
+            const reader = response.body?.getReader();
+            if (!reader) {
+              onError?.("Response body is not readable");
+              return;
+            }
+
+            const decoder = new TextDecoder();
+            let buffer = "";
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+
+              let currentEvent = "";
+              for (const line of lines) {
+                if (line.startsWith("event: ")) {
+                  currentEvent = line.slice(7).trim();
+                } else if (line.startsWith("data: ")) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    data._eventType = currentEvent || data.type;
+                    onEvent(data);
+                  } catch {
+                    // skip malformed JSON
+                  }
+                }
               }
             }
+            return; // 服务端正常结束
+          } catch (err: unknown) {
+            // 用户主动中止：不重试
+            if (err instanceof Error && err.name === "AbortError") return;
+            // 网络断流：指数退避重连
+            attempt++;
+            if (attempt > reconnectAttempts) {
+              onError?.(err instanceof Error ? err.message : String(err));
+              return;
+            }
+            const delay = reconnectDelayMs * 2 ** (attempt - 1);
+            try {
+              await sleep(delay, controller.signal);
+            } catch {
+              return; // 等待期间被中止
+            }
           }
-        }
-      } catch (err: unknown) {
-        if (err instanceof Error && err.name !== "AbortError") {
-          onError?.(err.message);
         }
       } finally {
         onDone?.();
       }
     },
-    [onEvent, onError, onDone],
+    [onEvent, onError, onDone, reconnectAttempts, reconnectDelayMs, sleep],
   );
 
   const abort = useCallback(() => {

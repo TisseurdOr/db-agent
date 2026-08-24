@@ -62,16 +62,16 @@ export default function App() {
     const qid = queryIdRef.current;
     if (qid) {
       resume();
-      connect("/api/query/resume", { query_id: qid, approved: true });
+      connect("/api/query/resume", { query_id: qid, approved: true, session_id: state.sessionId });
     }
-  }, [connect, resume]);
+  }, [connect, resume, state.sessionId]);
 
   const handleReject = useCallback(() => {
     const qid = queryIdRef.current;
     if (qid) {
-      connect("/api/query/resume", { query_id: qid, approved: false });
+      connect("/api/query/resume", { query_id: qid, approved: false, session_id: state.sessionId });
     }
-  }, [connect]);
+  }, [connect, state.sessionId]);
 
   const handleFeedback = useCallback(
     (id: string, rating: "up" | "down") => {
