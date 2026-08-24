@@ -15,7 +15,7 @@ from harness.observation.opik_tracing import (
 )
 from harness.observation.tracer import TraceContext
 from harness.orchestration.multi.base import is_agent_timeout
-from harness.orchestration.multi.state import MultiAgentState
+from harness.orchestration.multi.state import MultiAgentState, agent_config
 
 # Checkpointer 数据库路径。
 # 图每执行完一个节点，自动把 state 写进这个 SQLite 文件。
@@ -34,7 +34,7 @@ async def _run_agent_with_timeout(agent, client, task, model, trace_span, agent_
 
     如果 config 中注入了 _event_queue，emit step_start/step_end SSE 事件。
     """
-    queue = config["configurable"].get("_event_queue") if config else None
+    queue = agent_config(config).get("_event_queue") if config else None
     if queue:
         await queue.put(("step_start", {"type": "step_start", "node": agent_name.lower(), "task": task[:60], "timestamp": time.time()}))
 
@@ -147,9 +147,9 @@ def _next_step_after_sql(state: MultiAgentState, results: dict) -> dict:
     return {"results": results, "next": "analysis"}
 async def _run_agent_node(state, config, agent, agent_name, result_key):
     """通用 Agent 节点：取 task → 执行 → 写 results。"""
-    client = config["configurable"]["_client"]
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    client = agent_config(config)["_client"]
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == agent_name)
     span = trace.start_span(agent_name, task[:60])
     print(f"⏳ {agent_name.upper()} Agent: {task[:60]}...")

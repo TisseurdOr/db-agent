@@ -4,9 +4,10 @@
 - DBAgentState: 旧课单 Agent 图用；图代码已迁到 archive/legacy_single_agent_graph/
 """
 
-from typing import Annotated, TypedDict
+from typing import Annotated, Any, TypedDict, cast
 
 from langgraph.graph.message import add_messages
+from langgraph.types import RunnableConfig
 
 
 def _merge_stats(left: dict, right: dict) -> dict:
@@ -32,6 +33,26 @@ class DBAgentState(TypedDict):
 # ── 0023: 多 Agent 编排 ──
 # _client / _model 是 _ 前缀——由 MultiAgentRunner.invoke() 注入，
 # 不作为 LangGraph state channel 被追踪（但 TypedDict 声明了才能传进去）。
+
+class ConfigurablePayload(TypedDict, total=False):
+    """MultiAgentRunner 注入 configurable 的自定义键。
+
+    LangGraph 的 RunnableConfig 不声明这些自定义键，pyright 会报
+    "Could not access item in TypedDict"。这里显式声明，访问走 agent_config()。
+    """
+    thread_id: str
+    _client: Any
+    _model: str
+    _trace: Any
+    _router_cache: Any
+    _task_manager: Any
+    _event_queue: Any
+
+
+def agent_config(config: RunnableConfig) -> ConfigurablePayload:
+    """把 LangGraph RunnableConfig 的 configurable 转成有类型的自定义负载。"""
+    return cast(ConfigurablePayload, config["configurable"])
+
 
 class MultiAgentState(TypedDict):
     query: str                  # 用户问题（ainvoke 时写入）

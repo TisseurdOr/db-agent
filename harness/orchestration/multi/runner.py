@@ -28,6 +28,7 @@ from harness.observation.opik_tracing import (
 from harness.observation.tracer import TraceContext
 from harness.orchestration.multi.cache import RouterCache
 from harness.orchestration.multi.graph import build_multi_agent_graph
+from harness.orchestration.multi.state import agent_config
 from harness.orchestration.multi.task_system import TaskManager
 
 # Checkpointer 数据库路径。
@@ -273,7 +274,7 @@ class MultiAgentRunner:
         if clarified_query:
             resume_value["clarified_query"] = clarified_query
 
-        trace = self._current_config["configurable"].get("_trace")
+        trace = agent_config(self._current_config).get("_trace")
         result = await self.graph.ainvoke(
             Command(resume=resume_value),
             config=self._current_config,

@@ -48,7 +48,7 @@ from harness.orchestration.multi.helpers import (
     _run_agent_with_timeout,
 )
 from harness.orchestration.multi.router import ROUTER_PROMPT, route_override
-from harness.orchestration.multi.state import MultiAgentState
+from harness.orchestration.multi.state import MultiAgentState, agent_config
 
 # Checkpointer 数据库路径。
 # 图每执行完一个节点，自动把 state 写进这个 SQLite 文件。
@@ -64,12 +64,12 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     这样 Router 能识别"刚才问了什么"等元问题——
     看到历史里上一轮问了"有哪些表"，就知道这不是数据查询。
     """
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("router", "分析意图")
 
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
-    router_cache = config["configurable"].get("_router_cache")
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    router_cache = agent_config(config).get("_router_cache")
 
     # 失败重规划路径：跳过硬规则和缓存——两者都会原样复现失败的 plan，
     # 必须走 LLM 并把失败反馈喂进去，才可能得到不同的计划。
@@ -196,7 +196,7 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
         return {"plan": plan, "next": "clarify", "_stats": stats, "_replan_feedback": ""}
 
     # s12：把 plan 落成 .tasks/ 任务图（先计划再执行的磁盘可见版）
-    task_manager = config["configurable"].get("_task_manager")
+    task_manager = agent_config(config).get("_task_manager")
     if task_manager is not None and plan:
         task_manager.materialize_from_plan(plan, query=state.get("query", ""))
 
@@ -214,11 +214,11 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
     当 Router 无法确定用户意图时触发。
     用 LLM 生成 2-3 个针对性问题，通过 interrupt 暂停等待用户回复。
     """
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("clarify", "澄清模糊问题")
 
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
 
     prompt = CLARIFY_PROMPT.format(query=state["query"])
     resp = await acall_with_retry(
@@ -254,9 +254,9 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
     return {"next": "router"}
 async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> dict:
     """DataQuality Agent: 扫一遍数据质量（NULL 比例、日期连续性、异常值）。"""
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == "data_quality")
     span = trace.start_span("data_quality", task[:60])
     print(f"⏳ DataQuality: {task[:60]}...")
@@ -271,9 +271,9 @@ async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> d
     return _next_step(state, results, "data_quality")
 async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     """SQL Agent: 查数据库（list_tables / describe_table / run_query）。"""
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == "sql")
     span = trace.start_span("sql", task[:60])
     print(f"⏳ SQL Agent: {task[:60]}...")
@@ -323,7 +323,7 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     从 sql agent 结果中提取 SQL，让 LLM 按 6 项标准打分。
     置信度 < 0.7 时暂停并请用户确认。
     """
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("confidence_gate", "SQL 置信度评估")
 
     sql_result = state.get("results", {}).get("sql", "")
@@ -335,8 +335,8 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
     sql = sql_match.group(0).strip() if sql_match else sql_result[:500]
 
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
 
     prompt = CONFIDENCE_PROMPT.format(
         query=state["query"],
@@ -393,9 +393,9 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     return _next_step(state, state["results"], "sql")
 async def node_strategy(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Strategy Agent: 查公司制度文档（search_knowledge_base）。"""
-    client = config["configurable"]["_client"]
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    client = agent_config(config)["_client"]
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     task = next(s["task"] for s in state["plan"] if s["agent"] == "strategy")
     span = trace.start_span("strategy", task[:60])
     print(f"⏳ Strategy Agent: {task[:60]}...")
@@ -423,11 +423,11 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     3. 最近对话（messages）—— Checkpointer 累积的本轮消息
     4. 中间结果（results）—— 上游 Agent 的执行输出
     """
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("analysis", "综合分析")
 
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
     context_parts = []
     # Layer 1: 早期对话摘要——ConversationManager 将超窗口消息压缩为摘要
     if state.get("_conversation_summary"):
@@ -528,7 +528,7 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
     LLM 自审三个维度：完整性、真实性、可用性。不合格就把改进建议
     喂回 Analysis 重写。最多 2 轮，用 token 换质量。"
     """
-    trace = config["configurable"].get("_trace") or TraceContext(state.get("query", ""))
+    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("reflection", "回答质量审查")
 
     answer = state.get("final_answer", "")
@@ -538,8 +538,8 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
 
     attempts = state.get("_reflection_attempts", 0)
 
-    client = config["configurable"]["_client"]
-    model = config["configurable"].get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    client = agent_config(config)["_client"]
+    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
 
     # 拼接上游数据作为审查依据
     context = "\n".join(str(v)[:1000] for v in state.get("results", {}).values() if v)
