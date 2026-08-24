@@ -27,7 +27,8 @@
 > **演示环境说明**：这是学习 / 面试演示项目，不是生产系统。
 > SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）。
 > 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake，不依赖网络与 API key（`pytest tests/` 直接全绿）。
-> Web 为演示用途：接口无鉴权，会话存进程内存；CI 只跑 Python 测试，前端未接入。
+> Web 为演示用途：接口无鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis；CI 只跑 Python 测试，前端未接入。
+> 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均“可选后端 + 自动降级”。
 
 
 <table>
@@ -94,7 +95,7 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 | 3 | `harness/tools/` | 实际能力；`query` 含权限与成功 SQL 捕获 |
 | 3 | `harness/constraints/entitlement.py` | 工具 / 表 / 行权限 + HITL |
 | 4 | `harness/memory/` · `harness/context/` | 记忆、few-shot、Schema Linking、自学习 |
-| 5 | `HARNESS.md` · `tests/` · `docs/troubleshooting.md` | 架构、评测、排障 |
+| 5 | `HARNESS.md` · `tests/` · `docs/troubleshooting.md` · `docs/用户手册.md` | 架构、评测、排障、新手入门 |
 
 ```text
 入口
@@ -131,25 +132,24 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 ```bash
 git clone https://github.com/TisseurdOr/db-agent.git
 cd db-agent
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-cp .env.example .env             # 填 API key
-uv sync && source .venv/bin/activate
-pip install -e .                  # 或 uv sync（生成 db-agent 命令）
-db-agent                          # 初始化 DB，进入 CLI（等价于 python main.py）
+uv sync && source .venv/bin/activate        # 安装依赖 + 生成 db-agent 命令
+cp .env.example .env                        # 至少填 ANTHROPIC_API_KEY
+db-agent --mode multi                       # 进入 CLI（等价于 python main.py --mode multi）
 ```
 
+> 缺 key 启动会友好提示（`cp .env.example .env`），不会吐 traceback。
+
 ```bash
-python main.py                              # single（默认）
-python main.py --mode multi
-python main.py --mode multi --user analyst  # 可查 salary，触发 HITL
-python main.py --mode multi --user viewer   # 不能 run_query
-python main.py --mode multi --user xiaoyiming  # 行级 dept_id=2
+db-agent                                   # single（默认）
+db-agent --mode multi
+db-agent --mode multi --user analyst       # 可查 salary，触发 HITL
+db-agent --mode multi --user viewer        # 不能 run_query
+db-agent --mode multi --user xiaoyiming    # 行级 dept_id=2
 ```
 
 | 入口 | 命令 |
 |------|------|
-| CLI | `python main.py --mode multi` |
+| CLI | `db-agent --mode multi` |
 | Streamlit | `uv run streamlit run app.py` |
 | Web | 见下方；思考步骤 / 图表 / HITL 弹窗 / 点赞回流 |
 
@@ -174,7 +174,13 @@ KIMI_MODEL=kimi-k2.5
 EMBEDDING_API_KEY=sk-your-dashscope-key
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 
-LLM_MAX_RETRIES=3
+LLM_MAX_RETRIES=3                # API 重试次数
+CIRCUIT_BREAKER_THRESHOLD=5      # 熔断：连续失败多少次快速失败
+TOOL_IDEMPOTENCY_TTL=300         # 写工具幂等窗口（秒）
+ALERT_WEBHOOK_URL=               # 告警推送（Slack/钉钉/飞书），空=仅日志
+REDIS_URL=                       # 状态外置：会话 + checkpoint 存 Redis
+VECTOR_DB=chroma                 # 向量库后端：chroma / milvus
+MILVUS_URI=                      # Milvus 集群地址（http://...），本地 Lite 免配
 AUTO_LEARN_SQL=1                 # 成功 SQL 回流样例库；0 = 关
 
 OPIK_ENABLED=0
@@ -205,7 +211,7 @@ cd frontend && npm install && npm run dev -- --port 3000
 | POST | `/api/query` | SSE 流式问答 |
 | POST | `/api/query/resume` | HITL 批准 / 拒绝后继续 |
 | POST | `/api/feedback` | 点赞回流 + Opik 打分 |
-| GET | `/api/sessions` | 会话列表（内存） |
+| GET | `/api/sessions` | 会话列表（Redis / 内存） |
 | POST | `/api/datasource/upload` | CSV → 独立 SQLite |
 | POST | `/api/datasource/connect` | 连接外部 SQLite |
 | GET | `/api/health` | 健康检查 |
@@ -350,9 +356,9 @@ query → guard_input（注入检测）
 被测：DeepSeek。Judge：Kimi。避免同一个模型给自己打分。
 
 ```bash
-pytest tests/ -v
-pytest tests/test_harness_smoke.py -v          # 零 API
-python tests/eval_runner.py                    # LLM-as-Judge
+pytest tests/ -v                               # 全量离线用例
+python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）
+python tests/eval_runner.py --full             # 全量评测（需 API key）
 .venv/bin/python -m tests.eval_runner --fast --opik
 ```
 
@@ -369,7 +375,7 @@ python tests/eval_runner.py                    # LLM-as-Judge
 
 ## 记忆 · 可观测 · 技术栈
 
-三层：当前轮 Tool 中间结果 → 窗口 + LLM 摘要 → Chroma + `user_memory`。元问题（「刚才问了什么」）走时间倒序，不靠语义检索。
+三层：当前轮 Tool 中间结果 → 窗口 + LLM 摘要 → 向量库（ChromaDB / Milvus 双后端）+ `user_memory`。元问题（「刚才问了什么」）走时间倒序，不靠语义检索。
 
 | 层 | 实现 |
 |----|------|
@@ -382,7 +388,7 @@ python tests/eval_runner.py                    # LLM-as-Judge
 | 层次 | 技术 |
 |------|------|
 | LLM | DeepSeek（Anthropic 兼容 SDK） |
-| 编排 | LangGraph + AsyncSqliteSaver |
+| 编排 | LangGraph + SQLite / Redis Checkpointer（`REDIS_URL` 切换） |
 | 向量 | ChromaDB / Milvus 双后端（`VECTOR_DB` 切换，`MILVUS_URI` 接集群）；Embedding 用 DashScope |
 | Web | FastAPI + SSE + React/Vite |
 | Eval | Kimi 做 Judge |
@@ -417,8 +423,9 @@ python tests/eval_runner.py
 
 > 说明：全量测试离线可跑（LLM / Embedding 均用脚本化 fake / 离线 embedding 注入，
 > 不依赖网络与 API key）。agent 集成测试走真实 Tool handler + 真实 SQLite，LLM 由 fake 驱动。
+> Redis / Milvus 专项用例在无对应服务时自动跳过（本机带 Redis+Milvus 时全量 406 过）。
 
-Push 到 `main` / `master` 会跑 GitHub Actions（冒烟 + HBase + 记忆 + 自愈等相关用例）。
+Push 到 `main` / `master` 会跑 GitHub Actions（pytest 全量 + 护栏 eval，均零 API）。
 
 </details>
 
