@@ -24,11 +24,10 @@
 """
 
 import json
-import sqlite3
 import os
 import re
+import sqlite3
 from dataclasses import dataclass
-from typing import Optional
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 内置默认值（DB 为空时的 fallback）
@@ -191,7 +190,7 @@ if not _load_from_db():
 # 公共 API
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def get_user(user_id: Optional[str] = None) -> dict:
+def get_user(user_id: str | None = None) -> dict:
     """获取用户完整权限信息。未指定时用 AGENT_DEFAULT_USER（默认 viewer）。"""
     user = USERS.get(user_id) if user_id else None
     if not user:
@@ -200,7 +199,7 @@ def get_user(user_id: Optional[str] = None) -> dict:
     return {**user, "permissions": role}
 
 
-def resolve_user_id(user_id: Optional[str] = None) -> str:
+def resolve_user_id(user_id: str | None = None) -> str:
     """Tool 层统一解析当前用户 ID（CLI --user / AGENT_USER / 默认 viewer）。"""
     return user_id or os.getenv("AGENT_USER") or os.getenv("AGENT_DEFAULT_USER", "viewer")
 
@@ -228,9 +227,9 @@ class EntitlementResult:
     passed: bool
     reason: str = ""
     suggestion: str = ""                # 拦截时给 Agent 的纠正建议
-    sql: Optional[str] = None           # run_query：行级改写后的 SQL
-    tables: Optional[list[str]] = None  # list_tables：过滤后的表名
-    docs: Optional[list[dict]] = None   # search_knowledge_base：过滤后的文档
+    sql: str | None = None           # run_query：行级改写后的 SQL
+    tables: list[str] | None = None  # list_tables：过滤后的表名
+    docs: list[dict] | None = None   # search_knowledge_base：过滤后的文档
     needs_approval: bool = False        # run_query：是否触发 HITL
 
 
@@ -257,10 +256,10 @@ def check_entitlement(
     user: dict,
     *,
     tool_name: str,
-    sql: Optional[str] = None,
-    table: Optional[str] = None,
-    tables: Optional[list[str]] = None,
-    docs: Optional[list[dict]] = None,
+    sql: str | None = None,
+    table: str | None = None,
+    tables: list[str] | None = None,
+    docs: list[dict] | None = None,
 ) -> EntitlementResult:
     """统一权限检查入口 — 串联工具授权 / 表级 / 行级 / 文档 / HITL。
 

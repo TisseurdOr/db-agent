@@ -3,11 +3,10 @@
 import csv
 import os
 import sqlite3
-import tempfile
 from io import StringIO
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel
 
 router = APIRouter()

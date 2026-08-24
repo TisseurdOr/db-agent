@@ -252,7 +252,7 @@ def compare_periods(
         summary_parts.append(f"下滑明显: {names}")
 
     return {
-        "period1_label": period1_label, 
+        "period1_label": period1_label,
         "period2_label": period2_label,
         "summary": "。".join(summary_parts) + "。",
         "total1": round(total1, 2),

@@ -19,7 +19,6 @@ Golden set 两种用例（tests/golden_set.json）:
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 

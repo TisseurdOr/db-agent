@@ -1,6 +1,5 @@
 """FastAPI server for db-agent — wraps MultiAgentRunner with SSE streaming."""
 
-import asyncio
 import os
 import sys
 from pathlib import Path
@@ -9,17 +8,18 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
+from anthropic import Anthropic
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from anthropic import Anthropic
 
 from db.seed import init_db
-from harness.tools.hbase import _seed_hbase_store
-from harness.context.template_matcher import init_metric_registry
 from harness.context.schema_discovery import get_schema_discovery
+from harness.context.template_matcher import init_metric_registry
+from harness.tools.hbase import _seed_hbase_store
 from server.storage import init_feedback_db
 
 # ── Bootstrap ──────────────────────────────────────────────────────────
@@ -77,10 +77,10 @@ async def health():
 
 # ── Router registration (deferred to avoid circular imports) ───────────
 
-from server.endpoints.query import router as query_router
-from server.endpoints.feedback import router as feedback_router
-from server.endpoints.sessions import router as sessions_router
 from server.endpoints.datasource import router as datasource_router
+from server.endpoints.feedback import router as feedback_router
+from server.endpoints.query import router as query_router
+from server.endpoints.sessions import router as sessions_router
 
 app.include_router(query_router, prefix="/api")
 app.include_router(feedback_router, prefix="/api")

@@ -6,15 +6,14 @@ import time
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
-from harness.orchestration.multi.orchestrator import MultiAgentRunner
 from harness.constraints.guardrails import guard_input
-from harness.orchestration.multi.state import MultiAgentState
-from harness.observation.tracer import TraceContext
 from harness.observation.opik_tracing import (
+    capture_opik_trace_id_for_graph,
     flush_opik,
     get_current_opik_trace_id,
-    capture_opik_trace_id_for_graph,
 )
+from harness.observation.tracer import TraceContext
+from harness.orchestration.multi.orchestrator import MultiAgentRunner
 from server.sse import SSEEvent
 
 
@@ -314,8 +313,8 @@ def _extract_chart_data(result: dict) -> list[dict]:
 
 def _auto_chart_from_sql_result(text: str) -> dict | None:
     """Try to auto-generate a chart from a SQL agent result that contains tabular data."""
-    import re
     import json
+    import re
 
     # Look for structured data patterns in the result
     # Try to find JSON with rows/count

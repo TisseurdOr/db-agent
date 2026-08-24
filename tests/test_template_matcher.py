@@ -12,23 +12,22 @@
 
 import os
 import sys
+
 import pytest
 
 # 确保项目根在 path 里
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from harness.context.template_matcher import (
-    TemplateMatcher,
     MetricTemplate,
-    MatchResult,
-    init_metric_registry,
-    get_template_matcher,
-    match_sql_template,
-    _parse_date_range,
+    TemplateMatcher,
     _extract_dept,
-    _extract_status,
     _extract_limit,
     _extract_product,
+    _extract_status,
+    _parse_date_range,
+    init_metric_registry,
+    match_sql_template,
 )
 
 
@@ -276,6 +275,7 @@ def test_init_metric_registry():
     """初始化后模板库非空。"""
     import tempfile
     from pathlib import Path as P
+
     import harness.context.template_matcher as tm
 
     old_db = tm.METRIC_DB

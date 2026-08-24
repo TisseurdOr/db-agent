@@ -23,9 +23,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from harness.observation.pipeline_monitor.models import (
-    init_db, register_job, start_run, finish_run, create_alert, get_db,
+    finish_run,
+    get_db,
+    init_db,
+    register_job,
+    start_run,
 )
-
 
 JOBS = [
     {"name": "ods_order_sync",      "schedule": "hourly",  "sla": 15,  "desc": "ODS 层订单数据同步",             "owner": "数据平台组"},
@@ -164,7 +167,6 @@ def _gen_running_job(jid, job_name, start_time, running_minutes):
 
 def _gen_sample_alerts(job_ids: dict):
     """生成一些示例告警。"""
-    now = datetime.now().isoformat()
     sample_alerts = [
         (job_ids["ods_order_sync"], "consecutive_failures", "critical",
          "ods_order_sync 连续失败 3 次，上次成功: 4h 前，请检查源库连接"),

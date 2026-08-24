@@ -1,11 +1,15 @@
 """自学习回流测试 —— 质量门 + 提取 + 写路径。零 API 成本。"""
 
-import pytest
 
-from harness.memory.feedback import extract_sql, should_learn, learn_from_success, learn_from_hitl, sql_executes
-import harness.memory.feedback as feedback
 import harness.context.sql_examples as sql_examples
-
+import harness.memory.feedback as feedback
+from harness.memory.feedback import (
+    extract_sql,
+    learn_from_hitl,
+    learn_from_success,
+    should_learn,
+    sql_executes,
+)
 
 GOOD_RESULT = """
 查询成功。订单总金额如下：
@@ -109,7 +113,7 @@ def test_record_sql_example_degrades_without_key(monkeypatch):
 
 def test_run_query_captures_successful_sql_for_learning():
     """工具层捕获成功 SQL——Agent 回答不带 SELECT 时回流仍能拿到真 SQL。"""
-    from harness.tools.query import run_query, pop_last_successful_sql
+    from harness.tools.query import pop_last_successful_sql, run_query
 
     pop_last_successful_sql()  # 清空
     run_query("SELECT COUNT(*) AS n FROM orders", user_id="dba")
@@ -120,7 +124,7 @@ def test_run_query_captures_successful_sql_for_learning():
 
 
 def test_run_query_error_does_not_capture_sql():
-    from harness.tools.query import run_query, pop_last_successful_sql
+    from harness.tools.query import pop_last_successful_sql, run_query
 
     pop_last_successful_sql()
     run_query("SELECT no_such_col FROM orders", user_id="dba")

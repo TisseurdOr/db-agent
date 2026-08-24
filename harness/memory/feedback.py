@@ -16,11 +16,10 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
-from typing import Optional
 
 from db.seed import DB_PATH
-from harness.orchestration.multi.base import is_agent_timeout
 from harness.context.sql_examples import record_sql_example
+from harness.orchestration.multi.base import is_agent_timeout
 
 # 优先从 markdown 代码块取；其次取 SELECT…; 到分号为止
 _CODE_BLOCK_RE = re.compile(r"```(?:sql)?\s*((?:WITH|SELECT)\b[\s\S]+?)```", re.IGNORECASE)
@@ -31,7 +30,7 @@ _SQL_LOOSE_RE = re.compile(
 )
 
 
-def extract_sql(text: str) -> Optional[str]:
+def extract_sql(text: str) -> str | None:
     """从 Agent 输出文本中提取最后一条 SELECT/WITH。提取不到返回 None。"""
     if not text:
         return None
@@ -85,7 +84,7 @@ def sql_executes(sql: str, db_path: str = DB_PATH) -> bool:
         return False
 
 
-def should_learn(question: str, result_text: str, sql: Optional[str] = None) -> bool:
+def should_learn(question: str, result_text: str, sql: str | None = None) -> bool:
     """质量门：全部通过才允许写回样例库。
 
     自愈场景会在文本里留下 'no such column' 等字样——只要最终抽出的
@@ -112,7 +111,7 @@ def should_learn(question: str, result_text: str, sql: Optional[str] = None) -> 
 def learn_from_success(
     question: str,
     result_text: str = "",
-    sql: Optional[str] = None,
+    sql: str | None = None,
     source: str = "auto",
 ) -> bool:
     """成功路径回流。返回是否写入样例库。

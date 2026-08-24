@@ -23,7 +23,7 @@ def build_sql_agent():
     async def call_model(state: SqlAgentState) -> dict:
         response = await llm_with_tools.ainvoke(state['messages'])
         return {'messages': [response]}
-    
+
     #Tool 节点：执行tool
     tool_node = ToolNode(tools=[list_tables, describe_table, run_query])
 
@@ -31,7 +31,7 @@ def build_sql_agent():
         last = state['messages'][-1]
         if hasattr(last, 'tool_calls') and last.tool_calls:
             return 'tools'
-        return END 
+        return END
 
 
     builder.add_node(START, 'call_model')

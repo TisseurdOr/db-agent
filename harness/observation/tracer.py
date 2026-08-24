@@ -24,13 +24,12 @@
 """
 
 import json
-import os
+import re as _re_mask
+import sys
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
-import re as _re_mask
 
 # ── 审计脱敏：SQL 参数打码 ──
 # 设计动机：每次 SQL 执行参数在写入审计日志前自动脱敏——保留 SQL 结构，
@@ -117,8 +116,8 @@ class TraceContext:
         self.started_at = time.time()
         self.finished_at = 0.0
         self.spans: list[Span] = []
-        self.blocked_by: Optional[str] = None  # 如果被护栏拦截，记录是哪一层
-        self.opik_trace_id: Optional[str] = None  # Opik UUID when available
+        self.blocked_by: str | None = None  # 如果被护栏拦截，记录是哪一层
+        self.opik_trace_id: str | None = None  # Opik UUID when available
 
     @property
     def elapsed(self) -> float:
@@ -223,7 +222,7 @@ def _read_traces(filepath: Path) -> list[dict]:
     if not filepath.exists():
         return []
     traces = []
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -248,6 +247,69 @@ def _print_trace(t: dict) -> None:
     print()
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 聚合统计（--stats）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _compute_stats(traces: list[dict]) -> dict:
+    """把一批 trace 聚合成错误率 / 节点分布 / Top 错误等指标（纯函数，可测）。"""
+    total = len(traces)
+    errored = [
+        t for t in traces
+        if any(s.get("error") for s in t.get("spans", []))
+    ]
+    blocked = [t for t in traces if t.get("blocked_by")]
+
+    node_calls: dict[str, int] = {}
+    node_errors: dict[str, int] = {}
+    for t in traces:
+        for s in t.get("spans", []):
+            node = s.get("node", "?")
+            node_calls[node] = node_calls.get(node, 0) + 1
+            if s.get("error"):
+                node_errors[node] = node_errors.get(node, 0) + 1
+
+    error_msgs: dict[str, int] = {}
+    for t in errored:
+        for s in t.get("spans", []):
+            if s.get("error"):
+                msg = str(s["error"])[:60]
+                error_msgs[msg] = error_msgs.get(msg, 0) + 1
+
+    return {
+        "total": total,
+        "errored": len(errored),
+        "error_rate": round(len(errored) / total, 4) if total else 0.0,
+        "blocked": len(blocked),
+        "node_calls": node_calls,
+        "node_errors": node_errors,
+        "top_errors": sorted(error_msgs.items(), key=lambda x: -x[1])[:5],
+        "avg_elapsed": round(sum(t.get("elapsed", 0) for t in traces) / total, 2) if total else 0.0,
+        "total_tokens": sum((t.get("totals") or {}).get("total_tokens", 0) for t in traces),
+    }
+
+
+def _print_stats(stats: dict) -> None:
+    """打印聚合统计。"""
+    print(f"查询总数:   {stats['total']}")
+    print(f"出错数:     {stats['errored']}（错误率 {stats['error_rate'] * 100:.1f}%）")
+    print(f"护栏拦截:   {stats['blocked']}")
+    print(f"平均耗时:   {stats['avg_elapsed']}s · 总 token {stats['total_tokens']}")
+
+    problem_nodes = {n: e for n, e in stats['node_errors'].items() if e}
+    if problem_nodes:
+        print("\n按节点错误分布（出错 / 总调用）:")
+        for node in sorted(problem_nodes, key=lambda n: -problem_nodes[n]):
+            print(f"  ❌ {node:14s} {problem_nodes[node]}/{stats['node_calls'].get(node, 0)}")
+    else:
+        print("\n✅ 没有发现错误 span")
+
+    if stats['top_errors']:
+        print("\nTop 错误信息:")
+        for msg, cnt in stats['top_errors']:
+            print(f"  {cnt:3d}× {msg}")
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="查看 Agent trace 记录")
@@ -255,9 +317,21 @@ if __name__ == "__main__":
     parser.add_argument("--last", type=int, help="最近 N 条 trace（跨所有文件）")
     parser.add_argument("--id", type=str, help="按 trace_id 查看")
     parser.add_argument("--date", type=str, help="指定日期 (YYYY-MM-DD)")
+    parser.add_argument("--stats", action="store_true", help="聚合统计：错误率/节点分布/Top 错误")
     args = parser.parse_args()
 
-    if args.date:
+    if args.stats:
+        if args.date:
+            traces = _read_traces(TRACE_DIR / f"{args.date}.jsonl")
+            print(f"=== 统计（{args.date}）===")
+        else:
+            traces = []
+            for f in sorted(TRACE_DIR.glob("*.jsonl")):
+                traces.extend(_read_traces(f))
+            print(f"=== 统计（全部历史，共 {len(traces)} 条）===")
+        _print_stats(_compute_stats(traces))
+
+    elif args.date:
         filepath = TRACE_DIR / f"{args.date}.jsonl"
         traces = _read_traces(filepath)
         for t in traces:
@@ -288,7 +362,7 @@ if __name__ == "__main__":
             for t in _read_traces(f):
                 if t["trace_id"] == args.id:
                     _print_trace(t)
-                    import sys; sys.exit(0)
+                    sys.exit(0)
         print(f"未找到 trace_id={args.id}")
 
     else:

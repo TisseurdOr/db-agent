@@ -6,7 +6,7 @@
 
 ### 自然语言数据库分析 Harness
 
-问一句中文，查出 SQLite / HBase / Hive 的数，带权限、自愈和评测。  
+问一句中文，查出 SQLite / HBase / Hive 的数，带权限、自愈和评测。
 **Agent = 模型 + Harness。** 本仓库做的是后者。
 
 [![Test](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml/badge.svg)](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml)
@@ -216,6 +216,19 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 ---
 
+## 代码质量门禁
+
+```bash
+ruff check harness server db main.py app.py scripts tests   # 0 error
+pre-commit run --all-files                                   # 提交前钩子
+pyright                                                      # 类型检查（已知基线 234 个，多为第三方 stub 缺口）
+```
+
+- `ruff`：已接入 pre-commit（提交前自动检查/修复）
+- `pyright`：`pyrightconfig.json` 已配置（basic 模式）；错误集中在 orchestrator（99 个）与第三方库 stub 缺口，零错误是后续目标
+
+---
+
 ## 两种运行模式
 
 ### Single Agent
@@ -264,8 +277,8 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 `harness/tools/template_matcher.py`：关键词 + 部门 / 日期槽位，对 `db/metric_registry.db`。
 
-1. **命中** → 填槽得到 SQL，不调 LLM  
-2. **未命中** → 回退模型生成  
+1. **命中** → 填槽得到 SQL，不调 LLM
+2. **未命中** → 回退模型生成
 
 种子覆盖部门销售额、月销售额、订单状态、产品排名等。复杂 JOIN 不强行套模板。
 
@@ -291,9 +304,9 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 ## 动态上下文 + 自学习
 
-- **Schema Linking**：按问题检索相关表/字段，不把整库塞进 prompt  
-- **值级索引**：低基数 TEXT 列写入真实取值（如 `region=华东/华南`）  
-- **检索式 few-shot**：相似的已验证 Q→SQL 注入 SQL Agent；无 embedding 时退回空  
+- **Schema Linking**：按问题检索相关表/字段，不把整库塞进 prompt
+- **值级索引**：低基数 TEXT 列写入真实取值（如 `region=华东/华南`）
+- **检索式 few-shot**：相似的已验证 Q→SQL 注入 SQL Agent；无 embedding 时退回空
 
 ```
 成功 run_query / HITL 批准
@@ -376,15 +389,15 @@ python tests/eval_runner.py                    # LLM-as-Judge
 <details>
 <summary>设计决策（为什么这样拆）</summary>
 
-- **不用 LangChain AgentExecutor**：先把 Agent Loop 写明白，再用 LangGraph 做显式 State Graph。  
-- **Run Query 只 SELECT**：写操作在 Tool 层拦掉。  
-- **HBase / Hive 用模拟器**：没有集群；嵌套 dict / 本地表，API 对齐，可替换。  
-- **Entitlement 不解析整棵 SQL AST**：`FROM/JOIN` 表名 + 行级 `WHERE` 拼接。  
-- **HITL 用原生 `interrupt()`**：暂停点进 checkpointer，`Command(resume=...)` 接着跑。  
-- **Judge 和选手不是同一个模型**。  
-- **权限存 DB**：改一行数据，不必发版。  
-- **自学习抓 `run_query` 成功 SQL**：模型口头描述经常不是可执行 SELECT。  
-- **few-shot 失败不挡主路径**：没 embedding key 就退回纯 schema。  
+- **不用 LangChain AgentExecutor**：先把 Agent Loop 写明白，再用 LangGraph 做显式 State Graph。
+- **Run Query 只 SELECT**：写操作在 Tool 层拦掉。
+- **HBase / Hive 用模拟器**：没有集群；嵌套 dict / 本地表，API 对齐，可替换。
+- **Entitlement 不解析整棵 SQL AST**：`FROM/JOIN` 表名 + 行级 `WHERE` 拼接。
+- **HITL 用原生 `interrupt()`**：暂停点进 checkpointer，`Command(resume=...)` 接着跑。
+- **Judge 和选手不是同一个模型**。
+- **权限存 DB**：改一行数据，不必发版。
+- **自学习抓 `run_query` 成功 SQL**：模型口头描述经常不是可执行 SELECT。
+- **few-shot 失败不挡主路径**：没 embedding key 就退回纯 schema。
 - **高频问数先模板**：单表聚合不必每轮生成 SQL。
 
 </details>

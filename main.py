@@ -15,30 +15,34 @@
 #     可注入 db_type, user_role, extra_context（Phase 3 memory block 注入点）。
 #   - --model 参数：支持在命令行切换模型，方便测试 Haiku vs Sonnet。
 
-import asyncio
 import argparse
+import asyncio
 import difflib
 import os
 import sys
 from datetime import datetime
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 from anthropic import Anthropic
+
 from db.seed import init_db
+from harness.context.schema_discovery import get_schema_discovery
 from harness.context.system_prompt import build_system_prompt
+from harness.context.template_matcher import get_template_matcher, init_metric_registry
+from harness.memory.memory_controller import (
+    is_chitchat,
+    is_meta_memory,
+    is_meta_question,
+    should_remember,
+)
 from harness.memory.short_term_memory import ConversationManager
 from harness.memory.vector_store import VectorMemory
-from harness.memory.memory_controller import (
-    is_chitchat, is_meta_question, is_meta_memory,
-    should_vector_recall, should_remember,
-)
-from harness.tools.knowledge import set_vector_memory, set_llm_client
+from harness.orchestration.single.tools_bundle import TOOL_HANDLERS, TOOLS
 from harness.tools.hbase import _seed_hbase_store
-from harness.context.template_matcher import get_template_matcher, init_metric_registry
-from harness.context.schema_discovery import get_schema_discovery
-from harness.orchestration.single.tools_bundle import TOOLS, TOOL_HANDLERS
+from harness.tools.knowledge import set_llm_client, set_vector_memory
 
 # 用户输入
 #   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
@@ -262,7 +266,7 @@ async def main():
                 if isinstance(result, dict) and result.get("__interrupt__"):
                     interrupt_data = result["data"]
                     print(f"\n{'='*50}")
-                    print(f"⚠️  敏感查询需要审批")
+                    print("⚠️  敏感查询需要审批")
                     print(f" 👩‍💻👨‍💻🧑‍💻用户: {interrupt_data.get('user', '?')}")
                     print(f"  🤖SQL:  {interrupt_data.get('sql', '?')}")
                     print(f"{'='*50}")

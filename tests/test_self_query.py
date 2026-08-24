@@ -10,9 +10,9 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-from tests.fake_embedding import fake_embedding
 
-from harness.context.self_query import parse_self_query, self_query_retrieve, _sanitize_filters
+from harness.context.self_query import _sanitize_filters, parse_self_query, self_query_retrieve
+from tests.fake_embedding import fake_embedding
 
 
 class _FakeLLM:

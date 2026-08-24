@@ -1,8 +1,10 @@
 # memory/vector_store.py
 import os
-import chromadb
 from datetime import datetime
+
+import chromadb
 from openai import OpenAI
+
 from harness.observation.llm import logger
 
 

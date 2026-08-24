@@ -887,7 +887,7 @@ SQL Agent 超过最大轮数失败，Task board 却显示任务完成：
 自学习最初只从 SQL Agent 的**自然语言最终回答**里正则抽 `SELECT`。
 模型常这样写：
 
-> 产品部已完成订单数量为 32。  
+> 产品部已完成订单数量为 32。
 > SQL 逻辑：通过 `orders.dept_id = departments.id` 关联两表……
 
 描述里有表名字段名，但**没有完整 SELECT 语句** → `extract_sql()` 返回 `None`

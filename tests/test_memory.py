@@ -11,8 +11,8 @@ ConversationManager 的压缩路径需要 LLM API——压缩只在超过 max_re
 import uuid
 
 import pytest
-from tests.fake_embedding import fake_embedding
 
+from tests.fake_embedding import fake_embedding
 
 # ─── VectorMemory 测试 ────────────────────────────────────────────
 
@@ -274,8 +274,8 @@ def test_token_budget_summary_format():
 @pytest.mark.asyncio
 async def test_window_manager_skips_when_below_threshold():
     """预算未达压缩阈值 → manage 原样返回，不调 LLM。"""
-    from harness.context.token_budget import TokenBudget
     from harness.context.hybrid_window_manager import HybridWindowManager
+    from harness.context.token_budget import TokenBudget
     budget = TokenBudget(max_tokens=100000, warn_threshold=0.7)
     budget.set_fixed_costs("短 prompt", [])
     msgs = [
@@ -296,8 +296,9 @@ async def test_window_manager_layer0_preserves_recent():
     old=[0:6](6条→全局摘要)。
     """
     from unittest.mock import AsyncMock
-    from harness.context.token_budget import TokenBudget
+
     from harness.context.hybrid_window_manager import HybridWindowManager
+    from harness.context.token_budget import TokenBudget
 
     budget = TokenBudget(max_tokens=50, warn_threshold=0.1)
     budget.set_fixed_costs("x", [])

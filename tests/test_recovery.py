@@ -5,11 +5,10 @@
 
 import pytest
 
-from harness.constraints.retry import is_retriable, call_with_retry, acall_with_retry
-from harness.orchestration.multi.orchestrator import _maybe_replan, MAX_REPLAN_ATTEMPTS
-from harness.orchestration.multi.agents import SQL_AGENT_PROMPT, HIVE_AGENT_PROMPT
+from harness.constraints.retry import acall_with_retry, call_with_retry, is_retriable
+from harness.orchestration.multi.agents import HIVE_AGENT_PROMPT, SQL_AGENT_PROMPT
+from harness.orchestration.multi.orchestrator import MAX_REPLAN_ATTEMPTS, _maybe_replan
 from harness.tools.query import run_query
-
 
 # ── 假异常：带 status_code 属性，is_retriable 靠它判断 ──
 

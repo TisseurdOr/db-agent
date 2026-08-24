@@ -12,7 +12,9 @@
 import pytest
 
 from harness.constraints.idempotency import (
-    IdempotencyGuard, get_idempotency_guard, reset_idempotency_guard,
+    IdempotencyGuard,
+    get_idempotency_guard,
+    reset_idempotency_guard,
     run_tool_with_guard,
 )
 

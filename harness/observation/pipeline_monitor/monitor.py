@@ -13,8 +13,13 @@
 """
 
 from harness.observation.pipeline_monitor.models import (
-    get_db, get_all_jobs, get_run_stats, get_delayed_jobs,
-    get_consecutive_failures, create_alert, get_active_alerts,
+    create_alert,
+    get_active_alerts,
+    get_all_jobs,
+    get_consecutive_failures,
+    get_db,
+    get_delayed_jobs,
+    get_run_stats,
 )
 
 

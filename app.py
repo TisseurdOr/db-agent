@@ -20,15 +20,16 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from anthropic import Anthropic
+
 from db.seed import init_db
-from harness.tools.hbase import _seed_hbase_store
+from harness.context.schema_discovery import get_schema_discovery
 from harness.context.template_matcher import init_metric_registry
 from harness.orchestration.multi.orchestrator import MultiAgentRunner
-from harness.context.schema_discovery import get_schema_discovery
-
+from harness.tools.hbase import _seed_hbase_store
 
 # ═══════════════════════════════════════════════════════════════════════
 # 页面配置

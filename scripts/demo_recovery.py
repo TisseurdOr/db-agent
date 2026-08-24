@@ -60,6 +60,7 @@ async def demo_retry():
 async def demo_heal():
     banner("第 2 幕 · SQL 自愈：故意执行字段名错误的 SQL")
     from anthropic import Anthropic
+
     from harness.orchestration.multi.agents import sql_agent
 
     client = Anthropic(
@@ -87,6 +88,7 @@ TIMEOUT_MARK = "(Agent 在 8 轮内未完成)"
 async def demo_replan():
     banner("第 3 幕 · 失败重规划：给 SQL Agent 注入一次假超时")
     from anthropic import Anthropic
+
     from harness.orchestration.multi.agents import sql_agent
     from harness.orchestration.multi.orchestrator import MultiAgentRunner
 

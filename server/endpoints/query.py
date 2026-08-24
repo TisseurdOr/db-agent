@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from server.main import get_client, DEFAULT_MODEL
+from server.main import DEFAULT_MODEL, get_client
 from server.runner_wrapper import runner_registry
 from server.sse import SSEEvent, format_sse
 
@@ -61,7 +61,7 @@ async def _drain_and_stream(queue: asyncio.Queue, request: Request, state: dict)
             return
         try:
             item = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             yield _heartbeat_chunk()  # 没有新事件也发心跳保活
             continue
         if item[0] == "done_sentinel":

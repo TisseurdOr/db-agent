@@ -32,7 +32,6 @@ def main() -> int:
         ensure_feedback_definitions,
         flush_opik,
         log_user_feedback,
-        opik_enabled,
     )
 
     if not configure_opik():

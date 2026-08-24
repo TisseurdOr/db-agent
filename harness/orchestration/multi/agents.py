@@ -4,24 +4,29 @@
 orchestrator.py 只需调用 result, usage = agent.run(client, task) 即可。
 """
 
-from harness.tools.schema import (
-    LIST_TABLES_TOOL, list_tables,
-    LIST_HIVE_TABLES_TOOL, list_hive_tables,
-    DESCRIBE_TABLE_TOOL, describe_table,
-    DISCOVER_SCHEMA_TOOL, discover_relevant_schema,
-)
-from harness.tools.query import RUN_QUERY_TOOL, run_query
+from harness.orchestration.multi.base import ConfiguredAgent
 from harness.tools.analysis import (
-    ANALYZE_RESULTS_TOOL, analyze_results,
-    COMPARE_PERIODS_TOOL, compare_periods,
+    ANALYZE_RESULTS_TOOL,
+    COMPARE_PERIODS_TOOL,
+    analyze_results,
+    compare_periods,
 )
 from harness.tools.chart import render_chart
-from harness.tools.knowledge import search_knowledge_base
+from harness.tools.hbase import generate_hbase_query, run_hbase
 from harness.tools.hive import search_hive_syntax
-from harness.tools.hbase import run_hbase, generate_hbase_query
+from harness.tools.knowledge import search_knowledge_base
 from harness.tools.metrics import lookup_metric
-from harness.orchestration.multi.base import ConfiguredAgent
-
+from harness.tools.query import RUN_QUERY_TOOL, run_query
+from harness.tools.schema import (
+    DESCRIBE_TABLE_TOOL,
+    DISCOVER_SCHEMA_TOOL,
+    LIST_HIVE_TABLES_TOOL,
+    LIST_TABLES_TOOL,
+    describe_table,
+    discover_relevant_schema,
+    list_hive_tables,
+    list_tables,
+)
 
 # ── SQL Agent: 只查数据 ──
 

@@ -5,9 +5,9 @@
 # 现在 6 部门 + 200+ 订单（跨 14 个月）+ 40 员工 + 15 产品 + 12 客户，
 # Agent 能做时间序列对比、部门绩效排名、产品动销分析、地区/行业下钻。
 
-import sqlite3
 import os
 import random
+import sqlite3
 from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "demo.db")
@@ -249,13 +249,6 @@ def init_db(reset: bool = False):
     statuses = ["completed", "pending", "cancelled"]
     status_weights = [0.60, 0.28, 0.12]
 
-    # 不同品类的季节性：年底采购硬件多，Q1 软件续费多，服务类稳定
-    product_category = {
-        1: "软件", 2: "软件", 3: "软件", 4: "软件", 5: "软件",
-        6: "硬件", 7: "硬件", 8: "硬件", 9: "硬件", 10: "硬件",
-        11: "服务", 12: "服务", 13: "服务", 14: "服务", 15: "服务",
-    }
-
     order_id = 1
     start_date = datetime(2025, 6, 1)
     end_date = datetime(2026, 7, 15)
@@ -320,10 +313,7 @@ def init_db(reset: bool = False):
         user_id = random.randint(1, 20)
         etype = random.choice(event_types)
         page = random.choice(event_pages)
-        props = '{"page":"%s","duration":%d,"device":"%s"}' % (
-            page, random.randint(1, 300),
-            random.choice(["iOS", "Android", "Web"]),
-        )
+        props = f'{{"page":"{page}","duration":{random.randint(1, 300)},"device":"{random.choice(["iOS", "Android", "Web"])}"}}'
         event_time = f"{event_date} {random.randint(0,23):02d}:{random.randint(0,59):02d}:{random.randint(0,59):02d}"
         conn.execute(
             "INSERT INTO dwd_user_events VALUES (?, ?, ?, ?, ?, ?)",
@@ -363,9 +353,9 @@ def init_db(reset: bool = False):
     print(f"数据库已初始化: {DB_PATH}")
     print(f"  [SQL]  departments: 6, employees: {emp_count}, products: 15, customers: {cust_count}, orders: {order_count}")
     print(f"  [Hive] ods_orders_hive: {hive_order_count}, dwd_user_events: {hive_event_count}, dim_products_hive: {hive_prod_count}")
-    print(f"  [HBase] 内存模拟表: orders / user_profile / product_catalog（启动时 seed）")
-    print(f"  时间范围: 2025-06-01 ~ 2026-07-15")
-    print(f"  能力: 多 Agent 编排 · SQL/Hive/HBase · 权限 HITL · 记忆 · Task board")
+    print("  [HBase] 内存模拟表: orders / user_profile / product_catalog（启动时 seed）")
+    print("  时间范围: 2025-06-01 ~ 2026-07-15")
+    print("  能力: 多 Agent 编排 · SQL/Hive/HBase · 权限 HITL · 记忆 · Task board")
 
 
 if __name__ == "__main__":

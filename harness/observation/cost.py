@@ -12,11 +12,10 @@
 """
 
 import json
-import os
 import sys
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from collections import defaultdict
 
 TRACE_DIR = Path(__file__).resolve().parents[2] / "logs" / "traces"
 
@@ -74,7 +73,7 @@ def _read_file(filepath: Path) -> list[dict]:
     if not filepath.exists():
         return []
     traces = []
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -197,11 +196,11 @@ def print_report(result: dict, date_range: str) -> None:
 
     total = result["total_cost_cny"] + result["total_cost_usd"] * 7.2
     if total < 0.01:
-        print(f"\n  💡 花费很低。DeepSeek 确实便宜。")
+        print("\n  💡 花费很低。DeepSeek 确实便宜。")
     elif total < 10:
-        print(f"\n  💡 花费可控。关注是否有重复调用可以优化。")
+        print("\n  💡 花费可控。关注是否有重复调用可以优化。")
     else:
-        print(f"\n  ⚠️ 花费较高。建议检查 trace 找重复或无效调用。")
+        print("\n  ⚠️ 花费较高。建议检查 trace 找重复或无效调用。")
     print()
 
 

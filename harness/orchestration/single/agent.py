@@ -14,20 +14,26 @@
 # 参考：Lesson 0004 (agent loop), 0006 (cache_control), 0010 (streaming + tool use)
 
 import asyncio
-import inspect
 import json
 import os
-from anthropic import Anthropic, APIStatusError
-from harness.memory.vector_store import VectorMemory
-from harness.context.token_budget import TokenBudget
-from harness.context.hybrid_window_manager import HybridWindowManager
-from harness.constraints.retry import (
-    acall_with_retry, is_retriable, backoff_delay,
-    base_delay_from_env, max_retries_from_env,
-    circuit_can_proceed, circuit_record_success, circuit_record_failure,
-)
-from harness.constraints.circuit_breaker import CircuitOpenError, DEGRADED_MESSAGE
+
+from anthropic import Anthropic
+
+from harness.constraints.circuit_breaker import DEGRADED_MESSAGE, CircuitOpenError
 from harness.constraints.idempotency import run_tool_with_guard
+from harness.constraints.retry import (
+    acall_with_retry,
+    backoff_delay,
+    base_delay_from_env,
+    circuit_can_proceed,
+    circuit_record_failure,
+    circuit_record_success,
+    is_retriable,
+    max_retries_from_env,
+)
+from harness.context.hybrid_window_manager import HybridWindowManager
+from harness.context.token_budget import TokenBudget
+from harness.memory.vector_store import VectorMemory
 
 # 不从模块级拿 TOOLS / TOOL_HANDLERS——tools 和 handlers 一律由调用方显式传入。
 # 好处：
@@ -126,7 +132,7 @@ async def streaming_agent(
         budget = TokenBudget(
             max_tokens=int(os.getenv("TOKEN_BUDGET_MAX", "32000")),
             warn_threshold=float(os.getenv("TOKEN_BUDGET_WARN", "0.7")),
-        ) 
+        )
     budget.set_fixed_costs(system_prompt, tools)
 
     if window_manager is None:
@@ -232,7 +238,7 @@ async def streaming_agent(
         # final_msg.content 里每个 block 的 .input 已经是完整的 Python dict，
         # 不需要再手动解析 JSON（SDK 在 stream 结束后帮我们 parse 了）
         tool_uses = [b for b in final_msg.content if b.type == "tool_use"]
-        
+
         if not tool_uses:
             print()  # 换行——streaming 输出后收尾
             # vector_memory.remember(f"用户: {user_msg}\n助手: {text_content}") if vector_memory else None
@@ -277,7 +283,7 @@ async def streaming_agent(
         # 这是 Anthropic API 的要求——tool_result 必须跟在 assistant(tool_use) 后面，
         # 以 user 角色发送。顺序不对会报 400。
         messages.append({"role": "user", "content": tool_results})
- 
+
     return "已达到最大轮次"
 
 

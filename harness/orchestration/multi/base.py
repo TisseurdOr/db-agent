@@ -5,12 +5,12 @@
 
 import os
 import time
-from typing import Optional
+
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
-from harness.constraints.retry import acall_with_retry
 from harness.constraints.idempotency import run_tool_with_guard
+from harness.constraints.retry import acall_with_retry
 
 
 class AgentRunError(Exception):
@@ -137,7 +137,7 @@ class ConfiguredAgent:
         client: Anthropic,
         task: str,
         context: str = "",
-        model: Optional[str] = None,
+        model: str | None = None,
         verbose: bool = False,
     ) -> tuple[str, dict]:
         """执行一次任务，返回 (文本结果, usage)。

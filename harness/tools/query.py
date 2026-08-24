@@ -1,8 +1,12 @@
-import os
 import sqlite3
 
 from db.seed import DB_PATH
-from harness.constraints.entitlement import get_user, check_entitlement, resolve_user_id, deny_payload
+from harness.constraints.entitlement import (
+    check_entitlement,
+    deny_payload,
+    get_user,
+    resolve_user_id,
+)
 
 # 自学习回流用：记录最近一次成功执行的 SELECT。
 # Agent 最终回答经常不带完整 SQL，从工具层捕获比从自然语言抽更可靠。

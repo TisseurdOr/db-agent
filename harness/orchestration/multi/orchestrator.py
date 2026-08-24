@@ -15,45 +15,52 @@ import time
 from pathlib import Path
 
 import aiosqlite
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.types import RunnableConfig, Command, interrupt
-from langgraph.errors import GraphInterrupt
-from langchain_core.messages import AIMessage
 from anthropic import Anthropic
+from langchain_core.messages import AIMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import GraphInterrupt
+from langgraph.graph import END, StateGraph
+from langgraph.types import Command, RunnableConfig, interrupt
 
-from harness.orchestration.multi.state import MultiAgentState
-from harness.orchestration.multi.agents import (
-    sql_agent, analysis_agent, strategy_agent,
-    data_quality_agent, hbase_agent, hive_agent,
-)
-from harness.orchestration.multi.router import ROUTER_PROMPT, route_override
-from harness.orchestration.multi.base import is_agent_timeout
-from harness.constraints.guardrails import guard_input, guard_output
-from harness.orchestration.multi.cache import RouterCache
-from harness.orchestration.multi.task_system import TaskManager
+from harness.constraints.circuit_breaker import DEGRADED_MESSAGE, CircuitOpenError
 from harness.constraints.confidence import (
-    CONFIDENCE_PROMPT, parse_confidence_result, should_pause, format_confidence_report,
+    CONFIDENCE_PROMPT,
+    format_confidence_report,
+    parse_confidence_result,
+    should_pause,
 )
-from harness.observation.llm import extract_text
+from harness.constraints.guardrails import guard_input, guard_output
 from harness.constraints.retry import acall_with_retry
-from harness.constraints.circuit_breaker import CircuitOpenError, DEGRADED_MESSAGE
-from harness.observation.tracer import TraceContext, mask_sql
+from harness.observation.cost import estimate_tokens_cost
+from harness.observation.llm import extract_text
 from harness.observation.opik_tracing import (
-    wrap_langgraph,
-    flush_opik,
     annotate_opik,
-    get_current_opik_trace_id,
     capture_opik_trace_id_for_graph,
-    opik_tag_route,
+    flush_opik,
+    get_current_opik_trace_id,
+    opik_tag_fewshot,
     opik_tag_guard,
     opik_tag_hitl,
-    opik_tag_fewshot,
     opik_tag_reflection,
-    opik_tag_task_board,
+    opik_tag_route,
     opik_tag_sql,
+    opik_tag_task_board,
+    wrap_langgraph,
 )
-from harness.observation.cost import estimate_tokens_cost
+from harness.observation.tracer import TraceContext, mask_sql
+from harness.orchestration.multi.agents import (
+    analysis_agent,
+    data_quality_agent,
+    hbase_agent,
+    hive_agent,
+    sql_agent,
+    strategy_agent,
+)
+from harness.orchestration.multi.base import is_agent_timeout
+from harness.orchestration.multi.cache import RouterCache
+from harness.orchestration.multi.router import ROUTER_PROMPT, route_override
+from harness.orchestration.multi.state import MultiAgentState
+from harness.orchestration.multi.task_system import TaskManager
 
 # Checkpointer 数据库路径。
 # 图每执行完一个节点，自动把 state 写进这个 SQLite 文件。
@@ -526,7 +533,7 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
         # 读取用户审批结果
         approved = response.get("approved", True) if isinstance(response, dict) else True
         if not approved:
-            print(f"🚫 用户拒绝了低置信度 SQL")
+            print("🚫 用户拒绝了低置信度 SQL")
             return {
                 "final_answer": "SQL 执行已被用户取消（置信度过低）。",
                 "messages": [AIMessage(content="SQL 执行已被用户取消（置信度过低）。")],
@@ -635,7 +642,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
         if content:
             recent.append(f"{role}: {content}")
     if recent:
-        context_parts.insert(0, f"[最近对话]\n" + "\n".join(recent))
+        context_parts.insert(0, "[最近对话]\n" + "\n".join(recent))
     # Layer 4: Reflection 反馈（如果有）——放到最前面，让 Analysis 优先看到
     if state.get("results", {}).get("_reflection_feedback"):
         context_parts.insert(0, f"[🔴 重写指令 —— 上次回答被 Reflection 退回，请根据以下建议改进]\n{state['results']['_reflection_feedback']}")
@@ -651,7 +658,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
         if is_agent_timeout(text):
             context_parts.append(f"[警告] 上游 {name} Agent 超过最大轮数未完成，其结果为无效文本，请忽略并告知用户重试。")
 
-    print(f"⏳ Analysis Agent: 综合分析中...")
+    print("⏳ Analysis Agent: 综合分析中...")
     result, usage = await analysis_agent.run(
         client,
         task=state["query"],
@@ -660,7 +667,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     )
     if is_agent_timeout(result):
         span.error = "Analysis 超过最大轮数"
-        print(f"⚠️ Analysis 超过最大轮数")
+        print("⚠️ Analysis 超过最大轮数")
     print(f"✅ Analysis Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
 
     # Layer 3 输出护栏：检查 PII 泄露、system prompt 泄露、异常输出
@@ -671,7 +678,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
         # finish span before set blocked
         trace.finish_span(span, usage, error = reason)
         trace.set_blocked("output", reason)
-        
+
         return {
             "final_answer": reason,
             "messages": [AIMessage(content=reason)],

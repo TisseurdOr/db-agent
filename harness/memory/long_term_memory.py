@@ -4,9 +4,11 @@
 # 本文件只负责：embedding + HyDE + rerank + 对话读写编排。
 # 依赖 vector_db 提供：add(...) / search(query_vec, ...) —— VectorMemory 已对齐。
 
-from openai import OpenAI  # 用 OpenAI embedding（最方便）
-import uuid
 import os
+import uuid
+
+from openai import OpenAI  # 用 OpenAI embedding（最方便）
+
 from harness.observation.llm import extract_text, logger  # 安全取文字 + 共享日志器
 
 

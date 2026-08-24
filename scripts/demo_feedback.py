@@ -26,7 +26,7 @@ def banner(title: str):
 def demo_quality():
     """第 1 幕：质量门（零 API）——该拦的拦、该放的放。"""
     banner("第 1 幕 · 质量门：脏样例绝不入库")
-    from harness.memory.feedback import should_learn, extract_sql
+    from harness.memory.feedback import extract_sql, should_learn
 
     cases = [
         ("超时垃圾", "各部门订单", "(Agent 在 8 轮内未完成)", False),
@@ -61,13 +61,13 @@ async def demo_loop():
         print("   ⏭ 未配置 EMBEDDING_API_KEY，跳过本幕")
         return
 
+    from harness.context.sql_examples import get_sql_fewshot
     from harness.memory.feedback import learn_from_success
-    from harness.context.sql_examples import get_sql_fewshot, SQLExampleStore
 
     # 用唯一问法，避免和种子样例混淆
     tag = uuid.uuid4().hex[:6]
     question = f"市场部今年完成了多少订单金额_{tag}"
-    result_text = f"""
+    result_text = """
 查询成功：
 ```sql
 SELECT SUM(o.total) AS 订单金额
@@ -113,6 +113,7 @@ async def demo_live_agent():
         print("   ⏭ 未配置 ANTHROPIC_API_KEY，跳过")
         return
     from anthropic import Anthropic
+
     from harness.orchestration.multi.orchestrator import MultiAgentRunner
 
     client = Anthropic(

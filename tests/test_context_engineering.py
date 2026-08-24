@@ -8,10 +8,9 @@
 import sqlite3
 
 import harness.context.sql_examples as sql_examples
-from harness.context.sql_examples import SEED_EXAMPLES, format_examples, get_sql_fewshot
-from harness.context.schema_discovery import profile_column_values, _VALUE_PROFILE_MAX
 from db.seed import DB_PATH
-
+from harness.context.schema_discovery import _VALUE_PROFILE_MAX, profile_column_values
+from harness.context.sql_examples import SEED_EXAMPLES, format_examples, get_sql_fewshot
 
 # ═══ 1. 种子样例质量 ═══
 

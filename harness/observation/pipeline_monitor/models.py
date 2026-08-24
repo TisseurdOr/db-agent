@@ -9,10 +9,8 @@
 """
 
 import sqlite3
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 DB_PATH = Path(__file__).resolve().parent / "monitor.db"
 
@@ -114,7 +112,7 @@ def start_run(job_id: int, triggered_by: str = "scheduler") -> int:
 
 
 def finish_run(run_id: int, status: str, row_count: int = 0,
-               error_message: str = "", end_time: Optional[str] = None):
+               error_message: str = "", end_time: str | None = None):
     conn = get_db()
     end = end_time or datetime.now().isoformat()
     conn.execute(

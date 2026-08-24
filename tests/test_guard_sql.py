@@ -14,7 +14,6 @@ import pytest
 
 from harness.constraints.guardrails import guard_sql
 
-
 # ── 必须拦截的危险 SQL ──
 
 @pytest.mark.parametrize("sql", [

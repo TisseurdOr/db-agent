@@ -1,10 +1,13 @@
-import os
 import sqlite3
 
 from db.seed import DB_PATH
-from harness.constraints.entitlement import get_user, check_entitlement, resolve_user_id, deny_payload
+from harness.constraints.entitlement import (
+    check_entitlement,
+    deny_payload,
+    get_user,
+    resolve_user_id,
+)
 from harness.context.schema_discovery import discover_schema_for_query
-
 
 DISCOVER_SCHEMA_TOOL = {
     "name": "discover_relevant_schema",

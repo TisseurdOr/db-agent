@@ -15,11 +15,12 @@ import pytest
 
 # 先导入 server.main 建立正确加载顺序（query 与 main 存在循环引用，须经 main 入口加载）
 import server.main  # noqa: F401
-
 from server.endpoints.query import (
-    QueryRequest, ResumeRequest,
-    _drain_and_stream, _stream_query, _stream_resume,
-    HEARTBEAT_INTERVAL,
+    QueryRequest,
+    ResumeRequest,
+    _drain_and_stream,
+    _stream_query,
+    _stream_resume,
 )
 from server.runner_wrapper import RunnerRegistry
 

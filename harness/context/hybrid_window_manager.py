@@ -60,7 +60,7 @@ class HybridWindowManager:
         if old_summary:
             context_block += f"[早期对话 - 共 {len(old)} 条]\n{old_summary}\n\n"
         if mid_summaries:
-            context_block += f"[中间过程]:\n" + "\n".join(f"- {s}" for s in mid_summaries) + "\n"
+            context_block += "[中间过程]:\n" + "\n".join(f"- {s}" for s in mid_summaries) + "\n"
 
         return layer0, context_block
 

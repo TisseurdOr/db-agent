@@ -1,9 +1,16 @@
 """测试 HBase 内存模拟引擎: run_hbase + _seed_hbase_store。"""
 
 import pytest
+
 from harness.tools.hbase import (
-    run_hbase, _seed_hbase_store, _HBASE_STORE, _HBASE_META, _HBASE_ROW_ORDER,
-    _HBASE_DISABLED, _apply_prefix_filter, _parse_simple_filter,
+    _HBASE_DISABLED,
+    _HBASE_META,
+    _HBASE_ROW_ORDER,
+    _HBASE_STORE,
+    _apply_prefix_filter,
+    _parse_simple_filter,
+    _seed_hbase_store,
+    run_hbase,
 )
 
 
@@ -166,9 +173,10 @@ def test_put_in_graph_with_hitl_approved():
     """put 在 graph 内触发 HITL → 审批通过 → 数据写入 → get 验证。"""
     import asyncio
     from typing import TypedDict
-    from langgraph.graph import StateGraph, END
-    from langgraph.types import Command
+
     from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, StateGraph
+    from langgraph.types import Command
 
     class PutState(TypedDict):
         done: bool
@@ -211,9 +219,10 @@ def test_delete_in_graph_with_hitl_approved():
     """delete 在 graph 内触发 HITL → 审批通过 → 行被删除。"""
     import asyncio
     from typing import TypedDict
-    from langgraph.graph import StateGraph, END
-    from langgraph.types import Command
+
     from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, StateGraph
+    from langgraph.types import Command
 
     # 直接写入一行（绕过 HITL，模拟已存在数据）
     _HBASE_STORE["orders"]["order_temp"] = {"cf:x": "1"}

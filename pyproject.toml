@@ -32,8 +32,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.6.2",
+    "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.4",
 ]
 
 [tool.pytest.ini_options]
@@ -50,3 +53,21 @@ py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 include = ["harness*", "server*", "db*"]
+
+# ── 代码质量门禁 ──
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = ["frontend", ".venv", "archive", "sidecar"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]  # 行长不作为硬性错误（项目已有中文注释长行风格）
+
+# 入口/脚本/测试里有意的惰性导入（先 load_dotenv / 避免循环导入）
+[tool.ruff.lint.per-file-ignores]
+"main.py" = ["E402"]
+"app.py" = ["E402"]
+"server/main.py" = ["E402"]
+"scripts/*" = ["E402"]
+"tests/*" = ["E402"]

@@ -10,10 +10,9 @@
 sales、orders、regions 三张表的相关字段，而不是把全部表丢给 LLM。"
 """
 
-import sqlite3
 import os
+import sqlite3
 from pathlib import Path
-from typing import Optional
 
 import chromadb
 from openai import OpenAI
@@ -130,8 +129,8 @@ class SchemaDiscovery:
 
     def __init__(self, db_path: str | Path = DB_PATH):
         self.db_path = str(db_path)
-        self._embed_client: Optional[OpenAI] = None
-        self._chroma_client: Optional[chromadb.PersistentClient] = None
+        self._embed_client: OpenAI | None = None
+        self._chroma_client: chromadb.PersistentClient | None = None
         self._collection = None
 
     def _ensure_clients(self):
@@ -207,7 +206,6 @@ class SchemaDiscovery:
             return
 
         # 批量 embedding
-        embed_model = os.getenv("EMBEDDING_MODEL", "qwen3.7-text-embedding")
         batch_size = 20
         for i in range(0, len(docs_list), batch_size):
             batch = docs_list[i:i + batch_size]
@@ -304,7 +302,7 @@ class SchemaDiscovery:
 
 
 # 全局单例
-_schema_discovery: Optional[SchemaDiscovery] = None
+_schema_discovery: SchemaDiscovery | None = None
 
 
 def get_schema_discovery() -> SchemaDiscovery:

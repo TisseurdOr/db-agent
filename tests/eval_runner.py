@@ -33,13 +33,14 @@
 """
 
 import asyncio
+import json
 import os
 import sys
 import time
-import json
 from pathlib import Path
 
 from dotenv import load_dotenv
+
 load_dotenv()
 # eval 需要查库；未显式配置时用 analyst，避免默认 viewer 无权 run_query
 os.environ.setdefault("AGENT_USER", "analyst")
@@ -64,13 +65,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from tests.eval_cases import (
-    ALL_CASES, GUARDRAIL_CASES,
-    get_cases_by_category, get_fast_cases, get_full_cases,
-    EvalCase,
-)
+from harness.constraints.guardrails import guard_input
 from harness.observation.llm import extract_text
-from harness.constraints.guardrails import guard_input, guard_sql
+from tests.eval_cases import (
+    ALL_CASES,
+    EvalCase,
+    get_cases_by_category,
+    get_fast_cases,
+)
 
 JUDGE_PROMPT = """你是 Agent 输出质量评估员。对以下回答从三个维度打分（1-5 分）:
 
@@ -600,8 +602,8 @@ async def main():
                 print(f"  Experiment: {opik_out.get('experiment_name')}")
                 print(f"  ID:         {opik_out.get('experiment_id')}")
                 print(f"  Items:      {opik_out.get('item_count')}  pass_rate={opik_out.get('pass_rate', 0):.0%}")
-                print(f"  Open Opik UI → Experiments → latest eval-*")
-                print(f"  Dataset:    Datasets → db-agent-eval-cases")
+                print("  Open Opik UI → Experiments → latest eval-*")
+                print("  Dataset:    Datasets → db-agent-eval-cases")
             else:
                 print(f"{RED}  Opik upload failed: {opik_out.get('error')}{RESET}")
         except Exception as exc:

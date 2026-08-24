@@ -16,8 +16,10 @@ import random
 import time
 
 import anthropic
+
 from harness.constraints.circuit_breaker import (
-    CircuitBreaker, CircuitOpenError, DEGRADED_MESSAGE,
+    CircuitBreaker,
+    CircuitOpenError,
 )
 
 # 可重试的 HTTP 状态码：

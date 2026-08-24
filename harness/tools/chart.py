@@ -5,8 +5,8 @@
 基于 ECharts 5.5 CDN，零依赖安装。
 """
 
-import os
 import json
+import os
 from datetime import datetime
 
 CHART_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "charts"))
@@ -104,7 +104,7 @@ def _bar_option(labels, values, panel_title):
 
 
 def _pie_option(labels, values, panel_title):
-    data = [{"name": l, "value": v} for l, v in zip(labels, values)]
+    data = [{"name": label, "value": v} for label, v in zip(labels, values)]
     return {
         "title": {"text": panel_title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},

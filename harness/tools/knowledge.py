@@ -13,6 +13,7 @@
 """
 
 import sqlite3
+
 from harness.tools import tool
 
 # 向量记忆 / LLM——由 main.py 注入（模块级单例，避免 Tool 参数里传对象）

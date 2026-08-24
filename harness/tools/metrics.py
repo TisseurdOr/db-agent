@@ -10,7 +10,6 @@
 
 from harness.tools import tool
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # 指标口径字典
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -223,8 +222,6 @@ def lookup_metric(query: str) -> dict:
             "also_matched": [k for k, _ in suggestions[1:5]] if len(suggestions) > 1 else [],
         }
 
-    # 无匹配：返回全部指标名供 LLM 选择
-    all_keys = list(_METRICS.keys())
     return {
         "found": False, "query": query,
         "available_metrics": [{"key": k, "name": v["name"]} for k, v in _METRICS.items()],

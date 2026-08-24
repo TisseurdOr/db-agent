@@ -15,7 +15,6 @@
 
 import os
 from pathlib import Path
-from typing import Optional
 
 import chromadb
 from openai import OpenAI
@@ -98,7 +97,7 @@ class SQLExampleStore:
     """Q→SQL 样例库：ChromaDB 存储 + 语义检索 + 回流写入。"""
 
     def __init__(self):
-        self._embed_client: Optional[OpenAI] = None
+        self._embed_client: OpenAI | None = None
         self._collection = None
 
     def _ensure_clients(self):
@@ -174,7 +173,7 @@ class SQLExampleStore:
 
 
 # 全局单例
-_store: Optional[SQLExampleStore] = None
+_store: SQLExampleStore | None = None
 
 
 def get_sql_fewshot(question: str, top_k: int = 3) -> str:

@@ -13,10 +13,10 @@ from types import SimpleNamespace
 import pytest
 
 from db.seed import init_db
-from harness.tools.schema import list_tables, describe_table, get_schema_summary
-from harness.tools.query import run_query
 from harness.tools.analysis import analyze_results, compare_periods
-from harness.tools.knowledge import search_knowledge_base, save_to_memory, read_memory
+from harness.tools.knowledge import read_memory, save_to_memory, search_knowledge_base
+from harness.tools.query import run_query
+from harness.tools.schema import describe_table, get_schema_summary, list_tables
 
 
 @pytest.fixture(autouse=True)
@@ -190,17 +190,23 @@ def agent_deps():
     """
 
     def _build(script):
-        from harness.tools.schema import (
-            LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, GET_SCHEMA_SUMMARY_TOOL,
-            list_tables, describe_table, get_schema_summary,
-        )
-        from harness.tools.query import RUN_QUERY_TOOL, run_query
-        from harness.tools.analysis import (
-            ANALYZE_RESULTS_TOOL, analyze_results,
-            COMPARE_PERIODS_TOOL, compare_periods,
-        )
-        from harness.tools.knowledge import search_knowledge_base, save_to_memory, read_memory
         from harness.context.system_prompt import build_system_prompt
+        from harness.tools.analysis import (
+            ANALYZE_RESULTS_TOOL,
+            COMPARE_PERIODS_TOOL,
+            analyze_results,
+            compare_periods,
+        )
+        from harness.tools.knowledge import read_memory, save_to_memory, search_knowledge_base
+        from harness.tools.query import RUN_QUERY_TOOL, run_query
+        from harness.tools.schema import (
+            DESCRIBE_TABLE_TOOL,
+            GET_SCHEMA_SUMMARY_TOOL,
+            LIST_TABLES_TOOL,
+            describe_table,
+            get_schema_summary,
+            list_tables,
+        )
 
         tools = [
             LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, GET_SCHEMA_SUMMARY_TOOL,

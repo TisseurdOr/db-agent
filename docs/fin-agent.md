@@ -1293,4 +1293,3 @@ graph.invoke(None, config={"configurable": {"thread_id": "task-123"}})
 3. ✅ "LangGraph 的 state 是怎么在节点间传递和合并的？"
 4. ✅ "如果中间节点失败了，怎么重试？怎么人工介入？"
 5. ✅ "LangGraph vs CrewAI vs AutoGen，分别适合什么场景？"
-

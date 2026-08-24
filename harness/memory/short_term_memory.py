@@ -1,5 +1,6 @@
 # short_term_memory.py
 import os
+
 from anthropic import Anthropic
 
 SUMMARY_PROMPT = """Summarize this conversation snippet concisely.

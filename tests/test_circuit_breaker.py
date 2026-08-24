@@ -6,17 +6,19 @@
 - 降级路径：agent_loop / streaming_agent 在熔断时返回可读文案
 """
 
-from types import SimpleNamespace
 
 import pytest
 
 from harness.constraints.circuit_breaker import (
-    CircuitBreaker, CircuitOpenError, DEGRADED_MESSAGE,
+    DEGRADED_MESSAGE,
+    CircuitBreaker,
+    CircuitOpenError,
 )
 from harness.constraints.retry import (
-    acall_with_retry, get_circuit_breaker, reset_circuit_breaker,
+    acall_with_retry,
+    get_circuit_breaker,
+    reset_circuit_breaker,
 )
-
 
 # ═══ 1. 状态机 ═══════════════════════════════════════════════════════
 

@@ -31,9 +31,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from anthropic import Anthropic
 
-from harness.memory.vector_store import VectorMemory
 from harness.memory.long_term_memory import RAGPipeline
-from tests.eval_memory import load_golden, find_rank, compute_positive_metrics
+from harness.memory.vector_store import VectorMemory
+from tests.eval_memory import compute_positive_metrics, find_rank, load_golden
 
 GREEN = "\033[32m"
 RED = "\033[31m"

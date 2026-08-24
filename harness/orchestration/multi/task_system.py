@@ -15,10 +15,9 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Iterable
-
 
 TASKS_DIR = Path(__file__).resolve().parents[3] / ".tasks"
 # Not .json: Opik endpoint watches *.json and would restart on task writes.
@@ -39,7 +38,7 @@ class Task:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Task":
+    def from_dict(cls, data: dict) -> Task:
         return cls(
             id=data["id"],
             subject=data.get("subject", ""),

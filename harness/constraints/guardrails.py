@@ -11,7 +11,6 @@
 """
 
 import re
-from typing import Tuple
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Layer 1: 输入护栏 — 在 LLM 调用之前拦住恶意输入
@@ -56,7 +55,7 @@ _SQL_WRITE_IN_INPUT_RE = re.compile(
 MAX_INPUT_LENGTH = 2000
 
 
-def guard_input(query: str) -> Tuple[bool, str]:
+def guard_input(query: str) -> tuple[bool, str]:
     """输入护栏：检查 query 是否安全。
 
     检查项（按优先级）：
@@ -109,7 +108,7 @@ MULTI_STATEMENT_MARKERS = [";--", ";\n", "/*"]
 SYSTEM_TABLE_PREFIXES = ["sqlite_", "pg_", "information_schema", "sys."]
 
 
-def guard_sql(sql: str) -> Tuple[bool, str]:
+def guard_sql(sql: str) -> tuple[bool, str]:
     """SQL 护栏：检查 SQL 语句是否安全。
 
     检查项：
@@ -178,7 +177,7 @@ SYSTEM_LEAK_PATTERNS = [
 ]
 
 
-def guard_output(text: str) -> Tuple[bool, str]:
+def guard_output(text: str) -> tuple[bool, str]:
     """输出护栏：检查 Agent 输出是否安全。
 
     检查项：
@@ -227,7 +226,7 @@ def guard_output(text: str) -> Tuple[bool, str]:
 # 便捷函数：一次跑三道护栏
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def full_guard(query: str, sql: str = "", output: str = "") -> Tuple[bool, str, str]:
+def full_guard(query: str, sql: str = "", output: str = "") -> tuple[bool, str, str]:
     """跑三道护栏，返回 (是否全过, 拦截原因, 拦截位置)。
 
     用于快速集成——调用方只需判断第一个返回值。

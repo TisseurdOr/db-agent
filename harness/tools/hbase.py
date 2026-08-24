@@ -10,9 +10,9 @@
 """
 
 import re
-from typing import Optional
-from harness.tools import tool
+from collections.abc import Callable
 
+from harness.tools import tool
 
 # ═══════════════════════════════════════════════════════════════════
 # 内存存储
@@ -109,7 +109,7 @@ def _apply_prefix_filter(rows: list[tuple[str, dict]], prefix: str) -> list[tupl
     return [(rk, cols) for rk, cols in rows if rk.startswith(prefix)]
 
 
-def _parse_simple_filter(filter_str: str) -> Optional[callable]:
+def _parse_simple_filter(filter_str: str) -> Callable | None:
     """解析简单 filter: cf:col op value。返回 lambda 或 None。"""
     if not filter_str:
         return None

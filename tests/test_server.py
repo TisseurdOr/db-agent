@@ -6,15 +6,14 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from server import sse as sse_mod
-from server.runner_wrapper import StreamingRunner, RunnerRegistry, _auto_chart_from_sql_result
 from server.main import app
-
+from server.runner_wrapper import RunnerRegistry, StreamingRunner, _auto_chart_from_sql_result
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. SSE 事件格式化
@@ -284,15 +283,6 @@ async def test_runner_registry_get_or_create(monkeypatch):
     assert registry.get_active() is r1
 
     await registry.close_all()
-import asyncio
-import json
-from types import SimpleNamespace
-from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-from fastapi.testclient import TestClient
-
-from server import sse as sse_mod
-from server.runner_wrapper import StreamingRunner, RunnerRegistry, _auto_chart_from_sql_result
-from server.main import app
 from langgraph.errors import GraphInterrupt

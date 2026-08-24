@@ -15,8 +15,8 @@
 """
 
 import importlib
-import pytest
 
+import pytest
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. 模块编译 — 所有 harness 模块能正常 import
@@ -135,8 +135,12 @@ def test_all_tool_handlers_wired():
 def _collect_agents() -> list:
     """从 agents.py 收集所有 ConfiguredAgent。"""
     from harness.orchestration.multi.agents import (
-        sql_agent, analysis_agent, strategy_agent,
-        hbase_agent, hive_agent, data_quality_agent,
+        analysis_agent,
+        data_quality_agent,
+        hbase_agent,
+        hive_agent,
+        sql_agent,
+        strategy_agent,
     )
     return [sql_agent, analysis_agent, strategy_agent, hbase_agent, hive_agent, data_quality_agent]
 
@@ -145,7 +149,7 @@ def test_all_agents_have_name_and_prompt():
     """每个 agent 必须有 name 和 system_prompt。"""
     agents = _collect_agents()
     for agent in agents:
-        assert agent.name, f"agent 缺少 name"
+        assert agent.name, "agent 缺少 name"
         assert agent.system_prompt, f"agent '{agent.name}' 缺少 system_prompt"
 
 
@@ -190,8 +194,11 @@ def test_hive_agent_has_query_tools():
 def test_router_markers_not_empty():
     """Router 的所有标记常量应为非空。"""
     from harness.orchestration.multi.router import (
-        _CHITCHAT_MARKERS, _HBASE_MARKERS, _HIVE_MARKERS,
-        _STRATEGY_MARKERS, _DATA_MARKERS,
+        _CHITCHAT_MARKERS,
+        _DATA_MARKERS,
+        _HBASE_MARKERS,
+        _HIVE_MARKERS,
+        _STRATEGY_MARKERS,
     )
     assert len(_CHITCHAT_MARKERS) > 0
     assert len(_HBASE_MARKERS) > 0
@@ -202,8 +209,8 @@ def test_router_markers_not_empty():
 
 def test_hbase_scan_regex_compiles():
     """HBase scan 操作词正则能编译且能匹配 scan。"""
+
     from harness.orchestration.multi.router import _HBASE_OP_RE
-    import re
     assert _HBASE_OP_RE is not None
     assert _HBASE_OP_RE.search("scan orders 表")
     assert not _HBASE_OP_RE.search("scanner 扫描")
@@ -269,7 +276,7 @@ def test_hitl_sql_needs_approval_exists():
 
 def test_hitl_hbase_destructive_ops_covered():
     """HBase 破坏性操作全部被 needs_approval_hbase 覆盖。"""
-    from harness.constraints.entitlement import needs_approval_hbase, _HBASE_DESTRUCTIVE_OPS
+    from harness.constraints.entitlement import _HBASE_DESTRUCTIVE_OPS, needs_approval_hbase
 
     destructive = {"put", "delete", "drop", "truncate"}
     assert _HBASE_DESTRUCTIVE_OPS == destructive, (
@@ -342,7 +349,7 @@ def test_get_user_returns_valid():
 
 def test_build_permission_context():
     """build_permission_context 应生成非空字符串。"""
-    from harness.constraints.entitlement import get_user, build_permission_context
+    from harness.constraints.entitlement import build_permission_context, get_user
     user = get_user("analyst")
     ctx = build_permission_context(user)
     assert len(ctx) > 0

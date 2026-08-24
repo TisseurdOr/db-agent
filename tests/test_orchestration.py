@@ -8,10 +8,14 @@
 """
 
 import harness.tools.schema as schema_mod
-from harness.orchestration.multi.orchestrator import _next_step, MultiAgentRunner
-from harness.orchestration.multi.agents import sql_agent, hive_agent, strategy_agent, HIVE_AGENT_PROMPT
-from harness.tools.schema import list_hive_tables, discover_relevant_schema, HIVE_SIM_TABLES
-
+from harness.orchestration.multi.agents import (
+    HIVE_AGENT_PROMPT,
+    hive_agent,
+    sql_agent,
+    strategy_agent,
+)
+from harness.orchestration.multi.orchestrator import MultiAgentRunner, _next_step
+from harness.tools.schema import HIVE_SIM_TABLES, discover_relevant_schema, list_hive_tables
 
 # ═══ 1. _next_step 调度 ═══
 
@@ -172,27 +176,25 @@ def test_strategy_agent_has_lookup_metric():
 
 import asyncio
 import json
-import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from harness.observation.tracer import TraceContext
 from harness.orchestration.multi import orchestrator as orchestrator_mod
 from harness.orchestration.multi.orchestrator import (
-    node_router,
-    node_sql,
     node_analysis,
-    node_reflection,
     node_confidence_gate,
     node_data_quality,
-    node_strategy,
     node_hbase,
     node_hive,
+    node_reflection,
+    node_router,
+    node_sql,
+    node_strategy,
 )
 from harness.orchestration.multi.task_system import TaskManager
-from harness.observation.tracer import TraceContext
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Mock 工具
@@ -237,9 +239,9 @@ def _patch_acall(monkeypatch):
 
 def _patch_sql_imports(monkeypatch):
     """node_sql 在函数体内 import 了这些符号，需要 patch 它们的来源模块。"""
-    import harness.tools.query as query_mod
     import harness.context.sql_examples as examples_mod
     import harness.memory.feedback as feedback_mod
+    import harness.tools.query as query_mod
     monkeypatch.setattr(query_mod, "pop_last_successful_sql", lambda: None)
     monkeypatch.setattr(examples_mod, "get_sql_fewshot", lambda q: "")
     monkeypatch.setattr(feedback_mod, "learn_from_success", lambda *a, **k: False)

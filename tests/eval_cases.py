@@ -423,7 +423,7 @@ EDGE_CASES = [
         },
 
     ),
-    
+
     EvalCase(
         id="edge-007",
         category="edge",

@@ -17,8 +17,8 @@
 #   # 自动产出: schema dict → 注册到 agent
 #   # 改参数只需改函数签名一处，schema 自动跟。
 
-import inspect
 import functools
+import inspect
 from typing import get_type_hints
 
 
@@ -57,7 +57,7 @@ def tool(description: str):
         """
         if not docstring:
             return {}
-        lines = [l.strip() for l in docstring.strip().split("\n") if l.strip()]
+        lines = [line.strip() for line in docstring.strip().split("\n") if line.strip()]
         result = {}
         current = None
         desc_parts = []

@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from harness.observation.alerts import AlertNotifier, send_alert
+from harness.observation.alerts import AlertNotifier
 
 
 def test_send_logs_without_webhook(caplog):
@@ -82,7 +82,9 @@ def test_webhook_failure_does_not_raise(monkeypatch, caplog):
 @pytest.mark.asyncio
 async def test_breaker_open_triggers_alert(monkeypatch):
     from harness.constraints.retry import (
-        acall_with_retry, get_circuit_breaker, reset_circuit_breaker,
+        acall_with_retry,
+        get_circuit_breaker,
+        reset_circuit_breaker,
     )
 
     reset_circuit_breaker()

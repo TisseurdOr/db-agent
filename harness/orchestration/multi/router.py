@@ -5,7 +5,6 @@
 
 import re
 
-
 # ── Router System Prompt（LLM 兜底用）──
 
 ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划的 JSON。

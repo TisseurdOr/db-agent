@@ -4,7 +4,8 @@
 - DBAgentState: 旧课单 Agent 图用；图代码已迁到 archive/legacy_single_agent_graph/
 """
 
-from typing import TypedDict, Annotated
+from typing import Annotated, TypedDict
+
 from langgraph.graph.message import add_messages
 
 

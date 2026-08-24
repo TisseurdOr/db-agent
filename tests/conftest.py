@@ -6,7 +6,6 @@ CI 没有 .env 时这些用例会退回 viewer（run_query 被拒、employees �
 保证任何环境行为一致。
 """
 
-import os
 
 import pytest
 
@@ -22,8 +21,8 @@ def _hermetic_env(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset_global_guards():
     """每个用例前重置全局状态（熔断器 / 幂等守卫 / 告警器 / 会话存储），避免污染。"""
-    from harness.constraints.retry import reset_circuit_breaker
     from harness.constraints.idempotency import reset_idempotency_guard
+    from harness.constraints.retry import reset_circuit_breaker
     from harness.observation.alerts import reset_alert_notifier
     reset_circuit_breaker()
     reset_idempotency_guard()

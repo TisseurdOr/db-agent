@@ -25,12 +25,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from anthropic import Anthropic
+
 from db.seed import init_db
-from harness.tools.hbase import _seed_hbase_store
-from harness.context.template_matcher import init_metric_registry
 from harness.context.schema_discovery import get_schema_discovery
+from harness.context.template_matcher import init_metric_registry
+from harness.observation.opik_tracing import flush_opik, track_entrypoint, wrap_anthropic_client
 from harness.orchestration.multi.orchestrator import MultiAgentRunner
-from harness.observation.opik_tracing import wrap_anthropic_client, track_entrypoint, flush_opik
+from harness.tools.hbase import _seed_hbase_store
 
 _runner: MultiAgentRunner | None = None
 _loop = asyncio.new_event_loop()

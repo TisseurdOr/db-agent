@@ -3,22 +3,21 @@
 全部零 API 成本：只测 entitlement.py 的纯逻辑，不调用 LLM。
 """
 
-import os
 import pytest
 
 from db.seed import init_db
 from harness.constraints.entitlement import (
-    get_user,
-    resolve_user_id,
+    authorize_tool,
     check_entitlement,
     check_entitlement_by_role,
-    authorize_tool,
     check_table_access,
-    rewrite_sql,
+    deny_payload,
+    get_user,
     needs_approval,
     needs_approval_hbase,
-    deny_payload,
     reload,
+    resolve_user_id,
+    rewrite_sql,
 )
 
 

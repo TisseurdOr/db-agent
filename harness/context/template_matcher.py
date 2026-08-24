@@ -10,12 +10,12 @@
 #   - 只覆盖高频确定性查询（单表聚合、简单多表 JOIN）
 #   - 复杂查询不强行模板化，直接回退 LLM
 
-import re
 import json
+import re
 import sqlite3
-from pathlib import Path
-from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from harness.tools import tool
 

@@ -3,23 +3,31 @@
 # 与 multi_agent/agents.py 对应：multi 按角色拆分 tools，single 一次挂全量。
 # tools 实现在 common/tools/，这里只做注册与 dispatch map。
 
-from harness.tools.schema import (
-    LIST_TABLES_TOOL, list_tables,
-    DESCRIBE_TABLE_TOOL, describe_table,
-    GET_SCHEMA_SUMMARY_TOOL, get_schema_summary,
-)
-from harness.tools.query import RUN_QUERY_TOOL, run_query
+from harness.context.template_matcher import match_sql_template
 from harness.tools.analysis import (
-    ANALYZE_RESULTS_TOOL, analyze_results,
-    COMPARE_PERIODS_TOOL, compare_periods,
+    ANALYZE_RESULTS_TOOL,
+    COMPARE_PERIODS_TOOL,
+    analyze_results,
+    compare_periods,
 )
 from harness.tools.chart import render_chart
-from harness.tools.knowledge import (
-    search_knowledge_base, save_to_memory, read_memory, search_memory,
-)
+from harness.tools.hbase import generate_hbase_query, run_hbase
 from harness.tools.hive import search_hive_syntax
-from harness.tools.hbase import run_hbase, generate_hbase_query
-from harness.context.template_matcher import match_sql_template
+from harness.tools.knowledge import (
+    read_memory,
+    save_to_memory,
+    search_knowledge_base,
+    search_memory,
+)
+from harness.tools.query import RUN_QUERY_TOOL, run_query
+from harness.tools.schema import (
+    DESCRIBE_TABLE_TOOL,
+    GET_SCHEMA_SUMMARY_TOOL,
+    LIST_TABLES_TOOL,
+    describe_table,
+    get_schema_summary,
+    list_tables,
+)
 
 TOOLS = [
     LIST_TABLES_TOOL,
