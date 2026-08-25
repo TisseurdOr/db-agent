@@ -88,3 +88,6 @@ docs/意图识别.md
 docs/模型 Fallback 链.md
 docs/项目详细拆解.md
 docs/anki-评测.tsv
+
+# 个人简历文件（含真实信息，勿入库）
+sidecar/resume.html
