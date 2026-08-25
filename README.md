@@ -30,6 +30,22 @@
 > Web 为演示用途：接口无鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis；CI 只跑 Python 测试，前端未接入。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均“可选后端 + 自动降级”。
 
+## 项目缘起 · 学习轨迹
+
+这是我在 AI Agent 学习路径上持续迭代的项目：**GitHub 建仓 / 推送时间（2026-07）晚于实际开发起点**，早期成果在公开仓库可查证。
+
+从 2026 年初开始系统性学习大模型应用与 Agent 开发，按时间线先后完成：
+
+| 阶段 | 仓库 | 建仓时间 | 定位 |
+|------|------|---------|------|
+| 学习起点 | [learning](https://github.com/TisseurdOr/learning) | 2026-02 | 学习与练习 |
+| 入门练习 | [local_qa_bot](https://github.com/TisseurdOr/local_qa_bot) · [RAG_chat_bot](https://github.com/TisseurdOr/RAG_chat_bot) | 2026-04 | QA / RAG 第一个练习 |
+| Agent 练习 | [career-assistant-langgraph](https://github.com/TisseurdOr/career-assistant-langgraph) · [langgraph-rag-mcp-agent](https://github.com/TisseurdOr/langgraph-rag-mcp-agent) | 2026-04 ~ 06 | LangGraph / RAG / MCP |
+| 前序完整项目 | [fin-agent](https://github.com/TisseurdOr/fin-agent) | 2026-06 | 金融研报分析 Agent |
+| 前序完整项目 | [fraud-agent](https://github.com/TisseurdOr/fraud-agent) | 2026-06 | 反欺诈分析 Agent |
+| 本仓库 | db-agent | 2026-07（推送） | 单 Agent → Multi-Agent Harness 沉淀 |
+
+> fin-agent、fraud-agent 是 db-agent 的直接前序：先验证了 RAG、工具调用与单 Agent 编排，再在 db-agent 里沉淀成 Harness 骨架并扩展出多 Agent 职责隔离。仓库时间戳只反映「建仓 / 推送」时间，不代表实际开发起点。
 
 <table>
 <tr>
