@@ -23,10 +23,10 @@
 
 这不是一个「让模型写 SQL」的玩具，而是一套 **让模型写 SQL 不出事** 的工程系统：工具真执行、权限硬拦截、失败可自愈、结果可评测。换 DeepSeek / Claude 只改 API，不改这套骨架。对照见 [`HARNESS.md`](HARNESS.md)。
 
-> **演示环境说明**：学习 / 面试演示项目，不是生产系统。
-> SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）。
+> **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端）；当前数据源与部署形态仍是本地演示，**不是已上线业务环境**。
+> SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）——接真实集群只需换连接器。
 > 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **423** 条）。
-> Web 为演示用途：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
+> Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
 ---
@@ -35,6 +35,10 @@
 
 业务痛点很具体：要背 SQL / Hive / HBase 三套语法、改字段要等数据组排期、市面 Text-to-SQL 往往只生成不执行、不鉴权、不改错。本项目要做的是 **说人话 → 查数 → 分析**，并把权限、可靠性、评测一起做完。
 
+<p align="center">
+  <img src="docs/diagrams/functional_layers.png" alt="功能分层" width="50%">
+</p>
+<p align="center"><sub>图 1 · 功能分层：问数能力叠权限、自愈、记忆、评测</sub></p>
 
 | 能力 | 做什么 | 关键落点 |
 |------|--------|----------|
@@ -81,7 +85,7 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 | 约束 | `harness/constraints/` | RBAC、护栏、confidence/HITL、retry、熔断、幂等 |
 
 <p align="center">
-  <img src="docs/diagrams/mechanism-overview.png" alt="工程机制全景" width="100%">
+  <img src="docs/diagrams/mechanism-overview.png" alt="工程机制全景" width="50%">
 </p>
 <p align="center"><sub>图 2 · 工程机制全景：入口 → Harness 六维 → 可靠性横切</sub></p>
 
