@@ -70,6 +70,8 @@ class MultiAgentState(TypedDict):
     _reflection_attempts: int   # Reflection 节点重试次数（上限 2）
     _replan_attempts: int       # 失败重规划次数（上限 1——防 router↔agent 死循环）
     _replan_feedback: str       # Agent 失败原因，回喂 Router 重排计划后清空
+    _skip_confidence: bool      # Web 交互跳过置信度门
+    _skip_reflection: bool      # Web 交互跳过 Reflection
 
 
 

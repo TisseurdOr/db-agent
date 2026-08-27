@@ -78,7 +78,12 @@ _DATA_QUERY_ASK_RE = re.compile(
 )
 _DATA_MARKERS = (
     "销售额", "订单", "员工", "部门", "客户", "产品销量", "多少人",
-    "趋势", "对比", "分析", "统计", "数据库",
+    "趋势", "对比", "分析", "统计", "数据库", "有哪些表", "哪些表",
+)
+# 「有哪些表 / 列出所有表」——纯元数据，硬规则 sql，不走 Router LLM
+_LIST_TABLES_RE = re.compile(
+    r"(有哪些表|哪些表|列出.{0,6}表|表有哪些|list\s+tables|show\s+tables)",
+    re.IGNORECASE,
 )
 # 拼音/错别字容错：「销shou额」「销 额」≈ 销售额；「查询」+「销」也当数据查询
 _FUZZY_SALES_RE = re.compile(r"销\S{0,8}额|查询.{0,6}销")
@@ -212,8 +217,26 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
             {"agent": "analysis", "task": f"对比分析：{q}"},
         ]
 
+    # 列表示意：有哪些表 → 直接 sql（跳过 Router LLM）
+    if _LIST_TABLES_RE.search(q) and not has_hbase and not has_hive:
+        return [{"agent": "sql", "task": "列出数据库中的所有表名"}]
+
     # 拼音/错别字数据查询：「查询销shou 额」→ sql（策略类已在上面拦截）
     if _FUZZY_SALES_RE.search(q) and not has_strategy:
+        return [{"agent": "sql", "task": q}]
+
+    # 纯数据查询硬规则：跳过 Router LLM（「有多少员工」「销售额最高的部门」）
+    # 只有明确要解读/出图时才附带 analysis
+    if has_sql_kw and not has_strategy:
+        needs_analysis = any(m in q for m in (
+            "图表", "画图", "可视化", "生成图表", "用图",
+            "给建议", "给出建议", "并分析", "解读",
+        )) or ("分析" in q and any(m in q for m in ("趋势", "建议", "原因", "洞察", "同比", "环比")))
+        if needs_analysis:
+            return [
+                {"agent": "sql", "task": q},
+                {"agent": "analysis", "task": f"基于查询结果分析：{q}"},
+            ]
         return [{"agent": "sql", "task": q}]
 
     # ── 上下文继承：上一轮只有 hbase/hive，本轮无冲突信号 → 继承 ──

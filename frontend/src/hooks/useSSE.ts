@@ -9,6 +9,8 @@ interface UseSSEOptions {
   reconnectAttempts?: number;
   /** 重连基础延迟 ms（指数退避：1s → 2s → 4s） */
   reconnectDelayMs?: number;
+  /** 单次建连超时 ms（后端挂掉时避免「连接中」无限挂起） */
+  connectTimeoutMs?: number;
 }
 
 export function useSSE({
@@ -17,6 +19,7 @@ export function useSSE({
   onDone,
   reconnectAttempts = 3,
   reconnectDelayMs = 1000,
+  connectTimeoutMs = 15000,
 }: UseSSEOptions) {
   const abortRef = useRef<AbortController | null>(null);
 
@@ -37,6 +40,8 @@ export function useSSE({
 
   const connect = useCallback(
     async (url: string, body: unknown) => {
+      // 新查询先打断旧 SSE，避免后端白烧 token、事件串到新气泡
+      abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
       let attempt = 0;
@@ -44,12 +49,24 @@ export function useSSE({
       try {
         while (true) {
           try {
-            const response = await fetch(url, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(body),
-              signal: controller.signal,
-            });
+            const timeoutCtrl = new AbortController();
+            const connectTimer = setTimeout(() => timeoutCtrl.abort(), connectTimeoutMs);
+            const signal =
+              typeof AbortSignal !== "undefined" && "any" in AbortSignal
+                ? AbortSignal.any([controller.signal, timeoutCtrl.signal])
+                : controller.signal;
+
+            let response: Response;
+            try {
+              response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body),
+                signal,
+              });
+            } finally {
+              clearTimeout(connectTimer);
+            }
 
             if (!response.ok) {
               onError?.(`HTTP ${response.status}: ${response.statusText}`);
@@ -91,11 +108,16 @@ export function useSSE({
             return; // 服务端正常结束
           } catch (err: unknown) {
             // 用户主动中止：不重试
-            if (err instanceof Error && err.name === "AbortError") return;
-            // 网络断流：指数退避重连
+            if (controller.signal.aborted) return;
+            // 超时 / 网络断流：指数退避重连
             attempt++;
+            const msg = err instanceof Error ? err.message : String(err);
             if (attempt > reconnectAttempts) {
-              onError?.(err instanceof Error ? err.message : String(err));
+              onError?.(
+                msg.includes("aborted") || msg.includes("AbortError")
+                  ? "连接后端超时，请确认服务已启动（:8000）"
+                  : msg,
+              );
               return;
             }
             const delay = reconnectDelayMs * 2 ** (attempt - 1);
@@ -110,7 +132,7 @@ export function useSSE({
         onDone?.();
       }
     },
-    [onEvent, onError, onDone, reconnectAttempts, reconnectDelayMs, sleep],
+    [onEvent, onError, onDone, reconnectAttempts, reconnectDelayMs, connectTimeoutMs, sleep],
   );
 
   const abort = useCallback(() => {

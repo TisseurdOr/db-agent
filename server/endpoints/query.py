@@ -40,7 +40,7 @@ class QueryRequest(BaseModel):
 
 
 class ResumeRequest(BaseModel):
-    query_id: str
+    query_id: str = ""  # 前端兼容字段；实际按 session_id 定位 runner
     approved: bool = True
     session_id: str = "default"  # 按会话定位 runner，避免全局 active 串线
 
@@ -75,16 +75,28 @@ async def _run_and_collect(coro_factory, queue: asyncio.Queue):
     try:
         await coro_factory()
     except Exception as e:
-        await queue.put(("error", SSEEvent.error(str(e), type(e).__name__)))
+        name = type(e).__name__
+        msg = str(e) or name
+        if name in ("APIConnectionError", "APITimeoutError") or "Connection error" in msg:
+            msg = (
+                "无法连接大模型 API（网络/代理/密钥或 DeepSeek 服务异常）。"
+                "请检查 ANTHROPIC_BASE_URL / API Key，以及本机能否访问 api.deepseek.com。"
+            )
+        await queue.put(("error", SSEEvent.error(msg, name)))
     finally:
         await queue.put(("done_sentinel", None))
 
 
 async def _stream_query(request: Request, req: QueryRequest, query_id: str,
                       registry, client) -> AsyncIterator[str]:
-    """单次查询的完整 SSE 事件流：创建 runner → 后台执行 → 断连感知转发 → 清理。"""
+    """单次查询的完整 SSE 事件流：先推 connected → 创建 runner → 后台执行 → 断连感知转发。"""
     queue: asyncio.Queue = asyncio.Queue()
     model = req.model or DEFAULT_MODEL
+
+    # 先推首包，避免冷启动 create runner 堵住 TTFF
+    yield format_sse("connected", {"query_id": query_id, "session_id": req.session_id})
+    t_init = time.time()
+    yield format_sse("step_start", SSEEvent.step_start("init", "初始化会话"))
 
     runner = await registry.get_or_create(
         session_id=req.session_id,
@@ -92,7 +104,10 @@ async def _stream_query(request: Request, req: QueryRequest, query_id: str,
         model=model,
     )
 
-    yield format_sse("connected", {"query_id": query_id, "session_id": req.session_id})
+    yield format_sse(
+        "step_end",
+        SSEEvent.step_end("init", "就绪", time.time() - t_init),
+    )
 
     # run_streaming / resume_streaming 在 StreamingRunner 上（包装 MultiAgentRunner 发 SSE 事件），
     # 不能直接在 MultiAgentRunner 上调——回归：此前漏掉包装直接调 runner.run_streaming 必崩。

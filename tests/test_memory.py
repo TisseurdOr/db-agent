@@ -188,6 +188,35 @@ async def test_conversation_manager_build_context_when_compressed():
     assert "[最近对话如下]" in context
 
 
+def test_conversation_manager_save_load_roundtrip(monkeypatch, tmp_path):
+    """save() 落盘后，新的 ConversationManager.load() 能恢复原文+摘要。"""
+    import harness.memory.short_term_memory as stm
+    monkeypatch.setattr(stm, "_DB_DIR", tmp_path)
+
+    mgr = stm.ConversationManager(client=None, max_recent=4, session_id="alice")
+    mgr.messages = [{"role": "user", "content": "有哪些表？"}]
+    mgr.summary = "早期摘要"
+    mgr._total_compressed = 3
+    mgr.save()
+
+    restored = stm.ConversationManager(client=None, max_recent=4, session_id="alice")
+    restored.load()
+    assert restored.messages == mgr.messages
+    assert restored.summary == "早期摘要"
+    assert restored._total_compressed == 3
+
+
+def test_conversation_manager_load_missing_file(tmp_path, monkeypatch):
+    """文件不存在时 load() 静默保持空态，不抛异常。"""
+    import harness.memory.short_term_memory as stm
+    monkeypatch.setattr(stm, "_DB_DIR", tmp_path)
+
+    mgr = stm.ConversationManager(client=None, session_id="nobody")
+    mgr.load()
+    assert mgr.messages == []
+    assert mgr.summary == ""
+
+
 def test_conversation_manager_estimate_chinese():
     """中文字符 token 折算：~0.4 token/字。"""
     from harness.memory.short_term_memory import ConversationManager

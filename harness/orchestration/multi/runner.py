@@ -226,6 +226,8 @@ class MultiAgentRunner:
             "_reflection_attempts": 0,
             "_replan_attempts": 0,
             "_replan_feedback": "",
+            "_skip_confidence": False,
+            "_skip_reflection": False,
         }
 
         try:

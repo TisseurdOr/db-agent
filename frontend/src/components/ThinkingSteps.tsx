@@ -5,6 +5,8 @@ interface Props {
 }
 
 const LABELS: Record<string, string> = {
+  connecting: "连接中",
+  init: "会话初始化",
   preprocessing: "护栏检查",
   router: "意图路由",
   clarify: "需求澄清",
@@ -70,8 +72,8 @@ function StepCard({ step }: { step: Step }) {
           {step.elapsed < 1 ? `${(step.elapsed * 1000).toFixed(0)}ms` : `${step.elapsed.toFixed(1)}s`}
         </span>
       )}
-      {step.tokens !== undefined && step.tokens > 0 && (
-        <span style={{ color: "#555", minWidth: 60, textAlign: "right" }}>{step.tokens}t</span>
+      {step.status === "done" && (step.tokens ?? 0) > 0 && (
+        <span style={{ color: "#888", minWidth: 60, textAlign: "right" }}>{step.tokens}t</span>
       )}
     </div>
   );

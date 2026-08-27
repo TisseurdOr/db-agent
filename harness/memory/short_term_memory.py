@@ -1,7 +1,11 @@
 # short_term_memory.py
+import json
 import os
+from pathlib import Path
 
 from anthropic import Anthropic
+
+_DB_DIR = Path(__file__).resolve().parents[2] / "db"
 
 SUMMARY_PROMPT = """Summarize this conversation snippet concisely.
 Keep: key decisions, user preferences, data mentioned, actions taken.
@@ -33,13 +37,40 @@ async def compress_history(client: Anthropic, old_messages: list, model=None):
 class ConversationManager:
     """混合策略：最近 10 条保留原文，更早的压缩为摘要。"""
 
-    def __init__(self, client: Anthropic, max_recent=10, max_summary_tokens=500):
+    def __init__(self, client: Anthropic, max_recent=10, max_summary_tokens=500,
+                 session_id: str = "default"):
         self.client = client
         self.max_recent = max_recent
         self.max_summary_tokens = max_summary_tokens
+        self.session_id = session_id
         self.messages = []           # 最近的消息（原文）
         self.summary = ""            # 早期消息的摘要
         self._total_compressed = 0   # 总共压缩了多少轮
+
+    @property
+    def _state_path(self) -> Path:
+        return _DB_DIR / f"conversation_{self.session_id}.json"
+
+    def save(self):
+        """把最近原文 + 早期摘要落盘（JSON），跨进程/重启恢复。"""
+        try:
+            self._state_path.write_text(json.dumps({
+                "messages": self.messages,
+                "summary": self.summary,
+                "total_compressed": self._total_compressed,
+            }, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def load(self):
+        """从磁盘恢复最近原文 + 摘要；文件不存在/损坏则保持空态。"""
+        try:
+            data = json.loads(self._state_path.read_text(encoding="utf-8"))
+            self.messages = data.get("messages", [])
+            self.summary = data.get("summary", "")
+            self._total_compressed = data.get("total_compressed", 0)
+        except (OSError, json.JSONDecodeError):
+            pass
 
     async def add_message(self, message: dict):
         self.messages.append(message)

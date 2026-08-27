@@ -135,6 +135,9 @@ def _next_step_after_sql(state: MultiAgentState, results: dict) -> dict:
 
     sql + hive 这类多引擎 plan 必须先把 hive/hbase 跑完，
     不能 sql 一结束就进 confidence_gate 把后续 Agent 堵死。
+
+    plan 未声明 analysis 时直接出结果（与 _next_step 一致）——
+    以前无脑追加 analysis+reflection，纯查数会被拖慢 2~3 轮 LLM。
     """
     plan = state["plan"]
     executed = set(results.keys())
@@ -143,12 +146,13 @@ def _next_step_after_sql(state: MultiAgentState, results: dict) -> dict:
         return {"results": results, "next": pending[0]["agent"]}
 
     plan_agents = {s["agent"] for s in plan}
-    # 只有还要走 analysis 时才过置信度门
-    if "analysis" in plan_agents:
+    # 只有 plan 声明了 analysis 才过置信度门；否则直接终态
+    if "analysis" in plan_agents and "analysis" not in executed:
+        if state.get("_skip_confidence"):
+            return {"results": results, "next": "analysis"}
         return {"results": results, "next": "confidence_gate"}
 
-    # 单 sql 或 sql+hive/hbase 已全部完成：仍需走 analysis（呈现）+ reflection（审查）
-    return {"results": results, "next": "analysis"}
+    return _next_step(state, results, "sql")
 async def _run_agent_node(state, config, agent, agent_name, result_key):
     """通用 Agent 节点：取 task → 执行 → 写 results。"""
     client = agent_config(config)["_client"]

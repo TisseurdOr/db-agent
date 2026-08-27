@@ -40,8 +40,9 @@ SQL_AGENT_PROMPT = """你是 SQL Agent。你只能做四件事：
 你的唯一职责：准确理解查询意图，写出正确的 SQL，返回查询结果。
 
 操作顺序：
-- 先调 discover_relevant_schema 获取最相关的表结构
-- 如果 discover 结果不够，再调 describe_table 补充
+- 若上下文已有 [相关表结构已预检索]，优先直接据此写 SQL 并 run_query（不要重复 discover）
+- 否则先调 discover_relevant_schema 获取最相关的表结构
+- 如果 schema 不够，再调 describe_table 补充
 - 最后调 run_query 执行
 
 如果上下文里有 [相似问题的已验证 SQL 参考]：优先模仿其中的表连接方式、

@@ -4,12 +4,76 @@
 # 本文件只负责：embedding + HyDE + rerank + 对话读写编排。
 # 依赖 vector_db 提供：add(...) / search(query_vec, ...) —— VectorMemory 已对齐。
 
+import json
 import os
+import re
 import uuid
 
 from openai import OpenAI  # 用 OpenAI embedding（最方便）
 
+from harness.constraints.retry import acall_with_retry
 from harness.observation.llm import extract_text, logger  # 安全取文字 + 共享日志器
+
+RERANK_PROMPT = """你是检索排序器。根据查询与文档片段的相关性，给每个编号打分（0-1）。
+只输出 JSON 数组，按相关性从高到低排序，例如：
+[{{"index": 3, "score": 0.95}}, {{"index": 7, "score": 0.61}}]
+
+查询: {query}
+
+候选片段:
+{pairs}"""
+
+
+def _parse_rerank_output(text: str, candidates: list, top_k: int) -> list:
+    """解析 LLM 重排输出：优先 JSON 分数，其次逗号编号，失败退回原顺序。"""
+    if not text:
+        return candidates[:top_k]
+
+    # 优先 JSON 数组：[{"index": 3, "score": 0.9}, ...]
+    m = re.search(r"\[[\s\S]*\]", text)
+    if m:
+        try:
+            items = json.loads(m.group())
+            scored = []
+            for item in items:
+                if isinstance(item, dict):
+                    try:
+                        idx = int(item.get("index", -1))
+                        score = float(item.get("score", 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                elif isinstance(item, (int, float)):
+                    idx, score = int(item), 1.0
+                else:
+                    continue
+                if 0 <= idx < len(candidates):
+                    scored.append((idx, score))
+            if scored:
+                seen = set()
+                ordered = []
+                for idx, _ in sorted(scored, key=lambda x: -x[1]):
+                    if idx not in seen:
+                        seen.add(idx)
+                        ordered.append(idx)
+                if ordered:
+                    return [candidates[i] for i in ordered][:top_k]
+        except (ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+    # 兼容旧格式：逗号分隔编号，如 "3,7,12"
+    try:
+        indices = [
+            int(x.strip())
+            for x in text.replace("，", ",").split(",")
+            if x.strip().lstrip("-").isdigit()
+        ]
+        valid = [i for i in indices if 0 <= i < len(candidates)]
+        if valid:
+            return [candidates[i] for i in valid][:top_k]
+    except ValueError:
+        pass
+
+    return candidates[:top_k]
 
 
 class RAGPipeline:
@@ -71,7 +135,8 @@ class RAGPipeline:
     async def _generate_hypothesis(self, query: str) -> str:
         """HyDE: 生成假设性答案"""
         logger.info("HyDE 触发: query=%r", query)
-        resp = self.llm.messages.create(
+        resp = await acall_with_retry(
+            self.llm.messages.create,
             # model="claude-haiku-3-5",  # 便宜模型够了
             model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
             max_tokens=200,
@@ -87,29 +152,23 @@ class RAGPipeline:
         return extract_text(resp, context="hyde")
 
     async def _rerank(self, query: str, candidates: list, top_k: int) -> list:
-        """简化 rerank: 用 LLM 一次打分"""
+        """用 LLM 给候选打分并重排；解析失败退回向量粗排顺序。"""
         logger.info("rerank 触发: %d 个候选 -> 取 top_k=%d", len(candidates), top_k)
         # 生产环境用 Cohere Rerank API
         pairs = "\n".join([
             f"[{i}] {c['text'][:300]}" for i, c in enumerate(candidates)
         ])
-        resp = self.llm.messages.create(
+        resp = await acall_with_retry(
+            self.llm.messages.create,
             model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
-            max_tokens=50,
+            max_tokens=300,
             messages=[{
                 "role": "user",
-                "content": (
-                    f"从以下文档片段中选出与查询最相关的{top_k}个。"
-                    f"只输出编号，如 3,7,12。查询: {query}\n\n{pairs}"
-                ),
+                "content": RERANK_PROMPT.format(query=query, pairs=pairs),
             }]
         )
-        # 解析编号，返回对应 candidates
-        try:
-            indices = [int(x.strip()) for x in extract_text(resp, context="rerank").split(",")]
-            return [candidates[i] for i in indices if i < len(candidates)]
-        except (ValueError, IndexError):
-            return candidates[:top_k]  # fallback
+        text = extract_text(resp, context="rerank")
+        return _parse_rerank_output(text, candidates, top_k)
 
     async def add_conversation(self, question: str, answer: str, metadata: dict = None):
         """把一轮问答存进长期记忆：拼文字 → embedding → 存向量库。"""

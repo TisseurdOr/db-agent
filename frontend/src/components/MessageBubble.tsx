@@ -43,6 +43,26 @@ export default function MessageBubble({ message, sessionId, onFeedback }: Props)
         ) : (
           <>
             <ThinkingSteps steps={message.steps} />
+            {(message.totalTokens || 0) > 0 || (message.totalElapsed || 0) > 0 ? (
+              <div style={{ fontSize: 11, color: "#666", margin: "4px 0 8px" }}>
+                {(message.totalElapsed || 0) > 0 && (
+                  <span>
+                    耗时{" "}
+                    {(message.totalElapsed || 0) < 1
+                      ? `${Math.round((message.totalElapsed || 0) * 1000)}ms`
+                      : `${(message.totalElapsed || 0).toFixed(1)}s`}
+                  </span>
+                )}
+                {(message.totalTokens || 0) > 0 && (
+                  <span style={{ marginLeft: 10 }}>Token {message.totalTokens}</span>
+                )}
+                {message.cancelled && (
+                  <span style={{ marginLeft: 10, color: "#e08040" }}>已取消</span>
+                )}
+              </div>
+            ) : message.cancelled ? (
+              <div style={{ fontSize: 11, color: "#e08040", margin: "4px 0 8px" }}>已取消</div>
+            ) : null}
             {message.content && (
               <AnswerText text={message.content} isStreaming={message.isStreaming} />
             )}

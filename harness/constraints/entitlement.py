@@ -301,6 +301,24 @@ def check_entitlement(
     return _ok()
 
 
+def guard(user_id: str | None, tool_name: str, **ent_kwargs):
+    """鉴权前置统一入口：resolve 用户 → check_entitlement → 失败返回 deny_payload。
+
+    Tool 层调用约定：
+        ent = guard(user_id, "run_query", sql=sql)
+        if isinstance(ent, dict):   # 已拦截，直接 return 给 Agent
+            return ent
+        # ent 是 EntitlementResult，继续用 ent.sql / ent.tables / ent.docs / ent.needs_approval
+
+    返回 EntitlementResult 表示通过；返回 dict 表示已拦截。
+    """
+    user = get_user(resolve_user_id(user_id))
+    ent = check_entitlement(user, tool_name=tool_name, **ent_kwargs)
+    if not ent.passed:
+        return deny_payload(ent)
+    return ent
+
+
 def check_entitlement_by_role(user_role: str, sql: str) -> tuple[bool, str]:
     """课程 0028 兼容签名：按角色 + SQL 做 run_query 权限检查。"""
     if user_role not in ROLES:

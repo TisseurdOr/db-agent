@@ -59,7 +59,30 @@ DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 
 # ── FastAPI app ────────────────────────────────────────────────────────
 
-app = FastAPI(title="db-agent API", version="0.1.0")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # 预热默认会话 runner，避免首条查询卡在 create/compile
+    try:
+        from server.runner_wrapper import runner_registry
+        await runner_registry.get_or_create(
+            session_id="default",
+            client=get_client(),
+            model=DEFAULT_MODEL,
+        )
+    except Exception:
+        pass
+    yield
+    try:
+        from server.runner_wrapper import runner_registry
+        await runner_registry.close_all()
+    except Exception:
+        pass
+
+
+app = FastAPI(title="db-agent API", version="0.1.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,

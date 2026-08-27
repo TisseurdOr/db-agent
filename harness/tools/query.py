@@ -2,9 +2,8 @@ import sqlite3
 
 from db.seed import DB_PATH
 from harness.constraints.entitlement import (
-    check_entitlement,
-    deny_payload,
     get_user,
+    guard,
     resolve_user_id,
 )
 
@@ -57,11 +56,11 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
             "sql": sql,
         }
 
-    user = get_user(resolve_user_id(user_id))
-    ent = check_entitlement(user, tool_name="run_query", sql=sql)
-    if not ent.passed:
-        return deny_payload(ent, sql=sql)
+    ent = guard(user_id, "run_query", sql=sql)
+    if isinstance(ent, dict):
+        return ent
     if ent.needs_approval:
+        user = get_user(resolve_user_id(user_id))
         try:
             from langgraph.types import interrupt
             decision = interrupt({

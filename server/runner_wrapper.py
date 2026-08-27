@@ -42,10 +42,11 @@ class RunnerRegistry:
         await self._sweep(now)
         entry = self._runners.get(session_id)
         if entry is None:
+            # Web 交互路径关闭首次 DQ：多一轮 Agent 显著拖慢首答；CLI/评测可自行开启
             runner = await MultiAgentRunner.create(
                 client,
                 model=model,
-                enable_data_quality=True,
+                enable_data_quality=False,
                 thread_id=f"web-{session_id}",
             )
             self._runners[session_id] = (runner, now)
@@ -138,6 +139,67 @@ class StreamingRunner:
 
         await queue.put(("step_end", SSEEvent.step_end("preprocessing", "通过", time.time() - t_total)))
 
+        # ── 表列举快路径：有哪些表 → 本地列举；SQL / Hive 分开答 ──
+        import re as _re
+        _list_meta = _re.search(
+            r"(有哪些表|哪些表|列出.{0,6}表|表有哪些|list\s+tables|show\s+tables)",
+            query,
+            _re.I,
+        )
+        if _list_meta:
+            q_low = query.lower()
+            ask_hive = any(m in q_low for m in ("hive", "hue", "impala", "hql"))
+            ask_sql = bool(_re.search(r"(?<![a-z])sql(?![a-z])|sqlite|关系(?:数据)?库", q_low))
+            # 未点名引擎时两者都给，避免业务表和 Hive 表混成一锅
+            if not ask_hive and not ask_sql:
+                ask_hive = ask_sql = True
+
+            t_sql = time.time()
+            task_label = (
+                "按引擎列出表" if (ask_sql and ask_hive)
+                else ("列出 Hive 表" if ask_hive else "列出 SQL 表")
+            )
+            await queue.put(("step_start", SSEEvent.step_start("sql", task_label)))
+            try:
+                from harness.tools.schema import HIVE_SIM_TABLES, list_hive_tables, list_tables
+
+                parts: list[str] = []
+                plan = []
+                if ask_sql:
+                    payload = list_tables()
+                    if payload.get("error"):
+                        parts.append(str(payload.get("message") or "无权列出 SQL 表"))
+                    else:
+                        hive_set = set(HIVE_SIM_TABLES)
+                        sql_tables = [t for t in (payload.get("tables") or []) if t not in hive_set]
+                        body = "\n".join(f"- {t}" for t in sql_tables) if sql_tables else "- （无）"
+                        parts.append(f"【SQLite / SQL 业务表】\n{body}")
+                    plan.append({"agent": "sql", "task": "列出 SQL 表"})
+                if ask_hive:
+                    hive_payload = list_hive_tables()
+                    if hive_payload.get("error"):
+                        parts.append(str(hive_payload.get("message") or "无权列出 Hive 表"))
+                    else:
+                        hive_tables = hive_payload.get("tables") or []
+                        body = "\n".join(f"- {t}" for t in hive_tables) if hive_tables else "- （无）"
+                        parts.append(f"【Hive 模拟表】\n{body}")
+                    plan.append({"agent": "hive", "task": "列出 Hive 表"})
+                answer = "\n\n".join(parts)
+            except Exception as e:
+                answer = f"列出表失败：{e}"
+                plan = [{"agent": "sql", "task": task_label}]
+            await queue.put(("step_end", SSEEvent.step_end("sql", task_label, time.time() - t_sql)))
+            await queue.put(("text_delta", SSEEvent.text_delta(answer, node="sql")))
+            await queue.put((
+                "done",
+                SSEEvent.done(
+                    total_elapsed=time.time() - t_total,
+                    answer=answer,
+                    plan=plan,
+                ),
+            ))
+            return
+
         # ── Inject event queue into config ──────────────────────
         if not hasattr(self.runner, '_current_config') or self.runner._current_config is None:
             self.runner._current_config = {
@@ -169,10 +231,12 @@ class StreamingRunner:
             "_reflection_attempts": 0,
             "_replan_attempts": 0,
             "_replan_feedback": "",
+            # Web 交互：跳过置信度门 + Reflection，少 1~2 轮 LLM
+            "_skip_confidence": True,
+            "_skip_reflection": True,
         }
 
-        await queue.put(("step_start", SSEEvent.step_start("graph", "多 Agent 执行中")))
-
+        # 不再发笼统的 graph step——router / 各 Agent 会各自推 step_start/end，避免长静默
         try:
             result = await self.runner.graph.ainvoke(state, config=config)
         except GraphInterrupt:
@@ -184,8 +248,6 @@ class StreamingRunner:
             interrupt_data = snapshot.interrupts[0].value if snapshot.interrupts else {}
             await queue.put(("interrupt", SSEEvent.interrupt(interrupt_data)))
             return
-
-        await queue.put(("step_end", SSEEvent.step_end("graph", "执行完成", time.time() - t_total)))
 
         if result is None:
             await queue.put(("error", SSEEvent.error("无法回答")))
@@ -218,6 +280,10 @@ class StreamingRunner:
             trace.save()
         flush_opik()
 
+        # 若图内未流式推送答案，这里补发 text_delta，避免前端干等到 done 才出字
+        if answer:
+            await queue.put(("text_delta", SSEEvent.text_delta(answer, node="analysis")))
+
         await queue.put((
             "done",
             SSEEvent.done(
@@ -229,6 +295,7 @@ class StreamingRunner:
                 plan=exec_info.get("plan", []),
                 charts=charts,
                 stats=exec_info.get("stats", {}),
+                tokens=int(exec_info.get("tokens", 0) or 0),
             ),
         ))
 
@@ -271,6 +338,9 @@ class StreamingRunner:
             trace.save()
         flush_opik()
 
+        if answer:
+            await queue.put(("text_delta", SSEEvent.text_delta(answer, node="analysis")))
+
         await queue.put((
             "done",
             SSEEvent.done(
@@ -282,6 +352,7 @@ class StreamingRunner:
                 plan=exec_info.get("plan", []),
                 charts=charts,
                 stats=exec_info.get("stats", {}),
+                tokens=int(exec_info.get("tokens", 0) or 0),
             ),
         ))
 

@@ -38,6 +38,7 @@ class SSEEvent:
         charts: list | None = None,
         stats: dict | None = None,
         opik_trace_id: str = "",
+        tokens: int = 0,
     ) -> dict:
         return {
             "type": "done",
@@ -49,6 +50,7 @@ class SSEEvent:
             "plan": plan or [],
             "charts": charts or [],
             "stats": stats or {},
+            "tokens": int(tokens or 0),
         }
 
     @staticmethod

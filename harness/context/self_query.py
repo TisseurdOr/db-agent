@@ -188,6 +188,7 @@ async def self_query_retrieve(
     top_k: int = 5,
     user_id: str = "default",
     memory_type: str = None,
+    reranker=None,
 ) -> tuple[list[dict], dict]:
     """Self-Query 检索：拆解 → 向量检索 + 元数据过滤 → 必要时降级。
 
@@ -198,6 +199,7 @@ async def self_query_retrieve(
         top_k: 返回条数
         user_id: 租户过滤；None 表示不过滤 user_id
         memory_type: Tool 显式传入时覆盖 LLM 抽取的 memory_type
+        reranker: 可选的 RAGPipeline（HyDE + LLM rerank）；为 None 时走纯向量检索
 
     Returns:
         (results, parts)
@@ -213,18 +215,32 @@ async def self_query_retrieve(
         parts["filters"] = filters
 
     semantic = parts["semantic_query"]
-    query_vec = vector_memory.embed(semantic)[0]
 
     # Step 2: 语义向量检索 + 元数据硬过滤（课程核心）
     # 注意: 排除 user_id——它单独合并进 where，不作为业务 filters 参与降级判断
     business_filters = {k: v for k, v in filters.items() if k != "user_id"}
     where = _build_where(business_filters, user_id)
 
-    try:
-        results = vector_memory.search(query_vec, top_k=top_k, filters=where)
-    except Exception as e:
-        logger.info("self_query: 带过滤检索失败 (%s)，降级", e)
-        results = []
+    if reranker is not None:
+        try:
+            results = await reranker.retrieve(
+                semantic, top_k=top_k, filters=where,
+                use_hyde=True, use_rerank=True,
+            )
+        except Exception as e:
+            logger.info("self_query: reranker 检索失败 (%s)，降级纯向量", e)
+            query_vec = vector_memory.embed(semantic)[0]
+            try:
+                results = vector_memory.search(query_vec, top_k=top_k, filters=where)
+            except Exception:
+                results = []
+    else:
+        query_vec = vector_memory.embed(semantic)[0]
+        try:
+            results = vector_memory.search(query_vec, top_k=top_k, filters=where)
+        except Exception as e:
+            logger.info("self_query: 带过滤检索失败 (%s)，降级", e)
+            results = []
 
     # Step 3: 降级重试——结果太少时放宽过滤（课程原文）
     if len(results) < 2 and business_filters:
@@ -232,14 +248,24 @@ async def self_query_retrieve(
             "self_query: 过滤结果过少 (%d)，去掉业务 filters 重试",
             len(results),
         )
-        try:
-            results = vector_memory.search(
-                query_vec,
-                top_k=top_k,
-                filters=_build_where({}, user_id),
-            )
-        except Exception as e:
-            logger.info("self_query: 降级检索也失败 (%s)", e)
-            results = vector_memory.search(query_vec, top_k=top_k, filters=None)
+        if reranker is not None:
+            try:
+                results = await reranker.retrieve(
+                    semantic, top_k=top_k, filters=_build_where({}, user_id),
+                    use_hyde=True, use_rerank=True,
+                )
+            except Exception as e:
+                logger.info("self_query: reranker 降级检索也失败 (%s)", e)
+                results = []
+        else:
+            try:
+                results = vector_memory.search(
+                    query_vec,
+                    top_k=top_k,
+                    filters=_build_where({}, user_id),
+                )
+            except Exception as e:
+                logger.info("self_query: 降级检索也失败 (%s)", e)
+                results = vector_memory.search(query_vec, top_k=top_k, filters=None)
 
     return results, parts

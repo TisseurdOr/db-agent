@@ -111,7 +111,7 @@ async def _get_runner() -> MultiAgentRunner:
         runner = await MultiAgentRunner.create(
             client,
             model=st.session_state.model,
-            enable_data_quality=True,
+            enable_data_quality=False,  # 首次交互关 DQ，避免多一轮拖慢首答
             thread_id=f"ui-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
         )
         st.session_state.runner = runner

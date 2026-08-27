@@ -12,6 +12,7 @@
 import re
 from collections.abc import Callable
 
+from harness.constraints.entitlement import guard, needs_approval_hbase
 from harness.tools import tool
 
 # ═══════════════════════════════════════════════════════════════════
@@ -167,6 +168,11 @@ def run_hbase(
     op = (operation or "").strip().lower()
     tbl = (table_name or "").strip()
 
+    # 角色白名单：dba/analyst 才有 run_hbase（viewer/support/manager 无权）
+    ent = guard(None, "run_hbase")
+    if isinstance(ent, dict):
+        return ent
+
     if op == "list":
         return {
             "tables": list(_HBASE_META.keys()),
@@ -178,7 +184,6 @@ def run_hbase(
                 "suggestion": "可用: scan, get, count, put, delete, list, create, desc, disable, enable, drop, truncate"}
 
     # ── HITL: 破坏性操作需人工审批 ──
-    from harness.constraints.entitlement import needs_approval_hbase
     if needs_approval_hbase(op):
         try:
             from langgraph.types import interrupt

@@ -19,6 +19,7 @@ from harness.tools import tool
 # 向量记忆 / LLM——由 main.py 注入（模块级单例，避免 Tool 参数里传对象）
 _vector_memory = None
 _llm_client = None
+_rag_pipeline = None
 
 
 def set_vector_memory(vm):
@@ -31,6 +32,12 @@ def set_llm_client(client):
     """注入 LLM client，供 search_memory 的 Self-Query 拆解使用。"""
     global _llm_client
     _llm_client = client
+
+
+def set_rag_pipeline(rag):
+    """注入 RAGPipeline（HyDE + LLM rerank），供 search_memory 精排使用。"""
+    global _rag_pipeline
+    _rag_pipeline = rag
 
 
 # ─── 模拟知识库文档 ───────────────────────────────────────────
@@ -246,11 +253,12 @@ def search_knowledge_base(query: str, top_k: int = 3) -> dict:
     "做决策、或产生值得记住的洞察时调用。跨会话可通过 read_memory 找回。"
     "返回 {stored: true, memory_id: N}。"
 ))
-def save_to_memory(content: str, memory_type: str = "note", user_id: str = "default") -> dict:
+def save_to_memory(content: str, memory_type: str = "note") -> dict:
     """content: 要记忆的内容，完整描述方便以后检索
-    memory_type: preference(偏好) / insight(洞察) / note(备注)
-    user_id: 用户标识，默认 'default'"""
+    memory_type: preference(偏好) / insight(洞察) / note(备注)"""
     from db.seed import DB_PATH
+    from harness.constraints.entitlement import resolve_user_id
+    user_id = resolve_user_id()
     conn = sqlite3.connect(DB_PATH)
     try:
         _ensure_user_memory_table(conn)
@@ -269,11 +277,12 @@ def save_to_memory(content: str, memory_type: str = "note", user_id: str = "defa
     "读取用户记忆。用户说'上次'、'之前'、'我的偏好'时调用。"
     "按时间倒序返回。返回 {memories: [{id, memory_type, content, created_at}], count}。"
 ))
-def read_memory(memory_type: str = "all", limit: int = 10, user_id: str = "default") -> dict:
+def read_memory(memory_type: str = "all", limit: int = 10) -> dict:
     """memory_type: preference / insight / note / all（不过滤）
-    limit: 返回条数，默认 10
-    user_id: 用户标识，默认 'default'"""
+    limit: 返回条数，默认 10"""
     from db.seed import DB_PATH
+    from harness.constraints.entitlement import resolve_user_id
+    user_id = resolve_user_id()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
@@ -336,6 +345,7 @@ async def search_memory(query: str, top_k: int = 5,
         _llm_client,
         top_k=top_k,
         memory_type=memory_type,
+        reranker=_rag_pipeline,
     )
     return {
         "results": [

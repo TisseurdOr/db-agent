@@ -3,6 +3,11 @@
 
 # db-agent
 
+<p>
+  <a href="README.md"><img src="https://img.shields.io/badge/lang-%E4%B8%AD%E6%96%87-c0392b?style=for-the-badge" alt="中文"></a>
+  <a href="README.en.md"><img src="https://img.shields.io/badge/lang-English-2e86de?style=for-the-badge" alt="English"></a>
+</p>
+
 ### 自然语言数据库分析 Harness
 
 问一句中文，查出 SQLite / HBase / Hive 的数，带权限、自愈和评测。

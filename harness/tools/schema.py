@@ -1,12 +1,7 @@
 import sqlite3
 
 from db.seed import DB_PATH
-from harness.constraints.entitlement import (
-    check_entitlement,
-    deny_payload,
-    get_user,
-    resolve_user_id,
-)
+from harness.constraints.entitlement import guard
 from harness.context.schema_discovery import discover_schema_for_query
 
 DISCOVER_SCHEMA_TOOL = {
@@ -86,10 +81,9 @@ def list_tables(user_id: str | None = None) -> dict:
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
         tables = [row[0] for row in cursor.fetchall()]
-        user = get_user(resolve_user_id(user_id))
-        ent = check_entitlement(user, tool_name="list_tables", tables=tables)
-        if not ent.passed:
-            return deny_payload(ent)
+        ent = guard(user_id, "list_tables", tables=tables)
+        if isinstance(ent, dict):
+            return ent
         return {"tables": ent.tables or []}
     except Exception as e:
         return {
@@ -112,10 +106,9 @@ def list_hive_tables(user_id: str | None = None) -> dict:
             ).fetchall()
         }
         hive_tables = [t for t in HIVE_SIM_TABLES if t in existing]
-        user = get_user(resolve_user_id(user_id))
-        ent = check_entitlement(user, tool_name="list_tables", tables=hive_tables)
-        if not ent.passed:
-            return deny_payload(ent)
+        ent = guard(user_id, "list_tables", tables=hive_tables)
+        if isinstance(ent, dict):
+            return ent
         return {
             "tables": ent.tables or [],
             "catalog": "hive_sim",
@@ -153,10 +146,9 @@ DESCRIBE_TABLE_TOOL = {
 
 
 def describe_table(table_name: str, user_id: str | None = None) -> dict:
-    user = get_user(resolve_user_id(user_id))
-    ent = check_entitlement(user, tool_name="describe_table", table=table_name)
-    if not ent.passed:
-        return deny_payload(ent)
+    ent = guard(user_id, "describe_table", table=table_name)
+    if isinstance(ent, dict):
+        return ent
 
     conn = sqlite3.connect(DB_PATH)
     try:
@@ -209,10 +201,9 @@ def get_schema_summary(user_id: str | None = None) -> dict:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         ]
-        user = get_user(resolve_user_id(user_id))
-        ent = check_entitlement(user, tool_name="list_tables", tables=table_names)
-        if not ent.passed:
-            return deny_payload(ent)
+        ent = guard(user_id, "list_tables", tables=table_names)
+        if isinstance(ent, dict):
+            return ent
         allowed = ent.tables or []
 
         tables_result = []

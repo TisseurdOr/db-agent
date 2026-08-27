@@ -65,6 +65,42 @@ async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     这样 Router 能识别"刚才问了什么"等元问题——
     看到历史里上一轮问了"有哪些表"，就知道这不是数据查询。
     """
+    queue = agent_config(config).get("_event_queue")
+    router_task = "分析意图"
+    t_router = time.time()
+    if queue:
+        await queue.put((
+            "step_start",
+            {"type": "step_start", "node": "router", "task": router_task, "timestamp": time.time()},
+        ))
+
+    try:
+        return await _node_router_body(state, config)
+    finally:
+        if queue:
+            elapsed = time.time() - t_router
+            tokens = 0
+            trace = agent_config(config).get("_trace")
+            spans = getattr(trace, "spans", None) if trace is not None else None
+            if spans:
+                for sp in reversed(spans):
+                    if getattr(sp, "node", "") == "router":
+                        tokens = int(getattr(sp, "total_tokens", 0) or 0)
+                        break
+            await queue.put((
+                "step_end",
+                {
+                    "type": "step_end",
+                    "node": "router",
+                    "task": router_task,
+                    "elapsed": round(elapsed, 3),
+                    "tokens": tokens,
+                },
+            ))
+
+
+async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> dict:
+    """Router 主体（从 node_router 拆出，便于 SSE step_start/end 包一层）。"""
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("router", "分析意图")
 
@@ -289,6 +325,7 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     # 检索式 few-shot（Vanna 模式）：召回相似问题的已验证 SQL 注入上下文。
     # 用原始 query 而非 Router 改写后的 task 检索——样例库存的是用户口语问法。
     from harness.context.sql_examples import get_sql_fewshot
+    from harness.tools.schema import discover_relevant_schema
     fewshot = get_sql_fewshot(state.get("query", "") or task)
     fewshot_hits = 0
     if fewshot:
@@ -296,7 +333,22 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
         print(f"   📚 few-shot: 命中 {fewshot_hits} 条相似 SQL 样例")
     opik_tag_fewshot(fewshot_hits)
 
-    result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL", context=fewshot, config=config)
+    # 预注入相关 schema，省掉 Agent 首轮 discover 工具调用（少 1 次 LLM round-trip）
+    schema_ctx = ""
+    try:
+        discovered = discover_relevant_schema(state.get("query", "") or task)
+        schema_text = (discovered or {}).get("schema_text") or ""
+        if schema_text:
+            schema_ctx = (
+                "[相关表结构已预检索——足够则直接写 SQL，不必再调 discover_relevant_schema]\n"
+                f"{schema_text}"
+            )
+            print(f"   🗂️ schema: 预注入 {discovered.get('field_count', 0)} 字段")
+    except Exception:
+        pass
+
+    context = "\n\n".join(p for p in (schema_ctx, fewshot) if p)
+    result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL", context=context, config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ SQL Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
     _finish_agent_task(config, "sql", failed=is_agent_timeout(result))
@@ -494,10 +546,11 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
 
     # 把最终回答写回 messages —— Checkpointer 自动持久化，
     # 下一轮 Router 和 Analysis 就能从 messages 里看到这轮说了什么。
+    next_node = "done" if state.get("_skip_reflection") else "reflection"
     return {
         "final_answer": result,
         "messages": [AIMessage(content=result)],
-        "next": "reflection",  # 输出后走反思检查
+        "next": next_node,
     }
 REFLECTION_PROMPT = """你是回答质量审查员。审查以下 Agent 输出，判断是否合格。
 

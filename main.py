@@ -32,6 +32,7 @@ from db.seed import init_db
 from harness.context.schema_discovery import get_schema_discovery
 from harness.context.system_prompt import build_system_prompt
 from harness.context.template_matcher import get_template_matcher, init_metric_registry
+from harness.memory.long_term_memory import RAGPipeline
 from harness.memory.memory_controller import (
     is_chitchat,
     is_meta_memory,
@@ -42,7 +43,11 @@ from harness.memory.short_term_memory import ConversationManager
 from harness.memory.vector_store import VectorMemory
 from harness.orchestration.single.tools_bundle import TOOL_HANDLERS, TOOLS
 from harness.tools.hbase import _seed_hbase_store
-from harness.tools.knowledge import set_llm_client, set_vector_memory
+from harness.tools.knowledge import (
+    set_llm_client,
+    set_rag_pipeline,
+    set_vector_memory,
+)
 
 # 用户输入
 #   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
@@ -146,7 +151,8 @@ async def main():
 
     # 对话记忆管理器——最近 N 轮保留原文，更早的压缩成摘要。
     # 摘要由 streaming_agent 每轮调用前注入 System Prompt，实现跨轮上下文记忆。
-    conversation = ConversationManager(client)
+    conversation = ConversationManager(client, session_id=args.user)
+    conversation.load()  # 恢复上一轮会话（跨进程/重启不丢）
 
     # 长期记忆：VectorMemory（remember / recall）。
     # pre-turn recall: 每轮自动注入 System Prompt 做上下文 priming
@@ -154,6 +160,8 @@ async def main():
     vector_memory = VectorMemory(collection_name="conversations")
     set_vector_memory(vector_memory)  # 注入给 search_memory Tool
     set_llm_client(client)            # Self-Query 拆解用
+    rag_pipeline = RAGPipeline(vector_db=vector_memory, llm_client=client)
+    set_rag_pipeline(rag_pipeline)    # HyDE + LLM rerank 注入 search_memory
 
     print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}, 用户: {args.user}）")
     print("试试这些：")
@@ -210,7 +218,14 @@ async def main():
                     if not is_meta_memory(m.get("text", ""))
                 ][:3]
             else:
-                memories = vector_memory.recall(user_input, top_k=3)
+                try:
+                    memories = await rag_pipeline.retrieve(
+                        user_input, top_k=3,
+                        use_hyde=True, use_rerank=True,
+                    )
+                except Exception as e:
+                    print(f"[memory] 向量检索(含 HyDE+rerank)失败，退回纯向量: {e}")
+                    memories = vector_memory.recall(user_input, top_k=3)
                 # 分数阈值：相似度 < 0.3 的结果不注入，避免噪声误导模型
                 memories = [m for m in memories if m.get("score", 0) >= 0.3]
             memories_text = "\n\n".join(m["text"] for m in memories)
@@ -298,6 +313,7 @@ async def main():
             #   multi 模式额外靠 LangGraph Checkpointer 持久化完整 messages 历史。
             await conversation.add_message({"role": "user", "content": user_input})
             await conversation.add_message({"role": "assistant", "content": result})
+            conversation.save()  # 落盘：跨进程/重启后 load() 恢复
             # 长期记忆（VectorMemory）：两种模式共用——
             #   把本轮问答写入 ChromaDB，下次相关查询时以向量召回方式注入 System Prompt。
             #   元问题（"刚才问了什么"）不写——避免污染向量库。

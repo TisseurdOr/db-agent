@@ -62,6 +62,9 @@ export interface Message {
   sql: string;
   charts: ChartConfig[];
   feedbackGiven: boolean;
+  totalTokens?: number;
+  totalElapsed?: number;
+  cancelled?: boolean;
   hitl?: InterruptData;
 }
 
