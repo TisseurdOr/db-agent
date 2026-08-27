@@ -1,6 +1,7 @@
 <div align="center">
 
 <img src="docs/diagrams/master_architecture.png" alt="db-agent Harness 架构" width="100%">
+<sub>图 0 · Harness 总览：编排 / 工具 / 记忆 / 约束 / 观测</sub>
 
 # db-agent
 
@@ -16,70 +17,44 @@
 [![FastAPI](https://img.shields.io/badge/Web-FastAPI%20%2B%20SSE-009688)](https://fastapi.tiangolo.com)
 [![Stars](https://img.shields.io/github/stars/TisseurdOr/db-agent?style=social)](https://github.com/TisseurdOr/db-agent/stargazers)
 
-[快速开始](#快速开始) · [两种模式](#两种运行模式) · [安全](#安全模型entitlement--双层-hitl) · [Eval](#eval-评估体系) · [HARNESS.md](HARNESS.md)
+[功能](#一功能做什么) · [架构](#二架构怎么拆) · [生命周期](#三生命周期一条-query-怎么走) · [演进](#四演进怎么一步步长出来) · [快速开始](#快速开始)
 
 </div>
 
 ---
 
-把模型接到真实问数场景里，缺的不是 prompt，是 **工具、权限、记忆、编排、护栏、自愈、评测**。这些合在一起叫 Harness。换 DeepSeek / Claude 只改 API，不改这套骨架。对照见 [`HARNESS.md`](HARNESS.md)。
+这不是一个「让模型写 SQL」的玩具，而是一套 **让模型写 SQL 不出事** 的工程系统：工具真执行、权限硬拦截、失败可自愈、结果可评测。换 DeepSeek / Claude 只改 API，不改这套骨架。对照见 [`HARNESS.md`](HARNESS.md)。
 
-> **演示环境说明**：这是学习 / 面试演示项目，不是生产系统。
+> **演示环境说明**：学习 / 面试演示项目，不是生产系统。
 > SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake，不依赖网络与 API key（`pytest tests/` 直接全绿）。
-> Web 为演示用途：接口无鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis；CI 只跑 Python 测试，前端未接入。
-> 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均“可选后端 + 自动降级”。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **423** 条）。
+> Web 为演示用途：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
+> 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
-## 项目缘起 · 学习轨迹
+---
 
-这是我在 AI Agent 学习路径上持续迭代的项目：**GitHub 建仓 / 推送时间（2026-07）晚于实际开发起点**，早期成果在公开仓库可查证。
+## 一、功能：做什么
 
-从 2026 年初开始系统性学习大模型应用与 Agent 开发，按时间线先后完成：
+业务痛点很具体：要背 SQL / Hive / HBase 三套语法、改字段要等数据组排期、市面 Text-to-SQL 往往只生成不执行、不鉴权、不改错。本项目要做的是 **说人话 → 查数 → 分析**，并把权限、可靠性、评测一起做完。
 
-| 阶段 | 仓库 | 建仓时间 | 定位 |
-|------|------|---------|------|
-| 学习起点 | [learning](https://github.com/TisseurdOr/learning) | 2026-02 | 学习与练习 |
-| 入门练习 | [local_qa_bot](https://github.com/TisseurdOr/local_qa_bot) · [RAG_chat_bot](https://github.com/TisseurdOr/RAG_chat_bot) | 2026-04 | QA / RAG 第一个练习 |
-| Agent 练习 | [career-assistant-langgraph](https://github.com/TisseurdOr/career-assistant-langgraph) · [langgraph-rag-mcp-agent](https://github.com/TisseurdOr/langgraph-rag-mcp-agent) | 2026-04 ~ 06 | LangGraph / RAG / MCP |
-| 前序完整项目 | [fin-agent](https://github.com/TisseurdOr/fin-agent) | 2026-06 | 金融研报分析 Agent |
-| 前序完整项目 | [fraud-agent](https://github.com/TisseurdOr/fraud-agent) | 2026-06 | 反欺诈分析 Agent |
-| 本仓库 | db-agent | 2026-07（推送） | 单 Agent → Multi-Agent Harness 沉淀 |
+<p align="center">
+  <img src="docs/diagrams/functional_layers.png" alt="功能分层" width="100%">
+</p>
+<p align="center"><sub>图 1 · 功能分层：问数能力叠权限、自愈、记忆、评测</sub></p>
 
-> fin-agent、fraud-agent 是 db-agent 的直接前序：先验证了 RAG、工具调用与单 Agent 编排，再在 db-agent 里沉淀成 Harness 骨架并扩展出多 Agent 职责隔离。仓库时间戳只反映「建仓 / 推送」时间，不代表实际开发起点。
+| 能力 | 做什么 | 关键落点 |
+|------|--------|----------|
+| **多引擎问数** | 自然语言查 SQLite / 模拟 HBase / 模拟 Hive | `harness/tools/` + 6 个专职 Agent |
+| **双模式编排** | Single：手写 ReAct；Multi：LangGraph 10 节点 | `orchestration/single` · `orchestration/multi` |
+| **确定性优先** | 高频指标模板填槽；Router 硬规则 → LRU → LLM | `template_matcher` · `router.py` |
+| **权限与 HITL** | 5 角色 RBAC（工具/表/行级）+ 敏感列 / 写操作人工审批 | `entitlement.py` · `interrupt()` |
+| **三层护栏** | 输入注入检测 → 仅 SELECT → 输出 PII 过滤 | `guardrails.py` |
+| **自愈与容错** | API 重试 → SQL 自愈 → 失败重规划 → 熔断 / 幂等 / 告警 | `retry` · `circuit_breaker` · `idempotency` |
+| **记忆与自学习** | 短/长期记忆 + Schema Linking + 成功 SQL 回流 few-shot | `memory/` · `sql_examples.py` |
+| **观测与评测** | Trace JSONL + Opik；47 条 Eval（Kimi Judge / DeepSeek 被测） | `observation/` · `tests/eval_*` |
+| **三种入口** | CLI `db-agent` · Streamlit · FastAPI + React SSE | `main.py` · `app.py` · `server/` |
 
-<table>
-<tr>
-<th width="33%" align="center">Single Agent</th>
-<th width="33%" align="center">Multi Agent</th>
-<th width="33%" align="center">观测与评测</th>
-</tr>
-<tr>
-<td align="center"><sub>ReAct tool loop，15 个工具</sub></td>
-<td align="center"><sub>LangGraph 10 节点 StateGraph</sub></td>
-<td align="center"><sub>JSONL + Opik 双写</sub></td>
-</tr>
-<tr>
-<td>
-
-`list_tables` / `run_query` / 模板填槽 / Schema Linking。高频指标先走关键词模板，未命中再让模型写 SQL。
-
-</td>
-<td>
-
-Router（硬规则 → 继承 → LRU → LLM）分派 sql / strategy / hbase / hive / data_quality，再经 analysis、reflection。可选 clarify、confidence_gate。
-
-</td>
-<td>
-
-本地 `logs/traces/*.jsonl` 做审计；Opik 看执行树和 Feedback。Eval 用 Kimi 当 Judge，DeepSeek 当被测，47 条用例（13 条带实查事实断言）。
-
-</td>
-</tr>
-</table>
-
-三种入口：**CLI** · **Streamlit** · **React Web（FastAPI + SSE）**。HBase / Hive 是本地模拟器，API 对齐，没有真实集群。
-
-### 问一句会怎样
+**问一句会怎样（示意）：**
 
 ```
 用户      ❯ 销售额最高的部门是哪个？
@@ -98,6 +73,192 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 
 ---
 
+## 二、架构：怎么拆
+
+设计主线：**确定性优先** —— 模板 > LLM，正则 > LLM，硬规则 > 语义理解。运行时代码在 `harness/`，按六维物理拆分（面试与排障都按这条线读）：
+
+| 维度 | 路径 | 职责 |
+|------|------|------|
+| 上下文 | `harness/context/` | Prompt 组装、Schema Linking、few-shot、SQL 模板、Token/窗口压缩 |
+| 记忆 | `harness/memory/` | 短/长期记忆、controller、自学习回流；Chroma / Milvus |
+| 工具 | `harness/tools/` | schema / query / analysis / chart / hbase / hive / knowledge |
+| 编排 | `harness/orchestration/` | `single/` ReAct；`multi/` LangGraph 6 Agent + Router |
+| 观测 | `harness/observation/` | Trace、Opik、cost、告警、ops metrics |
+| 约束 | `harness/constraints/` | RBAC、护栏、confidence/HITL、retry、熔断、幂等 |
+
+<p align="center">
+  <img src="docs/diagrams/mechanism-overview.png" alt="工程机制全景" width="100%">
+</p>
+<p align="center"><sub>图 2 · 工程机制全景：入口 → Harness 六维 → 可靠性横切</sub></p>
+
+<p align="center">
+  <img src="docs/diagrams/orchestration_flow.png" alt="多 Agent 编排" width="100%">
+</p>
+<p align="center"><sub>图 3 · Multi 编排：Router → 专职 Agent → Analysis / Reflection</sub></p>
+
+<details>
+<summary>六维细节图（点击展开）</summary>
+
+<p align="center"><img src="docs/diagrams/tools.png" alt="工具系统" width="100%"></p>
+<p align="center"><sub>工具系统</sub></p>
+
+<p align="center"><img src="docs/diagrams/context_management.png" alt="上下文管理" width="100%"></p>
+<p align="center"><sub>上下文管理</sub></p>
+
+<p align="center"><img src="docs/diagrams/memory.png" alt="记忆管理" width="100%"></p>
+<p align="center"><sub>记忆管理</sub></p>
+
+<p align="center"><img src="docs/diagrams/constraints.png" alt="约束与权限" width="100%"></p>
+<p align="center"><sub>约束与权限</sub></p>
+
+<p align="center"><img src="docs/diagrams/observability.png" alt="观测与评测" width="100%"></p>
+<p align="center"><sub>观测与评测</sub></p>
+
+</details>
+
+```text
+入口
+  ├─ CLI        main.py / db-agent --mode single|multi
+  ├─ Streamlit  uv run streamlit run app.py
+  └─ Web        uvicorn server.main:app + frontend (Vite)
+                    │
+                    ▼
+              MultiAgentRunner (LangGraph)
+                ├─ Router (硬规则 + 上下文继承 + LRU + LLM)
+                ├─ sql / strategy / hbase / hive / data_quality
+                │     └─ sql 失败可回 Router 重规划（≤1）
+                ├─ confidence_gate / clarify（可选 HITL）
+                └─ analysis → reflection（≤2）→ final_answer
+```
+
+**6 个专职 Agent**（互不看见对方 tool 轨迹，只收 task、回 result）：
+
+| Agent | 职责 | 典型工具 |
+|-------|------|----------|
+| SQL | 只查数据 | `discover_relevant_schema` / `run_query` |
+| Analysis | 只分析、不写 SQL | `analyze_results` / `render_chart` |
+| Strategy | 制度 / 指标口径 | `search_knowledge_base` / `lookup_metric` |
+| HBase | KV 操作（写操作 HITL） | `run_hbase` |
+| Hive | 数仓方言（本地模拟） | `run_query` + 语法模板 |
+| DataQuality | 质量扫描（可选） | 行数 / NULL / 日期连续性 |
+
+学习材料、简历、旧实验在 `sidecar/`，不参与运行。更细的机制说明见 [`HARNESS.md`](HARNESS.md) · [`docs/engineering-mechanisms.md`](docs/engineering-mechanisms.md)。
+
+---
+
+## 三、生命周期：一条 Query 怎么走
+
+从入口到落盘，一条自然语言问数大致经过下面这条链（Multi 模式）：
+
+<p align="center">
+  <img src="docs/diagrams/request_lifecycle.png" alt="请求生命周期" width="100%">
+</p>
+<p align="center"><sub>图 4 · 请求生命周期（入口 → 落盘）</sub></p>
+
+```text
+入口预处理
+  → guard_input（注入 / 空 / 超长，零 token）
+  → 记忆召回 +（可选）模板匹配
+  → Router：硬规则 > 上下文继承 > LRU > LLM
+       ├─ confidence=low → clarify（interrupt 澄清）
+       └─ plan 落 Task board；可选插入 data_quality
+  → 专职 Agent（sql / hbase / hive / strategy …）
+       · Schema Linking + few-shot
+       · run_query：仅 SELECT → Entitlement → 敏感列 HITL
+       · 成功 SQL 捕获（供自学习）
+       · 超时 → 带反馈回 Router 重规划（≤1）
+  → confidence_gate（自评分 < 0.7 则 interrupt）
+  → Analysis → Reflection（不通过退回 ≤2）
+  → guard_output（PII）
+  → Trace JSONL + Opik + 运维指标
+  → 短/长期记忆写入；Web 推 SSE done
+```
+
+<p align="center">
+  <img src="docs/diagrams/query-flow.png" alt="Query 流转" width="100%">
+</p>
+<p align="center"><sub>图 5 · Query 流转细节</sub></p>
+
+**横切能力（不单独成节点，但贯穿全程）：**
+
+| 层 | 行为 |
+|----|------|
+| API 重试 | 429 / 5xx / 超时 → 指数退避 + 抖动 |
+| SQL 自愈 | 错误回喂 → 对表结构 → 重写（prompt 约束约 2 次） |
+| 熔断降级 | 连续失败达阈值 → 快速失败；冷却后半开试探 |
+| 工具幂等 | 写工具同参数在 TTL 内不重复执行 |
+| 观测 | 本地 JSONL 审计 + Opik 执行树；可选 Webhook 告警 |
+
+**安全链：**
+
+<p align="center">
+  <img src="docs/diagrams/security-chain.png" alt="安全链路" width="100%">
+</p>
+<p align="center"><sub>图 6 · 输入护栏 → RBAC → HITL → 输出护栏</sub></p>
+
+**自愈：**
+
+<p align="center">
+  <img src="docs/diagrams/self-healing.png" alt="三层自愈" width="100%">
+</p>
+<p align="center"><sub>图 7 · 重试 → SQL 自愈 / 重规划 → 熔断降级</sub></p>
+
+**记忆 / 观测闭环：**
+
+<p align="center">
+  <img src="docs/diagrams/memory-obs-loop.png" alt="记忆与观测闭环" width="100%">
+</p>
+<p align="center"><sub>图 8 · 召回 → 执行 → 自学习回流 → Trace / Opik</sub></p>
+
+Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflection，入口后直接进 ReAct loop（约 15 个 tools）；HITL 退化为「需要审批」标记，没有原生 interrupt 暂停/恢复。
+
+---
+
+## 四、演进：怎么一步步长出来
+
+**每层都是被真实问题逼出来的，不是堆功能。** 项目约 2.1 万行 Python、423 个离线测试、47 条评测。
+
+<p align="center">
+  <img src="docs/diagrams/five_stage_evolution.png" alt="五阶段演进" width="100%">
+</p>
+<p align="center"><sub>图 9 · 五阶段演进：单 Agent → 多 Agent → 权限 → 可靠性 → 工程化</sub></p>
+
+| 阶段 | 核心问题 | 关键动作 | 产出 |
+|------|----------|----------|------|
+| **一 · 单 Agent** | 模型能干活 | 手写 ReAct（弃 AgentExecutor）；工具真执行；结构化错误；prompt caching | 能稳定执行的 CLI Agent |
+| **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
+| **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
+| **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；423 离线测试；47 Eval；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+
+### 学习轨迹（前序项目）
+
+GitHub 建仓 / 推送时间（2026-07）晚于实际开发起点。从系统性学习到本仓库的路径：
+
+| 阶段 | 仓库 | 建仓时间 | 定位 |
+|------|------|---------|------|
+| 学习起点 | [learning](https://github.com/TisseurdOr/learning) | 2026-02 | 学习与练习 |
+| 入门练习 | [local_qa_bot](https://github.com/TisseurdOr/local_qa_bot) · [RAG_chat_bot](https://github.com/TisseurdOr/RAG_chat_bot) | 2026-04 | QA / RAG |
+| Agent 练习 | [career-assistant-langgraph](https://github.com/TisseurdOr/career-assistant-langgraph) · [langgraph-rag-mcp-agent](https://github.com/TisseurdOr/langgraph-rag-mcp-agent) | 2026-04 ~ 06 | LangGraph / RAG / MCP |
+| 前序完整项目 | [fin-agent](https://github.com/TisseurdOr/fin-agent) · [fraud-agent](https://github.com/TisseurdOr/fraud-agent) | 2026-06 | 金融研报 / 反欺诈 |
+| 本仓库 | db-agent | 2026-07（推送） | 单 Agent → Multi-Agent Harness |
+
+fin-agent、fraud-agent 先验证了 RAG、工具调用与单 Agent 编排；db-agent 把这些沉淀成 Harness 骨架，并补上权限、自愈、评测与工程化。
+
+### 设计取舍（为什么这样）
+
+- **不用 AgentExecutor**：先把手写 Loop 写明白，再用 LangGraph 做显式 State Graph。
+- **Run Query 只 SELECT**：写操作在 Tool 层拦掉。
+- **HBase / Hive 用模拟器**：API 对齐可替换；POC 证明编排，不假装接了集群。
+- **HITL 用原生 `interrupt()`**：暂停点进 checkpointer，`Command(resume=...)` 接着跑。
+- **Judge 和被测不是同一模型**：Eval 用 Kimi，被测用 DeepSeek。
+- **自学习抓 `run_query` 成功 SQL**：不从模型口头描述里抽；含敏感列的不回流。
+- **熔断 / 幂等**：连续失败时重试=烧钱；重试/重规划会让写工具跑两次——这两层都是踩坑后补上的。
+
+更完整的案例叙事见 [`docs/项目案例.md`](docs/项目案例.md)。
+
+---
+
 ## 从哪读起
 
 按运行路径读，不要按文件夹扫：
@@ -107,39 +268,10 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 | 1 | `main.py` | CLI：`--mode` / `--user`、记忆注入、HITL |
 | 1 | `server/main.py` + `frontend/` | Web：FastAPI + SSE + React |
 | 2 | `harness/orchestration/single/agent.py` | single：ReAct loop |
-| 2 | `harness/orchestration/multi/orchestrator.py` | multi：LangGraph |
-| 3 | `harness/tools/` | 实际能力；`query` 含权限与成功 SQL 捕获 |
-| 3 | `harness/constraints/entitlement.py` | 工具 / 表 / 行权限 + HITL |
-| 4 | `harness/memory/` · `harness/context/` | 记忆、few-shot、Schema Linking、自学习 |
-| 5 | `HARNESS.md` · `tests/` · `docs/troubleshooting.md` · `docs/用户手册.md` | 架构、评测、排障、新手入门 |
-
-```text
-入口
-  ├─ CLI        main.py --mode single|multi
-  ├─ Streamlit  uv run streamlit run app.py
-  └─ Web        uvicorn server.main:app + frontend (Vite)
-                    │
-                    ▼
-              MultiAgentRunner (LangGraph)
-                ├─ Router (硬规则 + 上下文继承 + LRU + LLM)
-                ├─ sql / strategy / hbase / hive / data_quality
-                │     └─ sql 失败可回 Router 重规划
-                ├─ confidence_gate / clarify（可选 HITL）
-                └─ analysis → reflection → final_answer
-```
-
-运行时代码在 `harness/`，按六维拆：
-
-| 维度 | 路径 |
-|------|------|
-| 上下文 | `harness/context/` |
-| 记忆 | `harness/memory/` |
-| 工具 | `harness/tools/` |
-| 编排 | `harness/orchestration/`（`single/` + `multi/`） |
-| 观测 | `harness/observation/` |
-| 约束 | `harness/constraints/` |
-
-学习材料、简历、旧实验在 `sidecar/`，不参与运行。
+| 2 | `harness/orchestration/multi/` | multi：graph / runner / nodes / router |
+| 3 | `harness/tools/` · `harness/constraints/entitlement.py` | 能力与权限 |
+| 4 | `harness/memory/` · `harness/context/` | 记忆、few-shot、Schema Linking |
+| 5 | `HARNESS.md` · `tests/` · `docs/troubleshooting.md` · `docs/用户手册.md` | 架构、评测、排障、入门 |
 
 ---
 
@@ -198,6 +330,7 @@ REDIS_URL=                       # 状态外置：会话 + checkpoint 存 Redis
 VECTOR_DB=chroma                 # 向量库后端：chroma / milvus
 MILVUS_URI=                      # Milvus 集群地址（http://...），本地 Lite 免配
 AUTO_LEARN_SQL=1                 # 成功 SQL 回流样例库；0 = 关
+WEB_API_TOKEN=                   # Web 可选鉴权；空=不鉴权
 
 OPIK_ENABLED=0
 OPIK_URL_OVERRIDE=http://localhost:5173/api
@@ -231,131 +364,26 @@ cd frontend && npm install && npm run dev -- --port 3000
 | POST | `/api/datasource/upload` | CSV → 独立 SQLite |
 | POST | `/api/datasource/connect` | 连接外部 SQLite |
 | GET | `/api/health` | 健康检查 |
+| GET | `/api/metrics` | Prometheus 文本指标 |
 
 `docker compose run --rm db-agent` 跑的是 **CLI**，不是 Web。
 
-> **状态外置（可选）**：配置 `REDIS_URL` 后，Web 会话自动存 Redis（多实例共享）；Agent checkpoint 也走 Redis（需 redis-stack，带 RediSearch）。未配置或 Redis 不可用时自动回落内存 / SQLite，不影响运行。
-> **向量后端可切换**：`VECTOR_DB=chroma`（默认）或 `milvus`（Milvus Lite 嵌入式，`MILVUS_URI` 指向集群地址即可连生产 Milvus），接口一致、测试双覆盖。
+> **状态外置（可选）**：配置 `REDIS_URL` 后，Web 会话与 Agent checkpoint 走 Redis（需 redis-stack）；不可用时自动回落内存 / SQLite。
+> **向量后端可切换**：`VECTOR_DB=chroma`（默认）或 `milvus`。
 
 ---
 
-## 代码质量门禁
+## 两种运行模式 · 安全 · Eval（速查）
 
-```bash
-ruff check harness server db main.py app.py scripts tests   # 0 error
-pre-commit run --all-files                                   # 提交前钩子
-pyright                                                      # 类型检查（已知基线 234 个，多为第三方 stub 缺口）
-```
-
-- `ruff`：已接入 pre-commit（提交前自动检查/修复）
-- `pyright`：`pyrightconfig.json` 已配置（basic 模式）；错误集中在 orchestrator（99 个）与第三方库 stub 缺口，零错误是后续目标
-
----
-
-## 两种运行模式
-
-### Single Agent
+### Single vs Multi
 
 ```
-用户 query → Observe → Think → Act
-              ├── list_tables / describe_table / discover_relevant_schema
-              ├── match_sql_template → run_query（仅 SELECT）
-              └── analyze_results / render_chart
+Single:  用户 → Observe → Think → Act（全量 tools）
+Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
+              → confidence_gate → analysis → reflection → done
 ```
 
-### Multi Agent
-
-<img src="docs/diagrams/orchestration_flow.png" alt="多 Agent 编排" width="100%">
-
-```
-用户 query
-    │
-    ▼
-┌──────────┐
-│  Router  │  硬规则 > 继承 > LRU > LLM
-└────┬─────┘
-     ├────► DataQuality / SQL / HBase / Hive / Strategy
-     │         SQL 超轮数 → 回 Router 重规划（上限 1 次）
-     ▼
- Analysis → Reflection（上限 2 次）→ final_answer
-```
-
-可选：`clarify`（Router 置信度低）、`confidence_gate`（SQL 自评分低）、Task board。
-
-| 用户意图 | 路由 | 示例 |
-|---------|------|------|
-| SQL 问数 | sql | 销售额最高的部门 |
-| HBase KV | hbase | scan orders 前 10 行 |
-| Hive 数仓 | hive | ods_orders_hive 华东订单 |
-| 制度 / 口径 | strategy | 销售提成比例 |
-| 对比 / 趋势 | sql + analysis | 华东 vs 华南 |
-| 元问题 | analysis | 刚才问了什么 |
-| 闲聊 | 空 plan | 你好 |
-
-上一轮走 hbase、本轮说「继续查」，Router 会优先复用同一 Agent。
-
----
-
-## 高频 SQL 模板优先
-
-`harness/tools/template_matcher.py`：关键词 + 部门 / 日期槽位，对 `db/metric_registry.db`。
-
-1. **命中** → 填槽得到 SQL，不调 LLM
-2. **未命中** → 回退模型生成
-
-种子覆盖部门销售额、月销售额、订单状态、产品排名等。复杂 JOIN 不强行套模板。
-
----
-
-## 错误恢复：三层自愈
-
-| 层 | 触发 | 行为 | 上限 |
-|----|------|------|------|
-| API 重试 | 429 / 5xx / 超时 | 指数退避 + 抖动 | `LLM_MAX_RETRIES`（默认 3） |
-| SQL 自愈 | `run_query` 报错 | 错误回喂 → 对表结构 → 重写 | prompt 约束 2 次 |
-| 失败重规划 | Agent 超轮数 | 带反馈回 Router；跳过硬规则与脏缓存 | 1 次 |
-| **熔断降级** | 连续失败 ≥ 阈值 | 快速失败不调 API，返回可读降级文案；冷却后半开试探 | `CIRCUIT_BREAKER_THRESHOLD`（默认 5） |
-
-400/401 不重试。手册：[`docs/2026-08-05_错误恢复操作手册.md`](docs/2026-08-05_错误恢复操作手册.md)
-
-生产级加固：
-- **熔断降级**（`harness/constraints/circuit_breaker.py`）：连续失败达阈值 → 快速失败不调 API，返回可读降级文案；冷却后半开试探恢复
-- **工具幂等**（`harness/constraints/idempotency.py`）：写/副作用工具（保存记忆、HBase put/delete）同参数在 TTL 窗口内不重复执行，防止重试/重规划造成重复副作用
-- **告警**（`harness/observation/alerts.py`）：熔断打开、Agent 超时自动告警；默认写日志，配置 `ALERT_WEBHOOK_URL` 后推送 Slack/钉钉/飞书
-
----
-
-## 动态上下文 + 自学习
-
-- **Schema Linking**：按问题检索相关表/字段，不把整库塞进 prompt
-- **值级索引**：低基数 TEXT 列写入真实取值（如 `region=华东/华南`）
-- **检索式 few-shot**：相似的已验证 Q→SQL 注入 SQL Agent；无 embedding 时退回空
-
-```
-成功 run_query / HITL 批准
-  → 质量门（非超时、真实库 dry-run 能跑）
-  → record_sql_example → Chroma sql_examples
-  → 下次相似问题 → get_sql_fewshot
-```
-
-SQL 从 `run_query` 成功路径捕获（`pop_last_successful_sql`），不从模型口头描述里抽。`AUTO_LEARN_SQL=0` 只关写、不影响读。手册：[`docs/2026-08-06_自学习闭环操作手册.md`](docs/2026-08-06_自学习闭环操作手册.md)
-
----
-
-## 安全模型：Entitlement + 双层 HITL
-
-```
-query → guard_input（注入检测）
-     → Router
-     → System Prompt（软约束）
-     → check_entitlement（工具 / 表白名单 / 行级改写 / 文档过滤）
-     → HITL interrupt()
-          SQL：salary / cost / budget
-          HBase：put / delete / drop / truncate
-     → guard_output（PII）
-```
-
-`run_query` 只允许 `SELECT`。权限在 `agent_roles` / `agent_users` 表里，改表即可，不必重新部署。
+### 角色权限（摘要）
 
 | 角色 | run_query | 可查表 | 行级 | HITL |
 |------|-----------|--------|------|------|
@@ -365,83 +393,40 @@ query → guard_input（注入检测）
 | viewer | no | 4 张（无 employees） | 无 | 无 |
 | support | yes | 3 张 | 无 | 无 |
 
----
+权限在 `agent_roles` / `agent_users` 表里，改表即生效。
 
-## Eval 评估体系
-
-被测：DeepSeek。Judge：Kimi。避免同一个模型给自己打分。
+### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例
+pytest tests/ -v                               # 全量离线用例（423）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）
 python tests/eval_runner.py --full             # 全量评测（需 API key）
-.venv/bin/python -m tests.eval_runner --fast --opik
 ```
 
-| 维度 | 看什么 |
-|------|--------|
-| correctness | 表、SQL、数字 |
-| completeness | 问到的部分是否都答了 |
-| safety | 拒绝写操作 / HBase 破坏性 op |
-| routing | Router 是否派对 Agent |
+被测：DeepSeek。Judge：Kimi。`tests/eval_cases.py`：47 条，其中 13 条带 `db/demo.db` 实查事实断言。
 
-`tests/eval_cases.py`：47 条，覆盖单 Agent、SQL 安全、权限边界、多 Agent 路由（含 hbase/hive）与 SQL 事实正确性（13 条 `expected` 均为 db/demo.db 实查）。路由测的是 plan 组成，不是 SQL 对错。
+### 代码质量
+
+```bash
+ruff check harness server db main.py app.py scripts tests
+pre-commit run --all-files
+pyright
+```
 
 ---
 
-## 记忆 · 可观测 · 技术栈
-
-三层：当前轮 Tool 中间结果 → 窗口 + LLM 摘要 → 向量库（ChromaDB / Milvus 双后端）+ `user_memory`。元问题（「刚才问了什么」）走时间倒序，不靠语义检索。
-
-| 层 | 实现 |
-|----|------|
-| 本地审计 | `TraceContext` → `logs/traces/*.jsonl`（SQL 参数脱敏） |
-| 平台 | Opik：LangGraph 树、Feedback、Dataset |
-| 断点 | LangGraph Checkpointer → `db/agent_state.db`（配置 `REDIS_URL` 后自动换 RedisSaver，TTL 自动清理） |
-
-`.env` 里 `OPIK_ENABLED=1` 才上报平台；JSONL 始终写。
+<details>
+<summary>技术栈与测试说明</summary>
 
 | 层次 | 技术 |
 |------|------|
 | LLM | DeepSeek（Anthropic 兼容 SDK） |
-| 编排 | LangGraph + SQLite / Redis Checkpointer（`REDIS_URL` 切换） |
-| 向量 | ChromaDB / Milvus 双后端（`VECTOR_DB` 切换，`MILVUS_URI` 接集群）；Embedding 用 DashScope |
+| 编排 | LangGraph + SQLite / Redis Checkpointer |
+| 向量 | ChromaDB / Milvus；Embedding 用 DashScope |
 | Web | FastAPI + SSE + React/Vite |
 | Eval | Kimi 做 Judge |
 
-<details>
-<summary>设计决策（为什么这样拆）</summary>
-
-- **不用 LangChain AgentExecutor**：先把 Agent Loop 写明白，再用 LangGraph 做显式 State Graph。
-- **Run Query 只 SELECT**：写操作在 Tool 层拦掉。
-- **HBase / Hive 用模拟器**：没有集群；嵌套 dict / 本地表，API 对齐，可替换。
-- **Entitlement 不解析整棵 SQL AST**：`FROM/JOIN` 表名 + 行级 `WHERE` 拼接。
-- **HITL 用原生 `interrupt()`**：暂停点进 checkpointer，`Command(resume=...)` 接着跑。
-- **Judge 和选手不是同一个模型**。
-- **权限存 DB**：改一行数据，不必发版。
-- **自学习抓 `run_query` 成功 SQL**：模型口头描述经常不是可执行 SELECT。
-- **few-shot 失败不挡主路径**：没 embedding key 就退回纯 schema。
-- **高频问数先模板**：单表聚合不必每轮生成 SQL。
-
-</details>
-
-<details>
-<summary>测试怎么跑</summary>
-
-```bash
-pytest tests/ -v
-pytest tests/test_harness_smoke.py -v
-pytest tests/test_recovery.py tests/test_feedback.py tests/test_context_engineering.py \
-      tests/test_template_matcher.py tests/test_orchestration.py tests/test_task_system.py -v
-pytest tests/test_hbase.py -v
-python tests/eval_runner.py
-```
-
-> 说明：全量测试离线可跑（LLM / Embedding 均用脚本化 fake / 离线 embedding 注入，
-> 不依赖网络与 API key）。agent 集成测试走真实 Tool handler + 真实 SQLite，LLM 由 fake 驱动。
-> Redis / Milvus 专项用例在无对应服务时自动跳过（本机带 Redis+Milvus 时全量 406 过）。
-
-Push 到 `main` / `master` 会跑 GitHub Actions（pytest 全量 + 护栏 eval，均零 API）。
+全量测试离线可跑（LLM / Embedding 均 fake）。Redis / Milvus 专项用例在无对应服务时自动跳过。Push 到 `main` / `master` 会跑 GitHub Actions（pytest 全量 + 护栏 eval）。
 
 </details>
 
@@ -449,6 +434,11 @@ Push 到 `main` / `master` 会跑 GitHub Actions（pytest 全量 + 护栏 eval�
 
 **Agent = 模型 + Harness。** 模型负责想，这套代码负责查、拦、记、改、评。
 
-<sub>架构图：<a href="docs/diagrams/master_architecture.png">master_architecture.png</a> · 说明：<a href="HARNESS.md">HARNESS.md</a></sub>
+<sub>
+图：<a href="docs/diagrams/">docs/diagrams/</a> ·
+机制：<a href="HARNESS.md">HARNESS.md</a> ·
+案例：<a href="docs/项目案例.md">项目案例</a> ·
+工程图解：<a href="docs/engineering-mechanisms.md">engineering-mechanisms</a>
+</sub>
 
 </div>
