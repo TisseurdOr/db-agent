@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="docs/diagrams/master_architecture.png" alt="db-agent Harness 架构" width="100%">
-<sub>图 0 · Harness 总览：编排 / 工具 / 记忆 / 约束 / 观测</sub>
 
 # db-agent
 
@@ -37,10 +35,6 @@
 
 业务痛点很具体：要背 SQL / Hive / HBase 三套语法、改字段要等数据组排期、市面 Text-to-SQL 往往只生成不执行、不鉴权、不改错。本项目要做的是 **说人话 → 查数 → 分析**，并把权限、可靠性、评测一起做完。
 
-<p align="center">
-  <img src="docs/diagrams/functional_layers.png" alt="功能分层" width="100%">
-</p>
-<p align="center"><sub>图 1 · 功能分层：问数能力叠权限、自愈、记忆、评测</sub></p>
 
 | 能力 | 做什么 | 关键落点 |
 |------|--------|----------|
