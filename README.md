@@ -193,14 +193,14 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 **自愈：**
 
 <p align="center">
-  <img src="docs/diagrams/self-healing.png" alt="三层自愈" width="100%">
+  <img src="docs/diagrams/self-healing.png" alt="三层自愈" width="50%">
 </p>
 <p align="center"><sub>图 7 · 重试 → SQL 自愈 / 重规划 → 熔断降级</sub></p>
 
 **记忆 / 观测闭环：**
 
 <p align="center">
-  <img src="docs/diagrams/memory-obs-loop.png" alt="记忆与观测闭环" width="100%">
+  <img src="docs/diagrams/memory-obs-loop.png" alt="记忆与观测闭环" width="50%">
 </p>
 <p align="center"><sub>图 8 · 召回 → 执行 → 自学习回流 → Trace / Opik</sub></p>
 
@@ -210,10 +210,10 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 
 ## 四、演进：怎么一步步长出来
 
-**每层都是被真实问题逼出来的，不是堆功能。** 项目约 2.1 万行 Python、423 个离线测试、47 条评测。
+**每层都是被真实问题逼出来的。
 
 <p align="center">
-  <img src="docs/diagrams/five_stage_evolution.png" alt="五阶段演进" width="100%">
+  <img src="docs/diagrams/five_stage_evolution.png" alt="五阶段演进" width="150%">
 </p>
 <p align="center"><sub>图 9 · 五阶段演进：单 Agent → 多 Agent → 权限 → 可靠性 → 工程化</sub></p>
 
@@ -225,19 +225,6 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
 | **五 · 工程化** | demo → 产品 | `db-agent` CLI；423 离线测试；47 Eval；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
-### 学习轨迹（前序项目）
-
-GitHub 建仓 / 推送时间（2026-07）晚于实际开发起点。从系统性学习到本仓库的路径：
-
-| 阶段 | 仓库 | 建仓时间 | 定位 |
-|------|------|---------|------|
-| 学习起点 | [learning](https://github.com/TisseurdOr/learning) | 2026-02 | 学习与练习 |
-| 入门练习 | [local_qa_bot](https://github.com/TisseurdOr/local_qa_bot) · [RAG_chat_bot](https://github.com/TisseurdOr/RAG_chat_bot) | 2026-04 | QA / RAG |
-| Agent 练习 | [career-assistant-langgraph](https://github.com/TisseurdOr/career-assistant-langgraph) · [langgraph-rag-mcp-agent](https://github.com/TisseurdOr/langgraph-rag-mcp-agent) | 2026-04 ~ 06 | LangGraph / RAG / MCP |
-| 前序完整项目 | [fin-agent](https://github.com/TisseurdOr/fin-agent) · [fraud-agent](https://github.com/TisseurdOr/fraud-agent) | 2026-06 | 金融研报 / 反欺诈 |
-| 本仓库 | db-agent | 2026-07（推送） | 单 Agent → Multi-Agent Harness |
-
-fin-agent、fraud-agent 先验证了 RAG、工具调用与单 Agent 编排；db-agent 把这些沉淀成 Harness 骨架，并补上权限、自愈、评测与工程化。
 
 ### 设计取舍（为什么这样）
 
@@ -248,8 +235,6 @@ fin-agent、fraud-agent 先验证了 RAG、工具调用与单 Agent 编排；db-
 - **Judge 和被测不是同一模型**：Eval 用 Kimi，被测用 DeepSeek。
 - **自学习抓 `run_query` 成功 SQL**：不从模型口头描述里抽；含敏感列的不回流。
 - **熔断 / 幂等**：连续失败时重试=烧钱；重试/重规划会让写工具跑两次——这两层都是踩坑后补上的。
-
-更完整的案例叙事见 [`docs/项目案例.md`](docs/项目案例.md)。
 
 ---
 
