@@ -210,7 +210,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 
 ## 四、演进：怎么一步步长出来
 
-**每层都是被真实问题逼出来的。
+**每层都是被真实问题逼出来的，不是堆功能。**
 
 <p align="center">
   <img src="docs/diagrams/five_stage_evolution.png" alt="五阶段演进" width="150%">
