@@ -44,6 +44,7 @@ from harness.memory.vector_store import VectorMemory
 from harness.orchestration.single.tools_bundle import TOOL_HANDLERS, TOOLS
 from harness.tools.hbase import _seed_hbase_store
 from harness.tools.knowledge import (
+    build_knowledge_base_index,
     set_llm_client,
     set_rag_pipeline,
     set_vector_memory,
@@ -162,6 +163,12 @@ async def main():
     set_llm_client(client)            # Self-Query 拆解用
     rag_pipeline = RAGPipeline(vector_db=vector_memory, llm_client=client)
     set_rag_pipeline(rag_pipeline)    # HyDE + LLM rerank 注入 search_memory
+    # 知识库：_KNOWLEDGE_BASE 索引进向量库（search_knowledge_base 语义检索用）。
+    # embedding 未配置时降级到关键词检索，不阻断启动。
+    try:
+        build_knowledge_base_index()
+    except Exception as e:
+        print(f"[knowledge_base] 向量索引跳过（降级关键词检索）: {e}")
 
     print(f"数据分析 Agent 已启动（模型: {args.model}, 模式: {args.mode}, 用户: {args.user}）")
     print("试试这些：")

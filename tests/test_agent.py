@@ -119,6 +119,39 @@ def test_search_knowledge_base_no_match():
     assert result.get("hint") is not None
 
 
+def test_search_knowledge_base_vector_semantic():
+    """向量索引就绪时走向量语义检索（analyst 无 docs_filter，看全部）。"""
+    import harness.tools.knowledge as kb
+    from harness.tools.knowledge import build_knowledge_base_index
+    from tests.fake_embedding import fake_embedding
+
+    build_knowledge_base_index(embed_fn=fake_embedding)
+    try:
+        result = search_knowledge_base("提成比例", top_k=3)
+        assert result["count"] > 0
+        assert any("提成" in r["title"] for r in result["results"])
+    finally:
+        kb._kb_memory.drop()
+        kb._kb_memory = None
+
+
+def test_search_knowledge_base_filter_docs(monkeypatch):
+    """viewer 的 docs_filter 过滤掉技术文档类，只留产品手册/销售制度。"""
+    import harness.tools.knowledge as kb
+    from harness.tools.knowledge import build_knowledge_base_index
+    from tests.fake_embedding import fake_embedding
+
+    monkeypatch.setenv("AGENT_USER", "viewer")
+    build_knowledge_base_index(embed_fn=fake_embedding)
+    try:
+        result = search_knowledge_base("HBase scan 命令", top_k=10)
+        assert result["count"] > 0
+        assert all(r["category"] in ("产品手册", "销售制度") for r in result["results"])
+    finally:
+        kb._kb_memory.drop()
+        kb._kb_memory = None
+
+
 def test_save_and_read_memory():
     """存一条偏好 → 读出来验证。"""
     save_to_memory("用户偏好按降序排列查询结果", memory_type="preference")

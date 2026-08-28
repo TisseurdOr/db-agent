@@ -20,6 +20,7 @@ from harness.tools import tool
 _vector_memory = None
 _llm_client = None
 _rag_pipeline = None
+_kb_memory = None        # 知识库向量索引（VectorMemory，collection=knowledge_base）
 
 
 def set_vector_memory(vm):
@@ -38,6 +39,32 @@ def set_rag_pipeline(rag):
     """注入 RAGPipeline（HyDE + LLM rerank），供 search_memory 精排使用。"""
     global _rag_pipeline
     _rag_pipeline = rag
+
+
+def set_knowledge_base_memory(vm):
+    """注入知识库向量索引（测试用，embed_fn 离线确定性）。"""
+    global _kb_memory
+    _kb_memory = vm
+
+
+def build_knowledge_base_index(embed_fn=None):
+    """把 _KNOWLEDGE_BASE 索引进向量库（collection=knowledge_base）。
+
+    embed_fn 用于测试注入离线 embedding；为 None 时走环境变量 EMBEDDING_API_KEY。
+    embedding 不可用会抛异常，由调用方（main.py）捕获降级到关键词检索。
+    count()==0 幂等检查：首次索引 19 篇，之后跳过重复 embed。
+    """
+    global _kb_memory
+    from harness.memory.vector_store import VectorMemory
+    vm = VectorMemory(collection_name="knowledge_base", embed_fn=embed_fn)
+    if vm.count() == 0:
+        for title, content in _KNOWLEDGE_BASE.items():
+            vm.remember(
+                content, memory_type="knowledge",
+                metadata={"title": title, "category": _DOC_CATEGORIES.get(title, "")},
+            )
+    _kb_memory = vm
+    return vm
 
 
 # ─── 模拟知识库文档 ───────────────────────────────────────────
@@ -208,6 +235,34 @@ _KNOWLEDGE_BASE = {
 }
 
 
+# 文档分类——用于 docs_filter 权限过滤（entitlement.filter_docs 按 category 匹配）。
+# category 值对齐 entitlement 里 viewer/support 的 docs_filter 白名单：
+#   viewer = ["产品手册","部门介绍","销售制度"]  → 命中「产品手册」「销售制度」类
+#   support = ["技术文档","产品手册"]             → 命中「技术文档」「产品手册」类
+# 「部门介绍」暂无对应文档，是白名单里的死条目（or 关系，不影响结果）。
+_DOC_CATEGORIES = {
+    "销售提成制度": "销售制度",
+    "客户分级标准": "销售制度",
+    "产品定价说明": "产品手册",
+    "产品退换政策": "产品手册",
+    "考勤制度": "人事制度",
+    "休假制度": "人事制度",
+    "绩效考核制度": "人事制度",
+    "招聘流程": "人事制度",
+    "员工福利政策": "人事制度",
+    "报销制度": "财务制度",
+    "采购流程": "财务制度",
+    "预算管理制度": "财务制度",
+    "数据安全管理制度": "数据安全",
+    "IT 设备管理": "IT制度",
+    "2026年公司战略": "战略文档",
+    "项目管理流程": "战略文档",
+    "HBase操作参考": "技术文档",
+    "Hive/Hue表结构参考": "技术文档",
+    "HiveQL与Impala语法差异": "技术文档",
+}
+
+
 # ─── Tool 定义 ────────────────────────────────────────────────
 # 关键设计意图:
 # - search_memory: 查"Agent 经历过什么"（跨会话记忆）—— Self-Query + 向量检索
@@ -215,18 +270,8 @@ _KNOWLEDGE_BASE = {
 # - search_knowledge_base: 查"公司知道什么"（静态知识文档）
 
 
-@tool(description=(
-    "搜索公司知识库（规章制度、产品政策、战略文档）。"
-    "当用户问公司的提成怎么算、年假多少天、产品怎么定价等非数据库查询时调用。"
-    "不要用此 Tool 查销售数据、订单——那些在数据库里，用 run_query。"
-    "返回 {results: [{title, content, score}], count}；无匹配时 hint 建议换关键词。"
-))
-def search_knowledge_base(query: str, top_k: int = 3) -> dict:
-    """query: 自然语言搜索词，如 '提成'、'年假'
-    top_k: 返回条数，默认 3"""
-    if not query.strip():
-        return {"results": [], "count": 0, "hint": "搜索词为空"}
-
+def _keyword_search(query: str, top_k: int) -> list[dict]:
+    """关键词打分检索——向量索引未就绪时的降级路径（离线/测试无 embedding）。"""
     def score(text: str) -> float:
         q, t = query.lower(), text.lower()
         if q in t:
@@ -238,9 +283,55 @@ def search_knowledge_base(query: str, top_k: int = 3) -> dict:
     for title, content in _KNOWLEDGE_BASE.items():
         s = score(title) * 1.5 + score(content)
         if s > 0:
-            scored.append({"title": title, "content": content, "score": round(s, 1)})
+            scored.append({
+                "title": title, "content": content,
+                "category": _DOC_CATEGORIES.get(title, ""),
+                "score": round(s, 1),
+            })
     scored.sort(key=lambda x: x["score"], reverse=True)
-    results = scored[:top_k]
+    return scored[:top_k]
+
+
+def _vector_search(query: str, top_k: int) -> list[dict]:
+    """向量语义检索——从知识库索引召回。"""
+    results = _kb_memory.recall(query, top_k=top_k, memory_type="knowledge")
+    return [
+        {
+            "title": r["metadata"].get("title", ""),
+            "content": r["text"],
+            "category": r["metadata"].get("category", ""),
+            "score": r.get("score"),
+        }
+        for r in results
+    ]
+
+
+@tool(description=(
+    "搜索公司知识库（规章制度、产品政策、战略文档）。"
+    "当用户问公司的提成怎么算、年假多少天、产品怎么定价等非数据库查询时调用。"
+    "不要用此 Tool 查销售数据、订单——那些在数据库里，用 run_query。"
+    "返回 {results: [{title, content, score, category}], count}；无匹配时 hint 建议换关键词。"
+))
+def search_knowledge_base(query: str, top_k: int = 3) -> dict:
+    """query: 自然语言搜索词，如 '提成'、'年假'
+    top_k: 返回条数，默认 3"""
+    if not query.strip():
+        return {"results": [], "count": 0, "hint": "搜索词为空"}
+
+    # 候选：向量语义检索优先；索引未就绪时降级关键词打分。
+    # 多取几倍候选，给 filter_docs 权限过滤留余量（否则过滤后可能不足 top_k）。
+    n = max(top_k * 3, 5)
+    if _kb_memory is not None and _kb_memory.count() > 0:
+        candidates = _vector_search(query, n)
+    else:
+        candidates = _keyword_search(query, n)
+
+    # 文档级权限：按用户角色 docs_filter 白名单过滤（鉴权洞 #3）。
+    from harness.constraints.entitlement import guard, resolve_user_id
+    ent = guard(resolve_user_id(), "search_knowledge_base", docs=candidates)
+    if isinstance(ent, dict):
+        return ent
+    results = (ent.docs or [])[:top_k]
 
     return {
         "results": results, "count": len(results),
