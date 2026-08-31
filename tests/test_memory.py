@@ -110,7 +110,7 @@ def test_vector_memory_list_recent(vector_mem):
 
 
 def test_vector_memory_list_recent_not_chroma_arbitrary_limit(vector_mem):
-    """Chroma get(limit=N) 不是最新 N 条；list_recent 必须先全取再按时间截断。"""
+    """list_recent 经 recent index 返回真正最新 N 条（不依赖 Chroma get 任意 limit）。"""
     import time
     for i in range(8):
         vector_mem.remember(content=f"记忆编号{i}", memory_type="note")

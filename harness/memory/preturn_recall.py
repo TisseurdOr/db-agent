@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from harness.memory.memory_controller import (
@@ -219,11 +218,20 @@ async def recall_for_turn(
                 memories = []
                 source = "empty"
 
-    text = "\n\n".join(
-        (m.get("text") or "").strip()
-        for m in memories
-        if (m.get("text") or "").strip()
-    )
+    try:
+        from harness.memory.episode_memory import expand_episode_hit
+        texts = []
+        for m in memories:
+            expanded = expand_episode_hit(m) if m else ""
+            if (expanded or "").strip():
+                texts.append(expanded.strip())
+        text = "\n\n".join(texts)
+    except Exception:
+        text = "\n\n".join(
+            (m.get("text") or "").strip()
+            for m in memories
+            if (m.get("text") or "").strip()
+        )
     meta_hint = ""
     if is_meta_question(q) and text:
         meta_hint = (
@@ -268,19 +276,25 @@ async def maybe_rerecall(
     return current_text or ""
 
 
-def remember_turn(query: str, answer: str) -> None:
-    """把本轮问答写入向量库（元问题跳过）。Web / CLI 共用。"""
+async def remember_turn(
+    query: str,
+    answer: str,
+    *,
+    session_id: str = "default",
+    client=None,
+) -> None:
+    """把本轮问答记入情节缓冲（每 N 轮写 1 条 episode 向量）。元问题跳过。
+
+    不再逐轮写 conversation 向量——避免几千轮变成几千条低价值碎片。
+    """
     if not should_remember(query):
         return
     try:
-        vm, _ = ensure_memory_stack()
+        vm, _ = ensure_memory_stack(client)
     except Exception:
         return
     try:
-        vm.remember(
-            content=f"问: {query}\n答: {answer}",
-            memory_type="conversation",
-            metadata={"year": str(datetime.now().year)},
-        )
+        from harness.memory.episode_memory import record_and_maybe_flush
+        await record_and_maybe_flush(session_id, query, answer, vm, client=client)
     except Exception as e:
-        logger.warning("preturn_recall: remember failed: %s", e)
+        logger.warning("preturn_recall: episode remember failed: %s", e)

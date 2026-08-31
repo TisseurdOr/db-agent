@@ -290,7 +290,12 @@ async def main():
             # 长期记忆（VectorMemory）：两种模式共用——
             #   把本轮问答写入 ChromaDB，下次相关查询时以向量召回方式注入 System Prompt。
             #   元问题（"刚才问了什么"）不写——避免污染向量库。
-            remember_turn(user_input, result if isinstance(result, str) else str(result))
+            await remember_turn(
+                user_input,
+                result if isinstance(result, str) else str(result),
+                session_id=args.user,
+                client=client,
+            )
             # Token 日志：两种模式共用 ConversationManager 的估算
             est = conversation.token_estimate()
             checkpoint_info = ""

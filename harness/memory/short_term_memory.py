@@ -12,6 +12,12 @@ Keep: key decisions, user preferences, data mentioned, actions taken.
 Drop: greetings, filler, exact tool call details.
 Output in Chinese, under 200 characters."""
 
+REDUCE_SUMMARY_PROMPT = """将多段对话摘要合并为一段更短的全局摘要。
+保留：关键决策、用户偏好、数据口径、未完成事项。
+去掉：重复表述与细节堆砌。
+用中文输出，不超过 280 字。"""
+
+
 async def compress_history(client: Anthropic, old_messages: list, model=None):
     """将旧消息压缩为一段摘要。压缩任务不需要旗舰模型，用便宜的即可。"""
     if model is None:
@@ -33,6 +39,26 @@ async def compress_history(client: Anthropic, old_messages: list, model=None):
             return block.text
     # 兜底：没有文字块（极少见）时返回空摘要，不让整个 agent 崩
     return ""
+
+async def reduce_summaries(client: Anthropic, summary_text: str, model=None) -> str:
+    """Map-reduce：把过长摘要压成更短的全局摘要。"""
+    if model is None:
+        model = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
+    if not (summary_text or "").strip():
+        return ""
+    if client is None:
+        return summary_text
+    resp = client.messages.create(
+        model=model,
+        max_tokens=400,
+        system=REDUCE_SUMMARY_PROMPT,
+        messages=[{"role": "user", "content": summary_text[:6000]}],
+    )
+    for block in resp.content:
+        if getattr(block, "type", None) == "text":
+            return block.text or summary_text
+    return summary_text
+
 
 class ConversationManager:
     """混合策略：最近 10 条保留原文，更早的压缩为摘要。"""
@@ -80,13 +106,52 @@ class ConversationManager:
             overflow = self.messages[:-self.max_recent]
             if overflow:
                 new_summary = await compress_history(self.client, overflow)
-                # 合并摘要
+                # 合并摘要（随后 _bound_summary 保证有界）
                 if self.summary:
                     self.summary = f"{self.summary}\n{new_summary}"
                 else:
                     self.summary = new_summary
                 self._total_compressed += len(overflow)
+                await self._bound_summary()
             self.messages = self.messages[-self.max_recent:]
+
+    async def _bound_summary(self) -> None:
+        """摘要超 max_summary_tokens → map-reduce / 硬截断，保证 L1 恒有界。"""
+        if not self.summary:
+            return
+        # 最多两轮 reduce，避免死循环烧 token
+        for _ in range(2):
+            if self._estimate(self.summary) <= self.max_summary_tokens:
+                return
+            chunks = self._chunk_summary(self.summary, target_chars=max(200, self.max_summary_tokens))
+            if len(chunks) <= 1 or self.client is None:
+                break
+            parts = []
+            for ch in chunks:
+                parts.append(await reduce_summaries(self.client, ch))
+            self.summary = await reduce_summaries(self.client, "\n".join(parts))
+        # 仍超限：硬截断（保留尾部更新摘要）
+        max_chars = max(80, int(self.max_summary_tokens / 0.4))
+        if len(self.summary) > max_chars:
+            self.summary = "…\n" + self.summary[-(max_chars - 2):]
+
+    @staticmethod
+    def _chunk_summary(text: str, target_chars: int = 500) -> list[str]:
+        lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+        if not lines:
+            return [text] if text else []
+        chunks, buf = [], []
+        size = 0
+        for ln in lines:
+            if buf and size + len(ln) + 1 > target_chars:
+                chunks.append("\n".join(buf))
+                buf, size = [ln], len(ln)
+            else:
+                buf.append(ln)
+                size += len(ln) + 1
+        if buf:
+            chunks.append("\n".join(buf))
+        return chunks or [text]
 
     def build_context(self) -> str:
         """构建注入 System Prompt 的上下文块。"""

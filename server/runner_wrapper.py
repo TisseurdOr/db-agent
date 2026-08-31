@@ -153,17 +153,21 @@ class StreamingRunner:
         except Exception:
             pass
         conv = getattr(self.runner, "_conversation", None)
-        if conv is None:
-            return
-        try:
-            await conv.add_message({"role": "user", "content": query or ""})
-            await conv.add_message({"role": "assistant", "content": answer or ""})
-            conv.save()
-        except Exception:
-            pass
+        if conv is not None:
+            try:
+                await conv.add_message({"role": "user", "content": query or ""})
+                await conv.add_message({"role": "assistant", "content": answer or ""})
+                conv.save()
+            except Exception:
+                pass
         try:
             from harness.memory.preturn_recall import remember_turn
-            remember_turn(query or "", answer or "")
+            await remember_turn(
+                query or "",
+                answer or "",
+                session_id=str(sid),
+                client=getattr(self.runner, "client", None),
+            )
         except Exception:
             pass
 

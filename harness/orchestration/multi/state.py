@@ -4,10 +4,24 @@
 - DBAgentState: 旧课单 Agent 图用；图代码已迁到 archive/legacy_single_agent_graph/
 """
 
+import os
 from typing import Annotated, Any, TypedDict, cast
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.message import add_messages
+
+# Checkpointer 只保留最近 K 条 messages，防止几千轮后 state/DB 膨胀。
+# 原文已在 ConversationManager / turn JSONL / episode 归档；节点侧本来只读 [-6:]。
+CHECKPOINT_MESSAGE_LIMIT = int(os.getenv("CHECKPOINT_MESSAGE_LIMIT", "20"))
+
+
+def add_messages_trim(left: list, right: list) -> list:
+    """add_messages 后裁剪到最近 K 条。"""
+    merged = add_messages(left, right)
+    limit = CHECKPOINT_MESSAGE_LIMIT
+    if limit > 0 and len(merged) > limit:
+        return list(merged)[-limit:]
+    return merged
 
 
 def _merge_stats(left: dict, right: dict) -> dict:
@@ -56,7 +70,7 @@ def agent_config(config: RunnableConfig) -> ConfigurablePayload:
 
 class MultiAgentState(TypedDict):
     query: str                  # 用户问题（ainvoke 时写入）
-    messages: Annotated[list, add_messages]  # 对话历史，Checkpointer 持久化
+    messages: Annotated[list, add_messages_trim]  # 对话历史（有界 K，防 checkpoint 膨胀）
     _recalled_memories: str     # pre-turn 向量召回的记忆
     _conversation_summary: str  # ConversationManager 压缩的早期对话摘要
     plan: list                  # Router 输出的执行计划

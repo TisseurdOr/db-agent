@@ -65,6 +65,7 @@ class ChromaBackend:
 
     def __init__(self, persist_dir: str, collection_name: str):
         import chromadb
+        self.collection_name = collection_name
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
@@ -112,9 +113,16 @@ class ChromaBackend:
                 })
         return out
 
-    def get(self, where: dict | None = None) -> list[dict]:
-        res = self.collection.get(where=self._chroma_where(where),
-                                  include=["documents", "metadatas"])
+    def get(self, where: dict | None = None, limit: int | None = None,
+            ids: list | None = None) -> list[dict]:
+        kwargs: dict = {"include": ["documents", "metadatas"]}
+        if ids is not None:
+            kwargs["ids"] = list(ids)
+        else:
+            kwargs["where"] = self._chroma_where(where)
+            if limit is not None:
+                kwargs["limit"] = int(limit)
+        res = self.collection.get(**kwargs)
         out = []
         if res["ids"]:
             for i, mem_id in enumerate(res["ids"]):
@@ -124,6 +132,11 @@ class ChromaBackend:
                     "metadata": res["metadatas"][i] or {},
                 })
         return out
+
+    def get_by_ids(self, ids: list) -> list[dict]:
+        if not ids:
+            return []
+        return self.get(ids=ids)
 
     def delete(self, ids):
         self.collection.delete(ids=ids)
@@ -245,16 +258,35 @@ class MilvusBackend:
             })
         return out
 
-    def get(self, where: dict | None = None) -> list[dict]:
+    def get(self, where: dict | None = None, limit: int | None = None,
+            ids: list | None = None) -> list[dict]:
         if not self._created:
             return []
-        rows = self._client.query(
-            self.collection_name, filter=self._expr(where), output_fields=self._OUTPUT_FIELDS,
-        )
+        if ids is not None:
+            if not ids:
+                return []
+            # Milvus query by id list
+            id_list = ", ".join(f'"{i}"' for i in ids)
+            expr = f"id in [{id_list}]"
+            rows = self._client.query(
+                self.collection_name, filter=expr, output_fields=self._OUTPUT_FIELDS,
+            )
+        else:
+            kwargs = {
+                "collection_name": self.collection_name,
+                "filter": self._expr(where) or "",
+                "output_fields": self._OUTPUT_FIELDS,
+            }
+            if limit is not None:
+                kwargs["limit"] = int(limit)
+            rows = self._client.query(**kwargs)
         return [
             {"id": r.get("id"), "text": r.get("text", ""), "metadata": _flat_to_meta(r)}
             for r in rows
         ]
+
+    def get_by_ids(self, ids: list) -> list[dict]:
+        return self.get(ids=ids)
 
     def delete(self, ids):
         if not self._created:
@@ -368,6 +400,17 @@ class VectorMemory:
             documents=[content],
             metadatas=[meta],
         )
+        try:
+            from harness.memory.recent_index import append_recent
+            append_recent(
+                self.collection_name,
+                memory_id,
+                user_id=user_id,
+                timestamp=ts,
+                memory_type=memory_type,
+            )
+        except Exception:
+            pass
         return memory_id
 
     def recall(self, query: str, top_k: int = 5,
@@ -429,16 +472,58 @@ class VectorMemory:
             return self.backend.count(where={"user_id": user_id})
         return self.backend.count()
 
-    def list_recent(self, user_id: str = "default", limit: int = 10) -> list[dict]:
-        """列出最近的记忆（按时间戳降序，不走向量检索）。"""
+    def list_recent(self, user_id: str = "default", limit: int = 10,
+                    memory_type: str | None = None) -> list[dict]:
+        """列出最近的记忆（按时间戳降序，不走向量检索）。
+
+        优先走 append-only recent index（O(tail)），避免 Chroma/Milvus 全量 get。
+        无索引时退回有限扫描（count 小）或空列表。
+        """
+        # 1) index path
+        try:
+            from harness.memory.recent_index import list_recent_ids
+            ids = list_recent_ids(
+                self.collection_name,
+                user_id=user_id or "default",
+                limit=limit,
+                memory_type=memory_type,
+            )
+            if ids and hasattr(self.backend, "get_by_ids"):
+                rows = self.backend.get_by_ids(ids)
+                # preserve newest-first order from index
+                by_id = {r["id"]: r for r in rows}
+                ordered = [by_id[i] for i in ids if i in by_id]
+                if ordered:
+                    return ordered
+        except Exception:
+            pass
+
+        # 2) fallback: only full-scan when collection is small
+        try:
+            total = self.backend.count(where={"user_id": user_id} if user_id else None)
+        except Exception:
+            total = self.backend.count()
+        max_full = int(os.getenv("MEMORY_LIST_RECENT_FULL_SCAN_MAX", "500"))
+        if total > max_full:
+            return []
         where = {"user_id": user_id} if user_id else None
         memories = self.backend.get(where=where)
+        if memory_type:
+            memories = [
+                m for m in memories
+                if (m.get("metadata") or {}).get("memory_type") == memory_type
+            ]
         memories.sort(key=lambda m: m["metadata"].get("timestamp", ""), reverse=True)
         return memories[:limit]
 
     def drop(self) -> None:
         """清空整个 collection（测试 / 重建用）。"""
         self.backend.drop()
+        try:
+            from harness.memory.recent_index import drop_index
+            drop_index(self.collection_name)
+        except Exception:
+            pass
 
 
 # === 使用示例 ===
