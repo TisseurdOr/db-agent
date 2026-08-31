@@ -43,7 +43,10 @@ ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划
 输出格式（只输出 JSON，不要其他文字）:
 {"plan": [{"agent": "sql", "task": "具体任务描述"}], "combine": true}
 
-每个 task 要具体、完整。不确定时宁可少派 agent，也不要默认加 sql。"""
+每个 task 要具体、完整。不确定时宁可少派 agent，也不要默认加 sql。
+
+若上下文含 [历史相关对话]：把「上次/刚才/那个」消解进 task（地区、口径、状态、时间），
+禁止把含糊指代原样交给 sql。"""
 
 
 # ── Router 硬规则：LLM 不可靠时兜底（与 ROUTER_PROMPT 优先级一致）──

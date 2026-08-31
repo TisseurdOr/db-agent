@@ -182,14 +182,16 @@ async def test_resume_streaming(monkeypatch, fake_runner):
 def test_auto_chart_from_sql_result():
     """从 SQL 结果文本中自动提取图表数据。"""
     text = json.dumps({"rows": [{"region": "华东", "total": 100}, {"region": "华南", "total": 200}]})
-    chart = _auto_chart_from_sql_result(text)
-    assert chart is not None
-    assert chart["type"] == "bar"
-    assert "华东" in chart["labels"]
+    charts = _auto_chart_from_sql_result(text)
+    assert charts
+    assert charts[0]["type"] == "bar"
+    assert "华东" in charts[0]["labels"]
+    # 类别少时补一张占比饼图
+    assert any(c["type"] == "pie" for c in charts)
 
 
 def test_auto_chart_from_empty_text():
-    assert _auto_chart_from_sql_result("没有数据") is None
+    assert _auto_chart_from_sql_result("没有数据") == []
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -329,3 +331,26 @@ def test_business_api_ok_without_token_env(monkeypatch):
     with TestClient(app) as c:
         resp = c.get("/api/sessions")
     assert resp.status_code == 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. 数据大屏（render_chart → Dashboard tab）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def test_dashboard_latest_endpoint(client, monkeypatch):
+    """GET /api/dashboard/latest 应返回 url 字段（未生成时为 null）。"""
+    monkeypatch.delenv("WEB_API_TOKEN", raising=False)
+    resp = client.get("/api/dashboard/latest")
+    assert resp.status_code == 200
+    assert "url" in resp.json()
+
+
+def test_render_chart_updates_latest_url(monkeypatch, tmp_path):
+    """render_chart 生成后应更新 get_latest_dashboard_url，且 url 为相对路径。"""
+    from harness.tools import chart as chart_mod
+    monkeypatch.setattr(chart_mod, "CHART_DIR", str(tmp_path))
+
+    result = chart_mod.render_chart(title="测试", chart_type="bar", labels=["a"], values=[1])
+    assert result["url"].startswith("/charts/dashboard_")
+    assert chart_mod.get_latest_dashboard_url() == result["url"]
+    assert (tmp_path / result["dashboard_path"].rsplit("/", 1)[-1]).exists()

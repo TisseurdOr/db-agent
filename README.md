@@ -30,7 +30,7 @@
 
 > **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端）；当前数据源与部署形态仍是本地演示，**不是已上线业务环境**。
 > SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）——接真实集群只需换连接器。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **423** 条）。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **435** 条）。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
@@ -57,7 +57,7 @@ web页面
 | **权限与 HITL** | 5 角色 RBAC（工具/表/行级）+ 敏感列 / 写操作人工审批 | `entitlement.py` · `interrupt()` |
 | **三层护栏** | 输入注入检测 → 仅 SELECT → 输出 PII 过滤 | `guardrails.py` |
 | **自愈与容错** | API 重试 → SQL 自愈 → 失败重规划 → 熔断 / 幂等 / 告警 | `retry` · `circuit_breaker` · `idempotency` |
-| **记忆与自学习** | 短/长期记忆 + Schema Linking + 成功 SQL 回流 few-shot | `memory/` · `sql_examples.py` |
+| **记忆与自学习** | 短/长期记忆 + HyDE + LLM Rerank 精排 + Schema Linking + 成功 SQL 回流 few-shot | `memory/` · `long_term_memory.py` · `sql_examples.py` |
 | **观测与评测** | Trace JSONL + Opik；47 条 Eval（Kimi Judge / DeepSeek 被测） | `observation/` · `tests/eval_*` |
 | **三种入口** | CLI `db-agent` · Streamlit · FastAPI + React SSE | `main.py` · `app.py` · `server/` |
 
@@ -165,7 +165,7 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 ```text
 入口预处理
   → guard_input（注入 / 空 / 超长，零 token）
-  → 记忆召回 +（可选）模板匹配
+  → 记忆召回（HyDE + LLM Rerank 精排）+（可选）模板匹配
   → Router：硬规则 > 上下文继承 > LRU > LLM
        ├─ confidence=low → clarify（interrupt 澄清）
        └─ plan 落 Task board；可选插入 data_quality
@@ -236,7 +236,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
 | **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
-| **五 · 工程化** | demo → 产品 | `db-agent` CLI；423 离线测试；47 Eval；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；435 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
 
 ### 设计取舍（为什么这样）
@@ -360,6 +360,10 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 `docker compose run --rm db-agent` 跑的是 **CLI**，不是 Web。
 
+Web 鉴权：配置 `WEB_API_TOKEN` 后，除 `/api/health` 外所有接口要求 `Authorization: Bearer <token>`（或 `X-API-Key: <token>`）；未配置时默认放行。
+
+Web Runner：按 `session_id` 管理并带空闲 TTL 回收（默认 30 分钟）；HITL resume 按 session 精确定位，不再依赖全局 active。
+
 > **状态外置（可选）**：配置 `REDIS_URL` 后，Web 会话与 Agent checkpoint 走 Redis（需 redis-stack）；不可用时自动回落内存 / SQLite。
 > **向量后端可切换**：`VECTOR_DB=chroma`（默认）或 `milvus`。
 
@@ -390,12 +394,12 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 ### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例（423）
+pytest tests/ -v                               # 全量离线用例（435）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）
 python tests/eval_runner.py --full             # 全量评测（需 API key）
 ```
 
-被测：DeepSeek。Judge：Kimi。`tests/eval_cases.py`：47 条，其中 13 条带 `db/demo.db` 实查事实断言。
+被测：DeepSeek。Judge：Kimi。`tests/eval_cases.py`：47 条 Eval + `tests/golden_set.json` 30 条 Golden Set（20 正例事实断言 + 10 负例拦截）。
 
 ### 代码质量
 
@@ -430,7 +434,8 @@ pyright
 图：<a href="docs/diagrams/">docs/diagrams/</a> ·
 机制：<a href="HARNESS.md">HARNESS.md</a> ·
 案例：<a href="docs/项目案例.md">项目案例</a> ·
-工程图解：<a href="docs/engineering-mechanisms.md">engineering-mechanisms</a>
+工程图解：<a href="docs/engineering-mechanisms.md">engineering-mechanisms</a> ·
+复盘文章：<a href="docs/项目复盘-可复用模块库.md">可复用模块库</a>
 </sub>
 
 </div>

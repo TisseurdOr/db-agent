@@ -1,6 +1,6 @@
 """知识库召回率评测 — 对比「关键词打分」vs「向量语义检索」。
 
-19 篇文档每篇一条自然语言 query，golden set 内嵌。算 hit@k + MRR，
+知识库每篇一条自然语言 query，golden set 内嵌。算 hit@k + MRR，
 量化「关键词 → 向量」迁移带来的召回提升。query 故意混入口语改写
 （如「客户分几个等级」「新员工配什么电脑」），这些关键词往往 miss、
 向量能命中，正是语义检索的价值点。
@@ -43,6 +43,9 @@ GOLDEN = [
     ("HBase 扫描表命令", "HBase操作参考"),
     ("Hive 建表结构", "Hive/Hue表结构参考"),
     ("Hive 和 Impala 区别", "HiveQL与Impala语法差异"),
+    ("orders 表有哪些字段", "业务库表字段说明书"),
+    ("访客 viewer 能不能 run_query", "Agent RBAC 权限手册"),
+    ("销售部负责人是谁编制多少", "业务部门职责手册"),
 ]
 
 GREEN = "\033[32m"
@@ -114,7 +117,7 @@ def main():
     vec_metrics, vec_detail = evaluate(kb._vector_search)
 
     print(f"\n{BOLD}{CYAN}{'=' * 60}{RESET}")
-    print(f"{BOLD}{CYAN}  知识库召回率（19 篇，每篇 1 query）{RESET}")
+    print(f"{BOLD}{CYAN}  知识库召回率（{len(GOLDEN)} 篇，每篇 1 query）{RESET}")
     print(f"{BOLD}{CYAN}  {tag}{RESET}")
     print(f"{BOLD}{CYAN}{'=' * 60}{RESET}\n")
 

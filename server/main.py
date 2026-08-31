@@ -64,7 +64,12 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    # 预热默认会话 runner，避免首条查询卡在 create/compile
+    # 预热向量记忆栈（search_memory / pre-turn recall）+ 默认会话 runner
+    try:
+        from harness.memory.preturn_recall import ensure_memory_stack
+        ensure_memory_stack(get_client())
+    except Exception:
+        pass
     try:
         from server.runner_wrapper import runner_registry
         await runner_registry.get_or_create(
@@ -111,15 +116,32 @@ async def metrics():
 
 # 业务接口统一加可选鉴权（WEB_API_TOKEN；/api/health 保持开放供探针）
 from server.auth import require_auth  # noqa: E402
+from server.endpoints.dashboard import router as dashboard_router
+from server.endpoints.database import router as database_router
 from server.endpoints.datasource import router as datasource_router
 from server.endpoints.feedback import router as feedback_router
+from server.endpoints.memory import router as memory_router
+from server.endpoints.overview import router as overview_router
 from server.endpoints.query import router as query_router
+from server.endpoints.rbac import router as rbac_router
 from server.endpoints.sessions import router as sessions_router
 
+app.include_router(dashboard_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(query_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(overview_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(rbac_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(feedback_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(sessions_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(datasource_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(database_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(memory_router, prefix="/api", dependencies=[Depends(require_auth)])
+
+# ── Chart dashboard HTML (render_chart 产物) ───────────────────────────
+
+from harness.tools.chart import CHART_DIR
+
+os.makedirs(CHART_DIR, exist_ok=True)
+app.mount("/charts", StaticFiles(directory=CHART_DIR), name="charts")
 
 # ── Static file serving (React build output) ───────────────────────────
 

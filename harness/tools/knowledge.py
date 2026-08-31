@@ -52,17 +52,27 @@ def build_knowledge_base_index(embed_fn=None):
 
     embed_fn 用于测试注入离线 embedding；为 None 时走环境变量 EMBEDDING_API_KEY。
     embedding 不可用会抛异常，由调用方（main.py）捕获降级到关键词检索。
-    count()==0 幂等检查：首次索引 19 篇，之后跳过重复 embed。
+    已有索引时按 title 补缺失篇，避免扩文档后旧 collection 停在旧篇数。
     """
     global _kb_memory
     from harness.memory.vector_store import VectorMemory
     vm = VectorMemory(collection_name="knowledge_base", embed_fn=embed_fn)
-    if vm.count() == 0:
-        for title, content in _KNOWLEDGE_BASE.items():
-            vm.remember(
-                content, memory_type="knowledge",
-                metadata={"title": title, "category": _DOC_CATEGORIES.get(title, "")},
-            )
+    existing: set[str] = set()
+    if vm.count() > 0:
+        try:
+            for row in vm.backend.get(where={"memory_type": "knowledge"}):
+                title = (row.get("metadata") or {}).get("title")
+                if title:
+                    existing.add(title)
+        except Exception:
+            existing = set()
+    for title, content in _KNOWLEDGE_BASE.items():
+        if title in existing:
+            continue
+        vm.remember(
+            content, memory_type="knowledge",
+            metadata={"title": title, "category": _DOC_CATEGORIES.get(title, "")},
+        )
     _kb_memory = vm
     return vm
 
@@ -232,6 +242,100 @@ _KNOWLEDGE_BASE = {
         "COMPUTE STATS 对 Impala 至关重要——未统计的表 JOIN 顺序可能很差，查询慢数十倍。"
         "Hue 上写查询时注意：选中 Impala 引擎才有 COMPUTE STATS / STRAIGHT_JOIN / LEFT ANTI JOIN 等特性。"
     ),
+
+    # ── 长文档 mockup：表字段 / RBAC / 部门（对齐 db/seed.py）──
+    "业务库表字段说明书": (
+        "本文档说明演示库 demo.db 中可供自然语言查数使用的业务表。"
+        "agent_roles、agent_users、user_memory 为运行时表，不对 Agent 的 run_query 开放。"
+        "查询前应先 describe_table 或对照本文档，禁止编造列名。"
+        "【departments 部门维表】id INTEGER 主键部门编号；name TEXT 部门名称，枚举为销售部、市场部、研发部、财务部、人事部、产品部；"
+        "budget REAL 年度预算金额，单位元；headcount INTEGER 编制人数。"
+        "销售部 id=1 budget=1000000 headcount=8；市场部 id=2 budget=800000 headcount=6；"
+        "研发部 id=3 budget=1500000 headcount=10；财务部 id=4 budget=400000 headcount=4；"
+        "人事部 id=5 budget=350000 headcount=3；产品部 id=6 budget=700000 headcount=5。"
+        "【employees 员工表】id INTEGER 主键；name TEXT 姓名；dept_id INTEGER 外键 departments.id；"
+        "title TEXT 职位；salary REAL 年薪，属敏感列，analyst 与 manager 查询触发 HITL；"
+        "hire_date TEXT 入职日 YYYY-MM-DD；status TEXT 默认 active。"
+        "manager 角色查询本表时，运行时会追加 WHERE dept_id=当前用户部门，只能看到本部门员工。"
+        "viewer 角色不允许查询 employees。"
+        "【products 产品表】id INTEGER；name TEXT；category TEXT 枚举软件、硬件、服务；"
+        "unit_price REAL 目录价；cost REAL 成本，属敏感列，查询触发 HITL。"
+        "软件含企业版SaaS订阅 50000、专业版 20000、基础版 5000、定制开发 150000、技术咨询 30000；"
+        "硬件含数据分析平台、服务器运维、云存储、网络安全、IoT 套件；"
+        "服务含培训、项目管理咨询、品牌设计、市场调研、售后支持。"
+        "【customers 客户表】id INTEGER；name TEXT 客户名；region TEXT 大区，枚举华北、华东、华南、华中；"
+        "city TEXT 城市；industry TEXT 行业，枚举互联网、金融、制造业；tier TEXT 客户等级 S/A/B，默认 B。"
+        "S 级示例：字节跳动、阿里巴巴、中国平安、比亚迪、蚂蚁集团。"
+        "【orders 订单事实表】id INTEGER；dept_id 下单部门；product_id；customer_id；"
+        "total REAL 订单金额，金额口径以本字段为准，不要用 quantity*unit_price 代替；"
+        "quantity INTEGER 默认 1；status TEXT 订单状态；created_at TEXT 下单时间。"
+        "订单覆盖约 14 个月，可做同比环比与部门排名。关联路径："
+        "orders.dept_id=departments.id，orders.product_id=products.id，orders.customer_id=customers.id。"
+        "【ods_orders_hive】Hive 风格 ODS。dt TEXT 日分区；region TEXT 区划分区；order_id TEXT；"
+        "customer_id、product_id、total、quantity、status、created_at；store_format 默认 PARQUET。"
+        "查某一天某一区应带 dt 与 region 条件，模拟分区裁剪。"
+        "【dwd_user_events】Hive 风格行为明细。dt 分区；user_id；event_type；"
+        "event_props TEXT 为 JSON 文本，模拟 MAP；event_time；store_format 默认 ORC。"
+        "【dim_products_hive】Hive 风格产品维。product_id 主键；name；category；unit_price；"
+        "supplier；tags TEXT JSON 数组；store_format 默认 PARQUET。"
+        "HBase 侧另有内存模拟表，不在 SQLite 中，用 run_hbase / generate_hbase_query，不要对 HBase 写 SELECT。"
+    ),
+    "Agent RBAC 权限手册": (
+        "本文档描述自然语言查数 Agent 的权限模型，数据落在 agent_roles 与 agent_users，改表即生效。"
+        "权限在工具执行层拦截，不依赖模型自觉。检查顺序为工具白名单、表白名单、行级改写、敏感列 HITL。"
+        "【角色 dba 研发DBA】可使用 run_query、list_tables、describe_table、search_knowledge_base、"
+        "read_document、write_query、run_hbase、generate_hbase_query。表白名单为空表示全部业务表。"
+        "无行级过滤。sensitive_check 关闭，查 salary、cost、budget 不弹 HITL。"
+        "示例用户 dba，挂研发部 dept_id=3。"
+        "【角色 manager 部门经理】可使用 run_query、list_tables、describe_table、search_knowledge_base、read_document。"
+        "可查全部业务表。employees 行级过滤字段为 dept_id，运行时改写 SQL，只返回本部门员工。"
+        "sensitive_check 开启，salary、cost、budget 需 HITL 批准。"
+        "用户周芳 zhoufang 销售部 1；萧一鸣 xiaoyiming 市场部 2；高勇 gaoyong 研发部 3；"
+        "林怡 linyi 财务部 4；梁明 liangming 人事部 5；卢杰 lujie 产品部 6。"
+        "【角色 analyst 数据分析师】可使用 run_query、list_tables、describe_table、search_knowledge_base、"
+        "read_document、run_hbase、generate_hbase_query。"
+        "表白名单为 departments、employees、products、customers、orders、ods_orders_hive、"
+        "dwd_user_events、dim_products_hive。无行级过滤。sensitive_check 开启。"
+        "用户 analyst，dept_id 为空，可跨部门看员工表，但敏感列仍要审批。"
+        "【角色 viewer 访客】可使用 list_tables、describe_table、search_knowledge_base、read_document。"
+        "不可使用 run_query，因此不能查数，只能看表结构和被允许的文档。"
+        "表白名单含 departments、products、customers、orders 及三张 Hive 模拟表，不含 employees。"
+        "文档过滤 docs_filter 为产品手册、部门介绍、销售制度。sensitive_check 关闭。"
+        "用户 viewer。"
+        "【角色 support 技术支持】可使用 run_query、list_tables、describe_table、search_knowledge_base、read_document。"
+        "表白名单仅 products、customers、orders。文档过滤为技术文档、产品手册。用户 support。"
+        "【文档分类】销售制度含提成与客户分级；产品手册含定价与退换；部门介绍含业务部门职责手册；"
+        "技术文档含 HBase、Hive 与业务库表字段说明书；数据安全含本手册与数据安全管理制度。"
+        "viewer 检索知识库时，技术文档与数据安全类会被过滤，即使向量召回也不会返回。"
+        "【HITL】SQL 路径敏感列为 salary、cost、budget；HBase 写操作为 put、delete、drop、truncate。"
+        "批准后从 Checkpointer 断点 resume。run_query 仅允许 SELECT。"
+        "【切换用户】CLI 使用 --user 指定 user_id，例如 db-agent --mode multi --user xiaoyiming。"
+        "默认用户可由 AGENT_DEFAULT_USER 配置，未配置时为 viewer。"
+    ),
+    "业务部门职责手册": (
+        "公司设六个一级部门，与 departments 表一一对应。编制与预算以表内 headcount、budget 为准。"
+        "【销售部】id=1，预算 100 万，编制 8 人，负责人周芳 user_id=zhoufang，角色 manager。"
+        "职责是签约、回款与客户关系。提成按产品类型计算，软件 8%、硬件 5%、服务 3%，"
+        "季度销售额超过 50 万上浮 2 个百分点，次月 10 号随工资发放。订单计入 orders.dept_id=1。"
+        "对 S 级客户配备专属客户经理。华东拓展是 2026 年 Q2 重点，目标新增 50 客户、营收增长 20%。"
+        "【市场部】id=2，预算 80 万，编制 6 人，负责人萧一鸣 user_id=xiaoyiming。"
+        "职责是品牌、活动与线索。常用产品为品牌设计套餐、市场调研报告。订单计入 dept_id=2。"
+        "活动线索需在 3 个工作日内交销售部跟进，逾期计入部门考核。"
+        "【研发部】id=3，预算 150 万，编制 10 人，负责人高勇 user_id=gaoyong。默认 DBA 用户也挂本部门。"
+        "职责是 SaaS 产品研发、定制开发与技术咨询交付。2026 Q1 目标 SaaS 3.0 上线，"
+        "Q3 启动 AI 功能并招聘 5 名 AI 工程师。数据分析平台与网络安全方案由研发协同交付。"
+        "【财务部】id=4，预算 40 万，编制 4 人，负责人林怡 user_id=linyi。"
+        "职责是预算、报销、对账与收入确认。订单金额以 orders.total 为准。"
+        "差旅住宿上限 400 元每晚，招待费单次人均不超过 300 元。超预算 10% 以内 VP 批，超过需 CEO。"
+        "【人事部】id=5，预算 35 万，编制 3 人，负责人梁明 user_id=liangming。"
+        "职责是招聘、考勤、绩效与编制。标准工时 9:00 到 18:00。绩效 S 级前 10% 奖金系数 1.5。"
+        "内推通过试用期奖励 5000 至 20000 元。员工查询走 employees 表，经理只能看本部门。"
+        "【产品部】id=6，预算 70 万，编制 5 人，负责人卢杰 user_id=lujie。"
+        "职责是产品规划、定价与版本节奏。定价口径见产品定价说明：企业版年费 50000，专业版 20000，基础版 5000。"
+        "定制开发 4000 元人天。产品主数据在 products 与 dim_products_hive。"
+        "【协作】跨部门对比销售额用 orders JOIN departments；看人效用员工数 headcount 或 employees 实有人数。"
+        "口径类问题先查制度文档再查数。访客 viewer 可以阅读本手册，但不能执行 run_query。"
+    ),
 }
 
 
@@ -239,7 +343,7 @@ _KNOWLEDGE_BASE = {
 # category 值对齐 entitlement 里 viewer/support 的 docs_filter 白名单：
 #   viewer = ["产品手册","部门介绍","销售制度"]  → 命中「产品手册」「销售制度」类
 #   support = ["技术文档","产品手册"]             → 命中「技术文档」「产品手册」类
-# 「部门介绍」暂无对应文档，是白名单里的死条目（or 关系，不影响结果）。
+# viewer 白名单含「部门介绍」；长文档 mockup 已补上《业务部门职责手册》。
 _DOC_CATEGORIES = {
     "销售提成制度": "销售制度",
     "客户分级标准": "销售制度",
@@ -260,6 +364,9 @@ _DOC_CATEGORIES = {
     "HBase操作参考": "技术文档",
     "Hive/Hue表结构参考": "技术文档",
     "HiveQL与Impala语法差异": "技术文档",
+    "业务库表字段说明书": "技术文档",
+    "Agent RBAC 权限手册": "数据安全",
+    "业务部门职责手册": "部门介绍",
 }
 
 
@@ -307,8 +414,8 @@ def _vector_search(query: str, top_k: int) -> list[dict]:
 
 
 @tool(description=(
-    "搜索公司知识库（规章制度、产品政策、战略文档）。"
-    "当用户问公司的提成怎么算、年假多少天、产品怎么定价等非数据库查询时调用。"
+    "搜索公司知识库（规章制度、产品政策、战略文档、表字段说明、RBAC 权限、部门职责）。"
+    "当用户问提成、年假、定价、某张表有哪些字段、某角色能查什么、某部门编制等非实时聚合查询时调用。"
     "不要用此 Tool 查销售数据、订单——那些在数据库里，用 run_query。"
     "返回 {results: [{title, content, score, category}], count}；无匹配时 hint 建议换关键词。"
 ))

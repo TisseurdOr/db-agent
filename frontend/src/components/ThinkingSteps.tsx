@@ -38,7 +38,7 @@ export default function ThinkingSteps({ steps }: Props) {
       <div
         className="steps-header"
         onClick={() => setCollapsed(!collapsed)}
-        style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#888", marginBottom: collapsed ? 0 : 8 }}
+        style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#888", marginBottom: collapsed ? 0 : 8 }}
       >
         <span style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0)", transition: "0.2s" }}>▼</span>
         <span>思考过程 ({steps.length} 步)</span>
@@ -63,7 +63,7 @@ function StepCard({ step }: { step: Step }) {
     step.status === "done" ? "#50b050" : "#666";
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color }}>
       <span style={{ fontWeight: "bold", minWidth: 16, textAlign: "center" }}>{icon}</span>
       <span style={{ color: "#aaa", minWidth: 72 }}>{label}</span>
       <span style={{ color: "#777", flex: 1 }}>{step.task?.slice(0, 50)}</span>

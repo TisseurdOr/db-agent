@@ -68,11 +68,22 @@ export interface Message {
   hitl?: InterruptData;
 }
 
+export interface RbacUser {
+  id: string;
+  name: string;
+  role: string;
+  role_name: string;
+  dept_id?: number | null;
+  dept_name?: string | null;
+}
+
 export interface ChatState {
   messages: Message[];
   isStreaming: boolean;
   datasource: string;
   sessionId: string;
+  userId: string;
+  enableDq: boolean;
   hitlActive: boolean;
   hitlData: InterruptData | null;
 }

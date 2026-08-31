@@ -1,12 +1,17 @@
 """结果分析 Tool：把 run_query 的原始行转成业务洞察 + 可视化建议。"""
 
+from datetime import date, datetime
+
 ANALYZE_RESULTS_TOOL = {
     "name": "analyze_results",
     "description": (
         "分析 run_query 返回的查询结果，生成排名、汇总和可视化建议。"
         "在拿到查询数据后、需要向用户解释排名或占比时调用。"
         "返回 JSON: {title, insight, ranking: [{rank, label, value, formatted, share_pct}], "
-        "total, total_formatted, chart_suggestion}；出错时返回 error 及 available（可用列名）。"
+        "total, total_formatted, chart_suggestion, field_properties, "
+        "suggested_charts: [{type, title, labels, values, reason}]}；"
+        "suggested_charts 每项可直接作为 render_chart 单图模式参数。"
+        "出错时返回 error 及 available（可用列名）。"
     ),
     "input_schema": {
         "type": "object",
@@ -63,6 +68,8 @@ def analyze_results(
             "hint": "请从 available 中选一个列作为 label_column 重试。",
         }
 
+    field_properties = _infer_field_properties(rows)
+
     # 转成可排序的 (label, value) 列表
     items = []
     for row in rows:
@@ -99,8 +106,9 @@ def analyze_results(
         gap = ranking[0]["value"] - ranking[1]["value"]
         insight += f" 领先第二名 ¥{gap:,.0f}。"
 
-    # 根据数据形状给图表建议
-    chart_suggestion = _suggest_chart(len(ranking), metric_column, label_column)
+    # 根据字段语义推荐多个图型（可直接喂 render_chart）
+    suggested_charts = _suggest_charts(field_properties, rows, metric_column, label_column, title)
+    chart_suggestion = suggested_charts[0] if suggested_charts else None
 
     return {
         "title": title,
@@ -109,6 +117,8 @@ def analyze_results(
         "total": total,
         "total_formatted": f"¥{total:,.0f}",
         "chart_suggestion": chart_suggestion,
+        "field_properties": field_properties,
+        "suggested_charts": suggested_charts,
     }
 
 
@@ -285,21 +295,125 @@ def _fmt_amount(val: float) -> str:
     return f"¥{val:,.0f}"
 
 
-def _suggest_chart(n: int, metric: str, label: str) -> dict:
-    """按结果行数推荐图表类型（给 Agent 写回复时参考）。"""
-    if n <= 1:
-        return {"type": "kpi", "reason": "单值结果，适合用大数字 KPI 展示"}
-    if n <= 8:
-        return {
-            "type": "bar",
-            "x": label,
-            "y": metric,
-            "reason": "类别不多，横向/纵向柱状图最清晰",
+MAX_POINTS = 10
+
+
+def _to_number(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_date(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day)
+    if isinstance(v, (int, float)):
+        return None
+    s = str(v).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d", "%Y-%m"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _infer_field_properties(rows: list[dict]) -> dict[str, dict]:
+    """推断每列语义类型（number/date/category/string），纯 Python 零 LLM。
+
+    是所有分析能力（排名/洞察/选图）的公共底座：数值列算 min/max/sum，
+    日期列算时间范围，类别列算基数，替代让 Agent 自己猜哪列是数值哪列是标签。
+    """
+    if not rows:
+        return {}
+    props: dict[str, dict] = {}
+    for col in rows[0].keys():
+        values = [r.get(col) for r in rows if r.get(col) is not None]
+        if not values:
+            props[col] = {"dtype": "empty", "nunique": 0}
+            continue
+        nunique = len(set(map(str, values)))
+        nums = [_to_number(v) for v in values]
+        if all(n is not None for n in nums):
+            props[col] = {
+                "dtype": "number",
+                "min": min(nums),
+                "max": max(nums),
+                "sum": sum(nums),
+                "nunique": nunique,
+            }
+            continue
+        parsed_dates = [_parse_date(v) for v in values]
+        if all(d is not None for d in parsed_dates):
+            props[col] = {
+                "dtype": "date",
+                "min": min(parsed_dates).isoformat(),
+                "max": max(parsed_dates).isoformat(),
+                "nunique": nunique,
+            }
+            continue
+        props[col] = {
+            "dtype": "category" if nunique / len(values) < 0.5 else "string",
+            "nunique": nunique,
         }
-    return {
-        "type": "bar",
-        "x": label,
-        "y": metric,
-        "reason": "类别较多，建议只展示 Top 10 柱状图，其余归入「其他」",
-        "limit": 10,
-    }
+    return props
+
+
+def _suggest_charts(props: dict, rows: list[dict], metric_col: str,
+                    label_col: str, title: str) -> list[dict]:
+    """按字段语义推荐多个图型，每项可直接喂 render_chart（type/title/labels/values）。
+
+    可视化最佳实践映射：日期→折线看趋势；离散类别→柱状对比；类别少→补一张占比饼图。
+    单值无图，靠 insight 文字说明即可。
+    """
+    pairs = []
+    for r in rows:
+        v = _to_number(r.get(metric_col))
+        if v is None:
+            continue
+        pairs.append((r.get(label_col), v))
+    if len(pairs) <= 1:
+        return []
+
+    label_dtype = props.get(label_col, {}).get("dtype", "string")
+    nunique = props.get(label_col, {}).get("nunique", len(pairs))
+    charts: list[dict] = []
+
+    if label_dtype == "date":
+        pairs.sort(key=lambda p: _parse_date(p[0]) or datetime.min)
+        charts.append({
+            "type": "line",
+            "title": f"{title} · 趋势",
+            "labels": [str(p[0]) for p in pairs],
+            "values": [p[1] for p in pairs],
+            "reason": "时间序列，折线图看趋势",
+        })
+    else:
+        pairs.sort(key=lambda p: p[1], reverse=True)
+        top = pairs[:MAX_POINTS]
+        truncated = "（已截取 Top 10）" if len(pairs) > MAX_POINTS else ""
+        charts.append({
+            "type": "bar",
+            "title": f"{title} · 对比",
+            "labels": [str(p[0]) for p in top],
+            "values": [p[1] for p in top],
+            "reason": f"离散类别，柱状图对比{truncated}",
+        })
+        if 2 <= nunique <= 8:
+            charts.append({
+                "type": "pie",
+                "title": f"{title} · 占比",
+                "labels": [str(p[0]) for p in top],
+                "values": [p[1] for p in top],
+                "reason": "类别较少，饼图看占比",
+            })
+    return charts

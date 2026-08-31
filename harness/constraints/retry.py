@@ -145,9 +145,15 @@ async def acall_with_retry(fn, *args, max_retries: int | None = None,
 
     for attempt in range(max_retries + 1):
         try:
-            result = fn(*args, **kwargs)
-            if inspect.isawaitable(result):
-                result = await result
+            if inspect.iscoroutinefunction(fn):
+                result = await fn(*args, **kwargs)
+            else:
+                # 同步 SDK（如 anthropic.Anthropic.messages.create）会阻塞事件循环，
+                # 导致 Web SSE 流冻结（事件积压到查询结束才 flush，前端看不到实时进度）。
+                # 放线程池执行，保持事件循环可运行。
+                result = await asyncio.to_thread(fn, *args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
             cb.record_success()
             return result
         except Exception as e:

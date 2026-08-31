@@ -6,7 +6,9 @@ import time
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
+from harness.constraints.entitlement import reset_request_user, set_request_user
 from harness.constraints.guardrails import guard_input
+from harness.memory.short_term_memory import ConversationManager
 from harness.observation.opik_tracing import (
     capture_opik_trace_id_for_graph,
     flush_opik,
@@ -37,22 +39,39 @@ class RunnerRegistry:
         session_id: str,
         client: Anthropic,
         model: str,
+        enable_data_quality: bool = False,
+        user_id: str = "viewer",
     ) -> MultiAgentRunner:
         now = time.monotonic()
         await self._sweep(now)
         entry = self._runners.get(session_id)
         if entry is None:
-            # Web 交互路径关闭首次 DQ：多一轮 Agent 显著拖慢首答；CLI/评测可自行开启
+            # 默认关闭 DQ（首答更快）；前端可按请求打开
             runner = await MultiAgentRunner.create(
                 client,
                 model=model,
-                enable_data_quality=False,
+                enable_data_quality=enable_data_quality,
                 thread_id=f"web-{session_id}",
             )
+            conversation = ConversationManager(client, session_id=session_id)
+            conversation.load()
+            runner._session_id = session_id
+            runner._conversation = conversation
             self._runners[session_id] = (runner, now)
         else:
             runner = entry[0]
+            # 同一会话内切换 DQ：打开时重置时效，保证下一次会扫
+            if enable_data_quality and not runner.enable_data_quality:
+                runner._dq_done = False
+                runner._dq_time = 0.0
+            runner.enable_data_quality = enable_data_quality
+            if getattr(runner, "_conversation", None) is None:
+                conversation = ConversationManager(client, session_id=session_id)
+                conversation.load()
+                runner._conversation = conversation
+            runner._session_id = session_id
             self._runners[session_id] = (runner, now)
+        runner._web_user_id = user_id  # StreamingRunner 执行时绑定 RBAC
         self._active = runner
         return runner
 
@@ -115,6 +134,39 @@ class StreamingRunner:
     def __init__(self, runner: MultiAgentRunner):
         self.runner = runner
 
+    def _short_term_summary(self) -> str:
+        conv = getattr(self.runner, "_conversation", None)
+        if conv is None:
+            return ""
+        try:
+            return conv.build_context() or ""
+        except Exception:
+            return ""
+
+    async def _commit_short_term(self, query: str, answer: str, trace_id: str = "") -> None:
+        """写入会话列表（Memory UI）+ ConversationManager 滑动窗口（下一轮注入）。"""
+        sid = getattr(self.runner, "_session_id", None) or "default"
+        try:
+            from server.endpoints.sessions import record_message
+            await record_message(sid, "user", query or "", trace_id=trace_id)
+            await record_message(sid, "assistant", answer or "", trace_id=trace_id)
+        except Exception:
+            pass
+        conv = getattr(self.runner, "_conversation", None)
+        if conv is None:
+            return
+        try:
+            await conv.add_message({"role": "user", "content": query or ""})
+            await conv.add_message({"role": "assistant", "content": answer or ""})
+            conv.save()
+        except Exception:
+            pass
+        try:
+            from harness.memory.preturn_recall import remember_turn
+            remember_turn(query or "", answer or "")
+        except Exception:
+            pass
+
     async def run_streaming(self, query: str, queue: asyncio.Queue) -> None:
         """Execute query and emit SSE events to queue.
 
@@ -126,6 +178,13 @@ class StreamingRunner:
             → [interrupt] (optional)
             → done
         """
+        token = set_request_user(getattr(self.runner, "_web_user_id", None))
+        try:
+            await self._run_streaming_impl(query, queue)
+        finally:
+            reset_request_user(token)
+
+    async def _run_streaming_impl(self, query: str, queue: asyncio.Queue) -> None:
         t_total = time.time()
 
         # ── Preprocessing ───────────────────────────────────────
@@ -138,6 +197,7 @@ class StreamingRunner:
             return
 
         await queue.put(("step_end", SSEEvent.step_end("preprocessing", "通过", time.time() - t_total)))
+        self.runner._last_query = query
 
         # ── 表列举快路径：有哪些表 → 本地列举；SQL / Hive 分开答 ──
         import re as _re
@@ -198,6 +258,7 @@ class StreamingRunner:
                     plan=plan,
                 ),
             ))
+            await self._commit_short_term(query, answer)
             return
 
         # ── Inject event queue into config ──────────────────────
@@ -207,7 +268,7 @@ class StreamingRunner:
                     "thread_id": self.runner.thread_id,
                     "_client": self.runner.client,
                     "_model": self.runner.model,
-                    "_trace": TraceContext(query),
+                    "_trace": TraceContext(query, thread_id=getattr(self.runner, "thread_id", None)),
                     "_router_cache": self.runner.router_cache,
                     "_task_manager": self.runner.task_manager,
                 }
@@ -216,12 +277,27 @@ class StreamingRunner:
         config = self.runner._current_config
         config["configurable"]["_event_queue"] = queue
 
+        # ── Pre-turn 长期记忆（对齐 CLI：Self-Query + 向量召回）──
+        recalled_text = ""
+        try:
+            from harness.memory.preturn_recall import ensure_memory_stack, recall_for_turn
+            ensure_memory_stack(self.runner.client)
+            bundle = await recall_for_turn(query, client=self.runner.client)
+            recalled_text = (
+                f"{bundle.meta_hint}{bundle.text}".strip()
+                if bundle.meta_hint else (bundle.text or "")
+            )
+            if recalled_text:
+                print(f"   📚 web pre-turn recall ({bundle.source}): {len(bundle.memories)} hits")
+        except Exception as e:
+            print(f"   [memory] web pre-turn recall skipped: {e}")
+
         # ── Build state and invoke graph ────────────────────────
         state = {
             "query": query,
             "messages": [{"role": "user", "content": query}],
-            "_recalled_memories": "",
-            "_conversation_summary": "",
+            "_recalled_memories": recalled_text,
+            "_conversation_summary": self._short_term_summary(),
             "_inject_dq": self.runner._should_inject_dq(),
             "plan": [],
             "results": {},
@@ -284,11 +360,12 @@ class StreamingRunner:
         if answer:
             await queue.put(("text_delta", SSEEvent.text_delta(answer, node="analysis")))
 
+        tid = trace.trace_id if trace else ""
         await queue.put((
             "done",
             SSEEvent.done(
                 total_elapsed=time.time() - t_total,
-                trace_id=trace.trace_id if trace else "",
+                trace_id=tid,
                 opik_trace_id=str(oid or (getattr(trace, "opik_trace_id", None) if trace else None) or ""),
                 sql=exec_info.get("sql", ""),
                 answer=answer,
@@ -298,9 +375,17 @@ class StreamingRunner:
                 tokens=int(exec_info.get("tokens", 0) or 0),
             ),
         ))
+        await self._commit_short_term(query, answer, trace_id=tid)
 
     async def resume_streaming(self, approved: bool, queue: asyncio.Queue) -> None:
         """Resume after HITL pause, emitting remaining events to queue."""
+        token = set_request_user(getattr(self.runner, "_web_user_id", None))
+        try:
+            await self._resume_streaming_impl(approved, queue)
+        finally:
+            reset_request_user(token)
+
+    async def _resume_streaming_impl(self, approved: bool, queue: asyncio.Queue) -> None:
         t_total = time.time()
 
         config = self.runner._current_config
@@ -341,11 +426,12 @@ class StreamingRunner:
         if answer:
             await queue.put(("text_delta", SSEEvent.text_delta(answer, node="analysis")))
 
+        tid = trace.trace_id if trace else ""
         await queue.put((
             "done",
             SSEEvent.done(
                 total_elapsed=time.time() - t_total,
-                trace_id=trace.trace_id if trace else "",
+                trace_id=tid,
                 opik_trace_id=str(oid or (getattr(trace, "opik_trace_id", None) if trace else None) or ""),
                 sql=exec_info.get("sql", ""),
                 answer=answer,
@@ -355,6 +441,8 @@ class StreamingRunner:
                 tokens=int(exec_info.get("tokens", 0) or 0),
             ),
         ))
+        query = getattr(self.runner, "_last_query", "") or ""
+        await self._commit_short_term(query, answer, trace_id=tid)
 
 
 def _extract_chart_data(result: dict) -> list[dict]:
@@ -375,58 +463,45 @@ def _extract_chart_data(result: dict) -> list[dict]:
     # Fallback: auto-generate chart from SQL query results
     sql_result_text = results.get("sql", "")
     if not charts and sql_result_text:
-        chart = _auto_chart_from_sql_result(sql_result_text)
-        if chart:
-            charts.append(chart)
+        charts.extend(_auto_chart_from_sql_result(sql_result_text))
 
     return charts
 
 
-def _auto_chart_from_sql_result(text: str) -> dict | None:
-    """Try to auto-generate a chart from a SQL agent result that contains tabular data."""
+def _auto_chart_from_sql_result(text: str) -> list[dict]:
+    """Try to auto-generate chart configs from a SQL agent result containing tabular data."""
     import json
     import re
 
-    # Look for structured data patterns in the result
-    # Try to find JSON with rows/count
     json_match = re.search(r'\{.*"rows"\s*:\s*\[.*?\].*\}', text, re.DOTALL)
     if json_match:
         try:
             data = json.loads(json_match.group(0))
             rows = data.get("rows", [])
             if rows and len(rows) > 1:
-                return _rows_to_chart(rows)
+                return _rows_to_charts(rows)
         except (json.JSONDecodeError, KeyError):
             pass
-    return None
+    return []
 
 
-def _rows_to_chart(rows: list[dict]) -> dict | None:
-    """Convert DB rows to a simple chart config."""
+def _rows_to_charts(rows: list[dict]) -> list[dict]:
+    """DB rows → 前端 ChartConfig 列表（复用 analysis 的字段语义推断 + 图型推荐）。"""
     if not rows:
-        return None
+        return []
 
-    keys = list(rows[0].keys())
-    # Find label column (string) and value column (numeric)
-    label_col = None
+    from harness.tools.analysis import _infer_field_properties, _suggest_charts
+
+    props = _infer_field_properties(rows)
     value_col = None
-    for k in keys:
-        if label_col is None and isinstance(rows[0].get(k), str):
-            label_col = k
-        if value_col is None and isinstance(rows[0].get(k), (int, float)):
-            value_col = k
+    label_col = None
+    for col, p in props.items():
+        if value_col is None and p["dtype"] == "number":
+            value_col = col
+        if label_col is None and p["dtype"] in ("string", "category", "date"):
+            label_col = col
 
     if label_col is None or value_col is None:
-        return None
+        return []
 
-    labels = [str(row.get(label_col, "")) for row in rows[:20]]
-    values = [float(row.get(value_col, 0) or 0) for row in rows[:20]]
-
-    chart_type = "bar" if len(labels) <= 10 else "bar"
-
-    return {
-        "type": chart_type,
-        "title": f"{value_col} by {label_col}",
-        "labels": labels,
-        "values": values,
-    }
+    return _suggest_charts(props, rows, value_col, label_col, f"{value_col} by {label_col}")

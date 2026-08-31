@@ -30,7 +30,7 @@ export default function AnswerText({ text, isStreaming }: Props) {
   const display = text.slice(0, isStreaming ? visibleLen : text.length);
 
   return (
-    <div className="answer-text" style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
+    <div className="answer-text" style={{ whiteSpace: "pre-wrap", lineHeight: 1.6, fontSize: 13 }}>
       {display}
       {isStreaming && visibleLen < text.length && (
         <span className="cursor-blink">▌</span>

@@ -159,12 +159,18 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
             else:
                 router_msgs.append({"role": "user", "content": state["query"]})
 
+            from harness.memory.preturn_recall import format_memory_for_router
+            mem_block = format_memory_for_router(state.get("_recalled_memories") or "")
+            router_system = ROUTER_PROMPT
+            if mem_block:
+                router_system = f"{ROUTER_PROMPT}\n\n{mem_block}"
+
             t_llm = time.time()
             resp = await acall_with_retry(
                 client.messages.create,
                 model=model,
                 max_tokens=300,
-                system=ROUTER_PROMPT,
+                system=router_system,
                 messages=router_msgs,
             )
             llm_latency = time.time() - t_llm
@@ -240,8 +246,20 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     if task_manager is not None and plan:
         task_manager.materialize_from_plan(plan, query=state.get("query", ""))
 
+    # mid-flight：Router 扩写 task 后按新语义再召长期记忆（Self-Query）
+    from harness.memory.preturn_recall import maybe_rerecall
+    recalled = await maybe_rerecall(
+        state.get("query", ""),
+        plan,
+        state.get("_recalled_memories") or "",
+        client=client,
+    )
+
     # _replan_feedback 用完即清——留着会让下一轮 Router 误以为又失败了
-    return {"plan": plan, "next": plan[0]["agent"], "_stats": stats, "_replan_feedback": ""}
+    out = {"plan": plan, "next": plan[0]["agent"], "_stats": stats, "_replan_feedback": ""}
+    if recalled != (state.get("_recalled_memories") or ""):
+        out["_recalled_memories"] = recalled
+    return out
 CLARIFY_PROMPT = """用户问了一个模糊的问题："{query}"
 
 当前数据库中有以下表和相关上下文。请生成 2-3 个简短、具体的澄清问题，帮助理解用户的真实意图。
@@ -285,11 +303,23 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
         "message": "这个问题比较模糊，请帮我确认一下：",
     })
 
-    # 用户回复后 resume —— 用澄清后的 query 重新路由
+    # 用户回复后 resume —— 用澄清后的 query 重新路由，并按新语义再召记忆
     clarified = response.get("clarified_query", "") if isinstance(response, dict) else ""
     if clarified:
         print(f"   💬 用户澄清: {clarified[:80]}")
-        return {"query": clarified, "next": "router"}
+        from harness.memory.preturn_recall import maybe_rerecall
+        recalled = await maybe_rerecall(
+            state.get("query", ""),
+            state.get("plan"),
+            state.get("_recalled_memories") or "",
+            client=client,
+            clarified_query=clarified,
+        )
+        return {
+            "query": clarified,
+            "next": "router",
+            "_recalled_memories": recalled,
+        }
 
     return {"next": "router"}
 async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> dict:
@@ -347,7 +377,9 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     except Exception:
         pass
 
-    context = "\n\n".join(p for p in (schema_ctx, fewshot) if p)
+    from harness.memory.preturn_recall import format_memory_for_sql
+    mem_ctx = format_memory_for_sql(state.get("_recalled_memories") or "")
+    context = "\n\n".join(p for p in (schema_ctx, fewshot, mem_ctx) if p)
     result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL", context=context, config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ SQL Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")

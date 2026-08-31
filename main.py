@@ -20,7 +20,6 @@ import asyncio
 import difflib
 import os
 import sys
-from datetime import datetime
 
 from dotenv import load_dotenv
 
@@ -32,23 +31,15 @@ from db.seed import init_db
 from harness.context.schema_discovery import get_schema_discovery
 from harness.context.system_prompt import build_system_prompt
 from harness.context.template_matcher import get_template_matcher, init_metric_registry
-from harness.memory.long_term_memory import RAGPipeline
-from harness.memory.memory_controller import (
-    is_chitchat,
-    is_meta_memory,
-    is_meta_question,
-    should_remember,
+from harness.memory.preturn_recall import (
+    ensure_memory_stack,
+    recall_for_turn,
+    remember_turn,
 )
 from harness.memory.short_term_memory import ConversationManager
-from harness.memory.vector_store import VectorMemory
 from harness.orchestration.single.tools_bundle import TOOL_HANDLERS, TOOLS
 from harness.tools.hbase import _seed_hbase_store
-from harness.tools.knowledge import (
-    build_knowledge_base_index,
-    set_llm_client,
-    set_rag_pipeline,
-    set_vector_memory,
-)
+from harness.tools.knowledge import build_knowledge_base_index
 
 # 用户输入
 #   → main.py: 闲聊跳过 / 元问题走 list_recent / 正常走向量 recall
@@ -59,7 +50,7 @@ from harness.tools.knowledge import (
 #           → node_analysis: 读向量记忆 + messages + 中间结果 → 综合回答
 #           → 返回 {final_answer, messages: [AIMessage]}
 #       → Checkpointer 自动存 state 到 agent_state.db
-#   → main.py: vector_memory.remember(Q&A pair)
+#   → main.py: remember_turn(Q&A pair)
 #   → 打印 token 日志
 
 # 退出指令。Agent 链路没有"结束进程"的能力——模型只能回一句"会话结束"，
@@ -155,14 +146,9 @@ async def main():
     conversation = ConversationManager(client, session_id=args.user)
     conversation.load()  # 恢复上一轮会话（跨进程/重启不丢）
 
-    # 长期记忆：VectorMemory（remember / recall）。
-    # pre-turn recall: 每轮自动注入 System Prompt 做上下文 priming
-    # search_memory Tool: Agent 可主动调用，实现 Agentic RAG
-    vector_memory = VectorMemory(collection_name="conversations")
-    set_vector_memory(vector_memory)  # 注入给 search_memory Tool
-    set_llm_client(client)            # Self-Query 拆解用
-    rag_pipeline = RAGPipeline(vector_db=vector_memory, llm_client=client)
-    set_rag_pipeline(rag_pipeline)    # HyDE + LLM rerank 注入 search_memory
+    # 长期记忆：VectorMemory + Self-Query / RAG（CLI 与 Web 共用 ensure_memory_stack）
+    # pre-turn recall → multi 注入 Router/SQL/Analysis；search_memory Tool 可中途再检索
+    ensure_memory_stack(client)
     # 知识库：_KNOWLEDGE_BASE 索引进向量库（search_knowledge_base 语义检索用）。
     # embedding 未配置时降级到关键词检索，不阻断启动。
     try:
@@ -213,35 +199,12 @@ async def main():
                 print("没识别出这条输入。想退出请输入 quit，或重新描述你的问题。")
                 continue
 
-            # 记忆检索：对话开始时先 recall，再把结果注入本轮 System Prompt。
-            # 闲聊跳过，避免无意义 embedding。
-            # 元问题（"刚才查了什么"）走时间倒序——语义检索对这类 query 必然失败。
-            if is_chitchat(user_input):
-                memories = []
-            elif is_meta_question(user_input):
-                # 按时间倒序；丢掉元问答自身，只保留最近业务问答
-                memories = [
-                    m for m in vector_memory.list_recent(limit=20)
-                    if not is_meta_memory(m.get("text", ""))
-                ][:3]
-            else:
-                try:
-                    memories = await rag_pipeline.retrieve(
-                        user_input, top_k=3,
-                        use_hyde=True, use_rerank=True,
-                    )
-                except Exception as e:
-                    print(f"[memory] 向量检索(含 HyDE+rerank)失败，退回纯向量: {e}")
-                    memories = vector_memory.recall(user_input, top_k=3)
-                # 分数阈值：相似度 < 0.3 的结果不注入，避免噪声误导模型
-                memories = [m for m in memories if m.get("score", 0) >= 0.3]
-            memories_text = "\n\n".join(m["text"] for m in memories)
-            meta_hint = ""
-            if is_meta_question(user_input) and memories:
-                meta_hint = (
-                    "\n[提示] 用户在问「上一次/刚才问了什么」。"
-                    "请以下面时间最近的一条业务问答为准回答，不要编造更早的话题。\n"
-                )
+            # 记忆检索：pre-turn Self-Query / 向量召回（与 Web 共用 recall_for_turn）
+            bundle = await recall_for_turn(user_input, client=client)
+            memories_text = bundle.text
+            meta_hint = bundle.meta_hint
+            if bundle.memories:
+                print(f"[memory] pre-turn recall ({bundle.source}): {len(bundle.memories)} hits")
 
             # ── 模板优先匹配：命中则注入预填 SQL 到上下文，LLM 可选用或覆盖 ──
             template_matcher = get_template_matcher()
@@ -272,15 +235,18 @@ async def main():
 
             # ── 执行 Agent ──
             # multi 模式：走 LangGraph 多 Agent 编排（Router → SQL/Strategy/DQ → Analysis）。
-            #   向量记忆通过 recalled_memories 参数传入，由 node_analysis 注入 Analysis Agent 上下文。
+            #   向量记忆通过 recalled_memories 注入 Router/SQL/Analysis；改写后 mid-flight 再召。
             # single 模式：走 streaming_agent 单 Agent loop（tool 调用 + cache_control）。
             if args.mode == "multi":
                 # 短期记忆压缩：ConversationManager 把超窗口消息压成摘要，
                 # 注入 node_analysis 作为 Layer 1 上下文（_conversation_summary）。
                 context = conversation.build_context()
+                recalled_for_multi = (
+                    f"{meta_hint}{memories_text}".strip() if meta_hint else memories_text
+                )
                 result = await multi_runner.run(
                     user_input,
-                    recalled_memories=memories_text,
+                    recalled_memories=recalled_for_multi,
                     conversation_summary=context,
                 )
 
@@ -324,12 +290,7 @@ async def main():
             # 长期记忆（VectorMemory）：两种模式共用——
             #   把本轮问答写入 ChromaDB，下次相关查询时以向量召回方式注入 System Prompt。
             #   元问题（"刚才问了什么"）不写——避免污染向量库。
-            if should_remember(user_input):
-                vector_memory.remember(
-                    content=f"问: {user_input}\n答: {result}",
-                    memory_type="conversation",
-                    metadata={"year": str(datetime.now().year)},
-                )
+            remember_turn(user_input, result if isinstance(result, str) else str(result))
             # Token 日志：两种模式共用 ConversationManager 的估算
             est = conversation.token_estimate()
             checkpoint_info = ""

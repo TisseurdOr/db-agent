@@ -20,11 +20,7 @@ export default function FeedbackButtons({
   onFeedback,
 }: Props) {
   if (feedbackGiven) {
-    return (
-      <div style={{ fontSize: 12, color: "#888", marginTop: 12 }}>
-        ✓ 感谢反馈
-      </div>
-    );
+    return <div className="fb-thanks">✓ 感谢反馈</div>;
   }
 
   const submit = (rating: "up" | "down") => {
@@ -46,25 +42,11 @@ export default function FeedbackButtons({
   };
 
   return (
-    <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-      <button
-        onClick={() => submit("up")}
-        style={{
-          background: "none", border: "1px solid #444", borderRadius: 6,
-          padding: "4px 12px", cursor: "pointer", fontSize: 16, color: "#ddd",
-        }}
-        title="有用"
-      >
+    <div className="fb-row">
+      <button type="button" className="fb-btn" onClick={() => submit("up")} title="有用">
         👍
       </button>
-      <button
-        onClick={() => submit("down")}
-        style={{
-          background: "none", border: "1px solid #444", borderRadius: 6,
-          padding: "4px 12px", cursor: "pointer", fontSize: 16, color: "#ddd",
-        }}
-        title="没用"
-      >
+      <button type="button" className="fb-btn" onClick={() => submit("down")} title="没用">
         👎
       </button>
     </div>

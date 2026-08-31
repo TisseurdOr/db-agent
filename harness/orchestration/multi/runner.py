@@ -186,7 +186,7 @@ class MultiAgentRunner:
             conversation_summary: ConversationManager 压缩的早期对话摘要（注入 node_analysis）
         """
         # 每个请求创建一个 TraceContext——跟着 configurable 在节点间流转
-        trace = TraceContext(query)
+        trace = TraceContext(query, thread_id=self.thread_id)
         annotate_opik(metadata={
             "recalled_memories_present": bool(recalled_memories),
             "conversation_summary_present": bool(conversation_summary),

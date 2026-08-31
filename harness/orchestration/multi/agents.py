@@ -14,7 +14,7 @@ from harness.tools.analysis import (
 from harness.tools.chart import render_chart
 from harness.tools.hbase import generate_hbase_query, run_hbase
 from harness.tools.hive import search_hive_syntax
-from harness.tools.knowledge import search_knowledge_base
+from harness.tools.knowledge import search_knowledge_base, search_memory
 from harness.tools.metrics import lookup_metric
 from harness.tools.query import RUN_QUERY_TOOL, run_query
 from harness.tools.schema import (
@@ -30,19 +30,22 @@ from harness.tools.schema import (
 
 # ── SQL Agent: 只查数据 ──
 
-SQL_AGENT_PROMPT = """你是 SQL Agent。你只能做四件事：
+SQL_AGENT_PROMPT = """你是 SQL Agent。你主要做五件事：
 1. discover_relevant_schema — 根据查询意图智能检索相关表和字段（优先调用）
 2. list_tables — 列出所有表名
 3. describe_table — 查看表结构（列名、类型）
 4. run_query — 在 SQLite 上执行 SELECT（只读）
+5. search_memory — 检索长期对话记忆（Self-Query）；当任务含「上次/之前/刚才」或上下文口径不足时调用
 
 你不会做数据分析、不会解释趋势、不会给业务建议。
 你的唯一职责：准确理解查询意图，写出正确的 SQL，返回查询结果。
 
 操作顺序：
+- 若上下文已有 [历史口径/指代消解]，优先按其中的地区/状态/时间口径写 SQL
 - 若上下文已有 [相关表结构已预检索]，优先直接据此写 SQL 并 run_query（不要重复 discover）
 - 否则先调 discover_relevant_schema 获取最相关的表结构
 - 如果 schema 不够，再调 describe_table 补充
+- 指代不清或需要跨会话口径时调 search_memory，再写 SQL
 - 最后调 run_query 执行
 
 如果上下文里有 [相似问题的已验证 SQL 参考]：优先模仿其中的表连接方式、
@@ -61,8 +64,17 @@ SQL 报错时的自愈协议（最多自动重试 2 次）：
 sql_agent = ConfiguredAgent(
     name="sql",
     system_prompt=SQL_AGENT_PROMPT,
-    tools=[DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL],
-    handlers={"discover_relevant_schema": discover_relevant_schema, "list_tables": list_tables, "describe_table": describe_table, "run_query": run_query},
+    tools=[
+        DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL,
+        search_memory.tool_schema,
+    ],
+    handlers={
+        "discover_relevant_schema": discover_relevant_schema,
+        "list_tables": list_tables,
+        "describe_table": describe_table,
+        "run_query": run_query,
+        "search_memory": search_memory,
+    },
 )
 
 
@@ -71,7 +83,8 @@ sql_agent = ConfiguredAgent(
 ANALYSIS_AGENT_PROMPT = """你是数据分析师 Agent。你不会写 SQL、不会查数据库。
 上游 SQL/Strategy Agent 的结果会作为 context 注入——直接基于这些结果分析，不要说「我无法查询数据库」。
 
-你只会用 analyze_results、compare_periods 分析数据，以及用 render_chart 生成图表。
+你可用 analyze_results、compare_periods 分析数据，用 render_chart 生成图表；
+当注入的 [历史相关对话] 不够、或用户追问跨会话口径时，可调 search_memory 再检索。
 
 你的价值：
 - 从数字里看出规律和异常（趋势、排名、分布）
@@ -86,8 +99,16 @@ ANALYSIS_AGENT_PROMPT = """你是数据分析师 Agent。你不会写 SQL、不�
 analysis_agent = ConfiguredAgent(
     name="analysis",
     system_prompt=ANALYSIS_AGENT_PROMPT,
-    tools=[ANALYZE_RESULTS_TOOL, COMPARE_PERIODS_TOOL, render_chart.tool_schema],
-    handlers={"analyze_results": analyze_results, "compare_periods": compare_periods, "render_chart": render_chart},
+    tools=[
+        ANALYZE_RESULTS_TOOL, COMPARE_PERIODS_TOOL, render_chart.tool_schema,
+        search_memory.tool_schema,
+    ],
+    handlers={
+        "analyze_results": analyze_results,
+        "compare_periods": compare_periods,
+        "render_chart": render_chart,
+        "search_memory": search_memory,
+    },
 )
 
 

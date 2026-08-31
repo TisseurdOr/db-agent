@@ -14,7 +14,10 @@ type Action =
   | { type: "RESUME" }
   | { type: "CANCEL_LAST_STREAM" }
   | { type: "FEEDBACK"; messageId: string; rating: "up" | "down" }
-  | { type: "SET_DATASOURCE"; datasource: string };
+  | { type: "SET_DATASOURCE"; datasource: string }
+  | { type: "SET_USER_ID"; userId: string }
+  | { type: "SET_ENABLE_DQ"; enableDq: boolean }
+  | { type: "NEW_CHAT"; sessionId: string };
 
 function newId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -217,16 +220,44 @@ function chatReducer(state: ChatState, action: Action): ChatState {
       return { ...state, datasource: action.datasource };
     }
 
+    case "SET_USER_ID": {
+      return { ...state, userId: action.userId };
+    }
+
+    case "SET_ENABLE_DQ": {
+      return { ...state, enableDq: action.enableDq };
+    }
+
+    case "NEW_CHAT": {
+      return {
+        ...state,
+        messages: [],
+        isStreaming: false,
+        sessionId: action.sessionId,
+        hitlActive: false,
+        hitlData: null,
+      };
+    }
+
     default:
       return state;
   }
+}
+
+function newSessionId(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID().slice(0, 8);
+  }
+  return `s-${Date.now().toString(36)}`;
 }
 
 const initialState: ChatState = {
   messages: [],
   isStreaming: false,
   datasource: "sqlite",
-  sessionId: "default",
+  sessionId: newSessionId(),
+  userId: "viewer",
+  enableDq: false,
   hitlActive: false,
   hitlData: null,
 };
@@ -317,6 +348,18 @@ export function useChat() {
     dispatch({ type: "SET_DATASOURCE", datasource: ds });
   }, []);
 
+  const setUserId = useCallback((userId: string) => {
+    dispatch({ type: "SET_USER_ID", userId });
+  }, []);
+
+  const setEnableDq = useCallback((enableDq: boolean) => {
+    dispatch({ type: "SET_ENABLE_DQ", enableDq });
+  }, []);
+
+  const newChat = useCallback(() => {
+    dispatch({ type: "NEW_CHAT", sessionId: newSessionId() });
+  }, []);
+
   return {
     state,
     handleSSEEvent,
@@ -327,5 +370,8 @@ export function useChat() {
     giveFeedback,
     resume,
     setDatasource,
+    setUserId,
+    setEnableDq,
+    newChat,
   };
 }

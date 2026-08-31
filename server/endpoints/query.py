@@ -16,6 +16,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from harness.constraints.entitlement import reset_request_user, set_request_user
 from server.main import DEFAULT_MODEL, get_client
 from server.runner_wrapper import StreamingRunner, runner_registry
 from server.sse import SSEEvent, format_sse
@@ -37,6 +38,8 @@ class QueryRequest(BaseModel):
     session_id: str = "default"
     datasource: str = "sqlite"
     model: str | None = None
+    user_id: str = "viewer"  # RBAC 用户（对应 agent_users）
+    enable_dq: bool = False  # 是否注入 DataQuality Agent
 
 
 class ResumeRequest(BaseModel):
@@ -92,43 +95,54 @@ async def _stream_query(request: Request, req: QueryRequest, query_id: str,
     """单次查询的完整 SSE 事件流：先推 connected → 创建 runner → 后台执行 → 断连感知转发。"""
     queue: asyncio.Queue = asyncio.Queue()
     model = req.model or DEFAULT_MODEL
+    user_token = set_request_user(req.user_id)
 
     # 先推首包，避免冷启动 create runner 堵住 TTFF
-    yield format_sse("connected", {"query_id": query_id, "session_id": req.session_id})
+    yield format_sse("connected", {
+        "query_id": query_id,
+        "session_id": req.session_id,
+        "user_id": req.user_id,
+        "enable_dq": req.enable_dq,
+    })
     t_init = time.time()
     yield format_sse("step_start", SSEEvent.step_start("init", "初始化会话"))
 
-    runner = await registry.get_or_create(
-        session_id=req.session_id,
-        client=client,
-        model=model,
-    )
-
-    yield format_sse(
-        "step_end",
-        SSEEvent.step_end("init", "就绪", time.time() - t_init),
-    )
-
-    # run_streaming / resume_streaming 在 StreamingRunner 上（包装 MultiAgentRunner 发 SSE 事件），
-    # 不能直接在 MultiAgentRunner 上调——回归：此前漏掉包装直接调 runner.run_streaming 必崩。
-    streaming = StreamingRunner(runner)
-    bg_task = asyncio.create_task(
-        _run_and_collect(lambda: streaming.run_streaming(req.query, queue), queue)
-    )
-    state: dict = {}
     try:
-        async for chunk in _drain_and_stream(queue, request, state):
-            yield chunk
-        # 正常结束：等后台任务收尾；断连则跳过（finally 里会取消）
-        if state.get("completed") and not bg_task.done():
-            await bg_task
-    finally:
-        # 断连/异常：取消后台 Agent 任务，避免孤儿任务继续烧 token
-        if not bg_task.done():
-            bg_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+        runner = await registry.get_or_create(
+            session_id=req.session_id,
+            client=client,
+            model=model,
+            enable_data_quality=req.enable_dq,
+            user_id=req.user_id,
+        )
+
+        yield format_sse(
+            "step_end",
+            SSEEvent.step_end("init", "就绪", time.time() - t_init),
+        )
+
+        # run_streaming / resume_streaming 在 StreamingRunner 上（包装 MultiAgentRunner 发 SSE 事件），
+        # 不能直接在 MultiAgentRunner 上调——回归：此前漏掉包装直接调 runner.run_streaming 必崩。
+        streaming = StreamingRunner(runner)
+        bg_task = asyncio.create_task(
+            _run_and_collect(lambda: streaming.run_streaming(req.query, queue), queue)
+        )
+        state: dict = {}
+        try:
+            async for chunk in _drain_and_stream(queue, request, state):
+                yield chunk
+            # 正常结束：等后台任务收尾；断连则跳过（finally 里会取消）
+            if state.get("completed") and not bg_task.done():
                 await bg_task
-        registry.touch(req.session_id)  # 保留 runner 供 HITL resume
+        finally:
+            # 断连/异常：取消后台 Agent 任务，避免孤儿任务继续烧 token
+            if not bg_task.done():
+                bg_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bg_task
+            registry.touch(req.session_id)  # 保留 runner 供 HITL resume
+    finally:
+        reset_request_user(user_token)
 
 
 async def _stream_resume(request: Request, req: ResumeRequest, registry) -> AsyncIterator[str]:

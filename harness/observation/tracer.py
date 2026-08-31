@@ -105,9 +105,9 @@ class Span:
 class TraceContext:
     """一次查询的完整追踪。跟着 state 在节点间流转。"""
 
-    __slots__ = ("trace_id", "query", "started_at", "finished_at", "spans", "blocked_by", "opik_trace_id")
+    __slots__ = ("trace_id", "query", "started_at", "finished_at", "spans", "blocked_by", "opik_trace_id", "thread_id")
 
-    def __init__(self, query: str = ""):
+    def __init__(self, query: str = "", thread_id: str | None = None):
         # trace_id: 短 ID，方便肉眼识别（如 "20260721-a3f2"）
         short_id = uuid.uuid4().hex[:4]
         date_str = datetime.now().strftime("%Y%m%d")
@@ -118,6 +118,7 @@ class TraceContext:
         self.spans: list[Span] = []
         self.blocked_by: str | None = None  # 如果被护栏拦截，记录是哪一层
         self.opik_trace_id: str | None = None  # Opik UUID when available
+        self.thread_id = thread_id  # LangGraph / web session thread
 
     @property
     def elapsed(self) -> float:
@@ -168,6 +169,7 @@ class TraceContext:
         return {
             "trace_id": self.trace_id,
             "opik_trace_id": self.opik_trace_id,
+            "thread_id": self.thread_id,
             "query": self.query,
             "started_at": datetime.fromtimestamp(self.started_at).isoformat(),
             "elapsed": round(self.elapsed, 3),

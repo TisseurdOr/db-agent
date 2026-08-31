@@ -28,7 +28,7 @@ export default function ChatInput({ onSend, disabled }: Props) {
   };
 
   return (
-    <div className="chat-input" style={{ display: "flex", gap: 8, padding: "12px 16px", borderTop: "1px solid #333" }}>
+    <div className="chat-input chat-input-bar">
       <textarea
         ref={ref}
         value={text}
@@ -37,21 +37,13 @@ export default function ChatInput({ onSend, disabled }: Props) {
         placeholder="输入查询，如「华东地区上个月销售额最高的产品」"
         disabled={disabled}
         rows={2}
-        style={{
-          flex: 1, resize: "none", padding: "10px 14px", borderRadius: 10,
-          border: "1px solid #444", background: "#1a1a2e", color: "#ddd",
-          fontSize: 14, fontFamily: "inherit", outline: "none",
-        }}
+        className="chat-input-ta"
       />
       <button
+        type="button"
+        className="chat-input-send"
         onClick={handleSend}
         disabled={disabled || !text.trim()}
-        style={{
-          padding: "8px 20px", borderRadius: 10, border: "none",
-          background: disabled ? "#333" : "#4a6cf7", color: "#fff",
-          fontSize: 14, fontWeight: 600, cursor: disabled ? "not-allowed" : "pointer",
-          whiteSpace: "nowrap",
-        }}
       >
         发送
       </button>

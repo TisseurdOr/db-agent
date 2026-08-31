@@ -84,6 +84,30 @@ def test_analyze_results_ranking():
     assert "chart_suggestion" in result
 
 
+def test_analyze_results_semantic_charts():
+    """字段语义推断：数值列自动识别，日期列给折线，类别列给柱状+占比。"""
+    # 类别场景 → bar + pie
+    rows = [
+        {"name": "销售部", "total": 380000},
+        {"name": "市场部", "total": 414000},
+        {"name": "研发部", "total": 98000},
+        {"name": "财务部", "total": 60000},
+    ]
+    result = analyze_results(rows, "total", "name", "各部门销售额")
+    assert result["field_properties"]["total"]["dtype"] == "number"
+    types = [c["type"] for c in result["suggested_charts"]]
+    assert "bar" in types and "pie" in types
+
+    # 日期场景 → line
+    rows2 = [
+        {"month": "2026-01", "total": 100},
+        {"month": "2026-02", "total": 150},
+    ]
+    result2 = analyze_results(rows2, "total", "month", "月度趋势")
+    assert result2["field_properties"]["month"]["dtype"] == "date"
+    assert result2["suggested_charts"][0]["type"] == "line"
+
+
 def test_compare_periods_growth():
     """同比/环比: 市场部增长 50%，研发部下滑 20%。"""
     p1 = [
@@ -119,6 +143,17 @@ def test_search_knowledge_base_no_match():
     assert result.get("hint") is not None
 
 
+def test_search_knowledge_base_longform_docs():
+    """长文档 mockup：表字段 / RBAC / 部门介绍可被关键词命中。"""
+    schema = search_knowledge_base("orders 表字段 total 口径")
+    assert any(r["title"] == "业务库表字段说明书" for r in schema["results"])
+    rbac = search_knowledge_base("viewer 不可使用 run_query")
+    assert any(r["title"] == "Agent RBAC 权限手册" for r in rbac["results"])
+    dept = search_knowledge_base("zhoufang 编制 8")
+    assert any(r["title"] == "业务部门职责手册" for r in dept["results"])
+    assert all(r["category"] == "部门介绍" for r in dept["results"] if r["title"] == "业务部门职责手册")
+
+
 def test_search_knowledge_base_vector_semantic():
     """向量索引就绪时走向量语义检索（analyst 无 docs_filter，看全部）。"""
     import harness.tools.knowledge as kb
@@ -136,7 +171,7 @@ def test_search_knowledge_base_vector_semantic():
 
 
 def test_search_knowledge_base_filter_docs(monkeypatch):
-    """viewer 的 docs_filter 过滤掉技术文档类，只留产品手册/销售制度。"""
+    """viewer 的 docs_filter 过滤掉技术文档类，只留产品手册/销售制度/部门介绍。"""
     import harness.tools.knowledge as kb
     from harness.tools.knowledge import build_knowledge_base_index
     from tests.fake_embedding import fake_embedding
@@ -146,7 +181,7 @@ def test_search_knowledge_base_filter_docs(monkeypatch):
     try:
         result = search_knowledge_base("HBase scan 命令", top_k=10)
         assert result["count"] > 0
-        assert all(r["category"] in ("产品手册", "销售制度") for r in result["results"])
+        assert all(r["category"] in ("产品手册", "销售制度", "部门介绍") for r in result["results"])
     finally:
         kb._kb_memory.drop()
         kb._kb_memory = None

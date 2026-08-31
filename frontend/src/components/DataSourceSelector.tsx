@@ -4,23 +4,18 @@ interface Props {
 }
 
 const SOURCES = [
-  { value: "sqlite", label: "📊 Demo 数据库 (SQLite)" },
-  { value: "csv", label: "📁 上传 CSV" },
+  { value: "sqlite", label: "📊 Demo database (SQLite)" },
+  { value: "csv", label: "📁 Upload CSV" },
 ];
 
 export default function DataSourceSelector({ datasource, onChange }: Props) {
   return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ fontSize: 12, color: "#888", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>
-        数据源
-      </div>
+    <div className="side-ctl">
+      <div className="side-ctl-label">Data source</div>
       {SOURCES.map((s) => (
         <label
           key={s.value}
-          style={{
-            display: "flex", alignItems: "center", gap: 8, padding: "6px 0",
-            cursor: "pointer", fontSize: 13, color: datasource === s.value ? "#4a6cf7" : "#aaa",
-          }}
+          className={`side-radio ${datasource === s.value ? "on" : ""}`}
         >
           <input
             type="radio"

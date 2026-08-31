@@ -14,37 +14,18 @@ export default function MessageBubble({ message, sessionId, onFeedback }: Props)
   const isUser = message.role === "user";
 
   return (
-    <div
-      className={`message ${isUser ? "user" : "assistant"}`}
-      style={{
-        display: "flex", gap: 12, padding: "12px 0",
-        flexDirection: isUser ? "row-reverse" : "row",
-      }}
-    >
-      <div
-        style={{
-          width: 32, height: 32, borderRadius: "50%",
-          background: isUser ? "#4a6cf7" : "#50b050",
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 16, flexShrink: 0, color: "#fff",
-        }}
-      >
+    <div className={`message msg-row ${isUser ? "user" : "assistant"}`}>
+      <div className={`msg-avatar ${isUser ? "user" : "assistant"}`}>
         {isUser ? "U" : "A"}
       </div>
-      <div
-        style={{
-          maxWidth: "80%", padding: "12px 16px", borderRadius: 14,
-          background: isUser ? "#2a3a6e" : "#1e1e30",
-          border: `1px solid ${isUser ? "#3a4f9e" : "#333"}`,
-        }}
-      >
+      <div className={`msg-bubble ${isUser ? "user" : "assistant"}`}>
         {isUser ? (
-          <div style={{ whiteSpace: "pre-wrap" }}>{message.content}</div>
+          <div className="msg-text">{message.content}</div>
         ) : (
           <>
             <ThinkingSteps steps={message.steps} />
             {(message.totalTokens || 0) > 0 || (message.totalElapsed || 0) > 0 ? (
-              <div style={{ fontSize: 11, color: "#666", margin: "4px 0 8px" }}>
+              <div className="msg-meta">
                 {(message.totalElapsed || 0) > 0 && (
                   <span>
                     耗时{" "}
@@ -54,14 +35,14 @@ export default function MessageBubble({ message, sessionId, onFeedback }: Props)
                   </span>
                 )}
                 {(message.totalTokens || 0) > 0 && (
-                  <span style={{ marginLeft: 10 }}>Token {message.totalTokens}</span>
+                  <span className="msg-meta-gap">Token {message.totalTokens}</span>
                 )}
                 {message.cancelled && (
-                  <span style={{ marginLeft: 10, color: "#e08040" }}>已取消</span>
+                  <span className="msg-meta-gap msg-warn">已取消</span>
                 )}
               </div>
             ) : message.cancelled ? (
-              <div style={{ fontSize: 11, color: "#e08040", margin: "4px 0 8px" }}>已取消</div>
+              <div className="msg-meta msg-warn">已取消</div>
             ) : null}
             {message.content && (
               <AnswerText text={message.content} isStreaming={message.isStreaming} />
@@ -71,15 +52,9 @@ export default function MessageBubble({ message, sessionId, onFeedback }: Props)
             )}
             <ChartPanel charts={message.charts} />
             {message.sql && (
-              <details style={{ marginTop: 12, fontSize: 12 }}>
-                <summary style={{ color: "#888", cursor: "pointer" }}>生成的 SQL</summary>
-                <pre style={{
-                  background: "#111", color: "#aaa", padding: "8px 12px",
-                  borderRadius: 6, overflow: "auto", marginTop: 6, fontSize: 12,
-                  maxHeight: 200,
-                }}>
-                  {message.sql}
-                </pre>
+              <details className="msg-sql">
+                <summary>生成的 SQL</summary>
+                <pre>{message.sql}</pre>
               </details>
             )}
             {!message.isStreaming && message.content && (

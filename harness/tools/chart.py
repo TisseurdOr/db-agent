@@ -11,6 +11,14 @@ from datetime import datetime
 
 CHART_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "charts"))
 
+# 最近一次生成的大屏相对 URL（前端 Dashboard tab 用，单机 demo 够用）
+_latest_dashboard_url: str | None = None
+
+
+def get_latest_dashboard_url() -> str | None:
+    return _latest_dashboard_url
+
+
 # 暗色主题调色板
 PALETTE = ["#5470c6", "#fac858", "#ee6666", "#91cc75", "#73c0de", "#3ba272",
            "#fc8452", "#9a60b4", "#ea7ccc", "#48b8d0"]
@@ -254,12 +262,17 @@ def render_chart(
     os.makedirs(CHART_DIR, exist_ok=True)
     html = _build_html(title, panels)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = os.path.join(CHART_DIR, f"dashboard_{ts}.html")
+    filename = f"dashboard_{ts}.html"
+    filepath = os.path.join(CHART_DIR, filename)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(html)
 
+    global _latest_dashboard_url
+    _latest_dashboard_url = f"/charts/{filename}"
+
     return {
         "dashboard_path": filepath,
+        "url": _latest_dashboard_url,
         "panels": len(panels),
         "title": title,
         "hint": f"大屏已生成，共 {len(panels)} 个面板。在浏览器中打开。",

@@ -27,7 +27,11 @@ import json
 import os
 import re
 import sqlite3
+from contextvars import ContextVar
 from dataclasses import dataclass
+
+# 请求级当前用户（Web 并发安全；优先于进程环境变量 AGENT_USER）
+_request_user_id: ContextVar[str | None] = ContextVar("agent_request_user_id", default=None)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 内置默认值（DB 为空时的 fallback）
@@ -74,6 +78,7 @@ _DEFAULT_ROLES: dict[str, dict] = {
             "departments", "products", "customers", "orders",
             "ods_orders_hive", "dwd_user_events", "dim_products_hive",
         ],
+        "db_row_filter": None,
         "docs_filter": ["产品手册", "部门介绍", "销售制度"],
         "sensitive_check": False,
     },
@@ -200,20 +205,49 @@ def get_user(user_id: str | None = None) -> dict:
 
 
 def resolve_user_id(user_id: str | None = None) -> str:
-    """Tool 层统一解析当前用户 ID（CLI --user / AGENT_USER / 默认 viewer）。"""
-    return user_id or os.getenv("AGENT_USER") or os.getenv("AGENT_DEFAULT_USER", "viewer")
+    """Tool 层统一解析当前用户 ID。
+
+    优先级：显式参数 > 请求 ContextVar（Web）> AGENT_USER > AGENT_DEFAULT_USER > viewer
+    """
+    if user_id:
+        return user_id
+    ctx = _request_user_id.get()
+    if ctx:
+        return ctx
+    return os.getenv("AGENT_USER") or os.getenv("AGENT_DEFAULT_USER", "viewer")
+
+
+def set_request_user(user_id: str | None):
+    """绑定本请求的 RBAC 用户；返回 token，结束时用 reset_request_user(token)。"""
+    return _request_user_id.set(user_id)
+
+
+def reset_request_user(token) -> None:
+    """恢复 set_request_user 之前的 ContextVar。"""
+    _request_user_id.reset(token)
 
 
 def list_users() -> list[dict]:
-    """列出所有用户。"""
-    return [{"id": uid, "name": u["name"], "role": u["role"]} for uid, u in USERS.items()]
+    """列出所有用户（含角色中文名，供前端 RBAC 切换）。"""
+    out = []
+    for uid, u in USERS.items():
+        role_id = u["role"]
+        role_meta = ROLES.get(role_id, {})
+        out.append({
+            "id": uid,
+            "name": u["name"],
+            "role": role_id,
+            "role_name": role_meta.get("name", role_id),
+            "dept_id": u.get("dept_id"),
+        })
+    return out
 
 
 def list_roles() -> list[dict]:
     """列出所有角色及权限。"""
-    return [{"role": rid, "name": r["name"], "tools": r["allowed_tools"],
-             "table_count": len(r["db_tables"]) if r["db_tables"] else "全部",
-             "row_filter": r["db_row_filter"] is not None}
+    return [{"role": rid, "name": r["name"], "tools": r.get("allowed_tools", []),
+             "table_count": len(r["db_tables"]) if r.get("db_tables") else "全部",
+             "row_filter": r.get("db_row_filter") is not None}
             for rid, r in ROLES.items()]
 
 
@@ -353,7 +387,7 @@ def _user_for_role(role: str) -> dict:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def authorize_tool(user: dict, tool_name: str) -> EntitlementResult:
-    """检查用户能否调用此工具。Layer 2 硬拦截入口。"""
+    """检查用户能否调用此工具。Layer 2；硬拦截入口。"""
     perms = user.get("permissions", {})
     allowed = perms.get("allowed_tools", [])
     if tool_name in allowed:
