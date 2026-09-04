@@ -29,6 +29,10 @@
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
+web页面
+![Uploading image.png…]()
+
+
 ---
 
 ## 一、功能：做什么
