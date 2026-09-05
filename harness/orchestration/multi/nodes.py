@@ -382,10 +382,6 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     span = trace.start_span(AGENT_SQL, task[:60])
     print(f"⏳ SQL Agent: {task[:60]}...")
 
-    # 清掉上一轮残留的成功 SQL，避免超时失败时误回流探索性查询
-    from harness.tools.query import pop_last_successful_sql
-    pop_last_successful_sql()
-
     # 检索式 few-shot（Vanna 模式）：召回相似问题的已验证 SQL 注入上下文。
     # 用原始 query 而非 Router 改写后的 task 检索——样例库存的是用户口语问法。
     from harness.context.sql_examples import get_sql_fewshot
@@ -422,6 +418,7 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     # 自学习回流（第 3 项）：优先用工具层捕获的成功 SQL（比从自然语言抽更准）
     if not is_agent_timeout(result):
         from harness.memory.feedback import learn_from_success
+        from harness.tools.query import pop_last_successful_sql
         learned_sql = pop_last_successful_sql()
         if learned_sql:
             opik_tag_sql(mask_sql(learned_sql))

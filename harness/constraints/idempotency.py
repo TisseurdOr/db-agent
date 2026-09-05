@@ -89,7 +89,12 @@ class IdempotencyGuard:
 
 
 async def _invoke(handler, tool_input: dict):
-    """调用 handler（兼容同步/异步），异常原样上抛（失败不缓存）。"""
+    """调用 handler（兼容同步/异步），异常原样上抛（失败不缓存）。
+
+    ponytail: 同步 handler 必须在当前 event loop 线程内直接调用，不能改成
+    asyncio.to_thread / run_in_executor——run_query 靠 ContextVar 把成功 SQL
+    传给 node_sql 回流，丢线程池会让 ContextVar 静默失效（回流退化不报错）。
+    """
     result = handler(**tool_input)
     if inspect.isawaitable(result):
         result = await result

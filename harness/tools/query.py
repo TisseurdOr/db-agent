@@ -1,3 +1,4 @@
+import contextvars
 import sqlite3
 
 from db.seed import DB_PATH
@@ -9,18 +10,21 @@ from harness.constraints.entitlement import (
 
 # 自学习回流用：记录最近一次成功执行的 SELECT。
 # Agent 最终回答经常不带完整 SQL，从工具层捕获比从自然语言抽更可靠。
-_last_successful_sql: dict = {"sql": None}
+# ponytail: ContextVar 而非全局 dict——每请求独立上下文，避免并发串扰。
+_last_successful_sql: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "last_successful_sql", default=None
+)
 
 
 def pop_last_successful_sql() -> str | None:
     """取出并清空最近一次成功 SQL；没有则返回 None。"""
-    sql = _last_successful_sql["sql"]
-    _last_successful_sql["sql"] = None
+    sql = _last_successful_sql.get()
+    _last_successful_sql.set(None)
     return sql
 
 
 def peek_last_successful_sql() -> str | None:
-    return _last_successful_sql["sql"]
+    return _last_successful_sql.get()
 
 
 RUN_QUERY_TOOL = {
@@ -95,7 +99,7 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
         rows = [dict(row) for row in cursor.fetchmany(max_rows + 1)]
         truncated = len(rows) > max_rows
         rows = rows[:max_rows] if truncated else rows
-        _last_successful_sql["sql"] = sql  # 仅成功路径写入，供自学习回流
+        _last_successful_sql.set(sql)  # 仅成功路径写入，供自学习回流
         return {
             "rows": rows,
             "count": len(rows),
