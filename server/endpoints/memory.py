@@ -279,6 +279,27 @@ async def memory_checkpoints(limit: int = 40):
         "live": live,
     }
 
+@router.get("/memory/sql_examples")
+async def memory_sql_examples():
+    """SQL few-shot 样例库：seed 基线（只读）+ learned（自学习回流，可回滚）。"""
+    from harness.context.sql_examples import SEED_EXAMPLES, list_learned
+
+    learned = list_learned()
+    seed = [
+        {"id": f"seed_{i}", "question": e["question"], "sql": e["sql"], "source": "seed"}
+        for i, e in enumerate(SEED_EXAMPLES)
+    ]
+    return {"seed": seed, "learned": learned, "count": len(learned)}
+
+
+@router.post("/memory/sql_examples/purge")
+async def memory_sql_examples_purge():
+    """回滚：删除所有非 seed 样例（回到 seed 基线）。返回删除条数。"""
+    from harness.context.sql_examples import purge_learned
+
+    return {"purged": purge_learned()}
+
+
 @router.get("/memory")
 async def memory_overview():
     facts = _user_memory()

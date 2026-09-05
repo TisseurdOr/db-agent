@@ -15,6 +15,7 @@
 
 import hashlib
 import os
+import time
 from pathlib import Path
 
 import chromadb
@@ -82,6 +83,10 @@ SEED_EXAMPLES = [
 # 检索相似度阈值：低于它的样例宁可不给——错误的参照比没有参照更有害
 _MIN_SCORE = 0.35
 
+# learned 样例容量上限：超过就按 LRU（last_hit_at 最旧）淘汰，防止只进不出无限膨胀。
+# ponytail: 只对 learned（非 seed）生效；seed 是人工基线永不淘汰。
+MAX_LEARNED = int(os.getenv("MAX_LEARNED_EXAMPLES", "200"))
+
 
 def _example_id(question: str, source: str) -> str:
     """样例稳定 ID。
@@ -106,6 +111,16 @@ def format_examples(examples: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _open_collection():
+    """直接开 Chroma collection（不碰 embedding 客户端——回滚不能依赖 embedding 服务）。"""
+    chroma_dir = Path(__file__).resolve().parent.parent / "memory" / "chroma_db"
+    client = chromadb.PersistentClient(path=str(chroma_dir))
+    return client.get_or_create_collection(
+        name=_COLLECTION,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
 class SQLExampleStore:
     """Q→SQL 样例库：ChromaDB 存储 + 语义检索 + 回流写入。"""
 
@@ -120,12 +135,7 @@ class SQLExampleStore:
             api_key=os.environ["EMBEDDING_API_KEY"],
             base_url=os.environ["EMBEDDING_BASE_URL"],
         )
-        chroma_dir = Path(__file__).resolve().parent.parent / "memory" / "chroma_db"
-        client = chromadb.PersistentClient(path=str(chroma_dir))
-        self._collection = client.get_or_create_collection(
-            name=_COLLECTION,
-            metadata={"hnsw:space": "cosine"},
-        )
+        self._collection = _open_collection()
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         resp = self._embed_client.embeddings.create(
@@ -140,22 +150,47 @@ class SQLExampleStore:
         if self._collection.count() > 0:
             return
         questions = [ex["question"] for ex in SEED_EXAMPLES]
+        now = int(time.time())
         self._collection.add(
             ids=[f"seed_{i}" for i in range(len(SEED_EXAMPLES))],
             documents=questions,
             embeddings=self._embed(questions),
-            metadatas=[{"sql": ex["sql"], "source": "seed"} for ex in SEED_EXAMPLES],
+            metadatas=[
+                {"sql": ex["sql"], "source": "seed", "created_at": now, "last_hit_at": now, "hit_count": 0}
+                for ex in SEED_EXAMPLES
+            ],
         )
+
+    def _evict_lru(self) -> int:
+        """learned 超过容量上限时，按 last_hit_at 最旧淘汰。返回删除条数。"""
+        try:
+            got = self._collection.get(include=["metadatas"])
+            ids = got.get("ids") or []
+            metas = got.get("metadatas") or []
+            learned = [
+                (i, m or {}) for i, m in zip(ids, metas)
+                if (m or {}).get("source") != "seed"
+            ]
+            if len(learned) <= MAX_LEARNED:
+                return 0
+            learned.sort(key=lambda x: x[1].get("last_hit_at") or 0)
+            overflow = learned[: len(learned) - MAX_LEARNED]
+            self._collection.delete(ids=[i for i, _ in overflow])
+            return len(overflow)
+        except Exception:
+            return 0
 
     def add_example(self, question: str, sql: str, source: str = "user") -> str:
         """回流入口：把验证过的 Q→SQL 写入样例库（自学习闭环的写路径）。"""
         self._ensure_clients()
+        self._evict_lru()
         ex_id = _example_id(question, source)
+        now = int(time.time())
         self._collection.upsert(
             ids=[ex_id],
             documents=[question],
             embeddings=self._embed([question]),
-            metadatas=[{"sql": sql, "source": source}],
+            metadatas=[{"sql": sql, "source": source, "created_at": now, "last_hit_at": now, "hit_count": 0}],
         )
         return ex_id
 
@@ -171,17 +206,33 @@ class SQLExampleStore:
             include=["documents", "metadatas", "distances"],
         )
         examples = []
+        touched = []  # (id, 原 metadata)：命中后刷新使用痕迹
         if results["ids"] and results["ids"][0]:
             for i in range(len(results["ids"][0])):
                 dist = results["distances"][0][i] if results["distances"] else 1.0
                 score = 1.0 - min(dist, 1.0)
                 if score < _MIN_SCORE:
                     continue
+                meta = results["metadatas"][0][i] or {}
+                touched.append((results["ids"][0][i], meta))
                 examples.append({
                     "question": results["documents"][0][i],
-                    "sql": results["metadatas"][0][i].get("sql", ""),
+                    "sql": meta.get("sql", ""),
                     "score": round(score, 3),
                 })
+        # 命中即刷新 last_hit_at / hit_count，供 LRU 淘汰判定（失败静默，不影响检索）
+        if touched:
+            try:
+                now = int(time.time())
+                self._collection.update(
+                    ids=[i for i, _ in touched],
+                    metadatas=[
+                        {**m, "last_hit_at": now, "hit_count": int(m.get("hit_count") or 0) + 1}
+                        for _, m in touched
+                    ],
+                )
+            except Exception:
+                pass
         return examples
 
 
@@ -215,3 +266,43 @@ def record_sql_example(question: str, sql: str, source: str = "user") -> bool:
         return True
     except Exception:
         return False
+
+
+def list_learned() -> list[dict]:
+    """列出所有非 seed 样例（自学习回流进来的），返回 [{id, question, sql, source}]。"""
+    try:
+        collection = _open_collection()
+        got = collection.get(include=["documents", "metadatas"])
+        ids = got.get("ids") or []
+        docs = got.get("documents") or []
+        metas = got.get("metadatas") or []
+        learned = []
+        for ex_id, question, meta in zip(ids, docs, metas):
+            meta = meta or {}
+            if meta.get("source") == "seed":
+                continue
+            learned.append({
+                "id": ex_id,
+                "question": question,
+                "sql": meta.get("sql", ""),
+                "source": meta.get("source", ""),
+            })
+        return learned
+    except Exception:
+        return []
+
+
+def purge_learned() -> int:
+    """删除所有非 seed 样例（回滚到种子基线）。返回删除条数；失败返回 0。"""
+    try:
+        collection = _open_collection()
+        got = collection.get(include=["metadatas"])
+        ids = [
+            i for i, m in zip(got.get("ids") or [], got.get("metadatas") or [])
+            if (m or {}).get("source") != "seed"
+        ]
+        if ids:
+            collection.delete(ids=ids)
+        return len(ids)
+    except Exception:
+        return 0

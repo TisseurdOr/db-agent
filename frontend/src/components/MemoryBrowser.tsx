@@ -40,6 +40,13 @@ interface FeedbackRow {
   trace_id: string;
 }
 
+interface SqlExample {
+  id: string;
+  question: string;
+  sql: string;
+  source: string;
+}
+
 interface MemoryData {
   pillars: Pillar[];
   user_memory: MemoryFact[];
@@ -83,6 +90,9 @@ export default function MemoryBrowser() {
     live: { session_id: string; thread_id: string; keys: string[]; next?: string | null; summary: string }[];
   } | null>(null);
   const [cpError, setCpError] = useState<string | null>(null);
+  const [sqlEx, setSqlEx] = useState<{ seed: SqlExample[]; learned: SqlExample[]; count: number } | null>(null);
+  const [sqlExError, setSqlExError] = useState<string | null>(null);
+  const [purgeMsg, setPurgeMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -109,10 +119,39 @@ export default function MemoryBrowser() {
     }
   }, []);
 
+  const loadSqlExamples = useCallback(async () => {
+    try {
+      const res = await fetch("/api/memory/sql_examples");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setSqlEx(await res.json());
+      setSqlExError(null);
+    } catch (e) {
+      setSqlExError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const doPurge = useCallback(async () => {
+    if (!window.confirm("回滚到 seed 基线？将删除所有自学习（非 seed）SQL 样例，不可恢复。")) return;
+    setPurgeMsg(null);
+    try {
+      const res = await fetch("/api/memory/sql_examples/purge", { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const j = await res.json();
+      setPurgeMsg(`已回滚，删除 ${j.purged} 条非 seed 样例`);
+      await loadSqlExamples();
+      await load();
+    } catch (e) {
+      setPurgeMsg(e instanceof Error ? e.message : String(e));
+    }
+  }, [loadSqlExamples, load]);
+
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     if (sub === "checkpoint") void loadCheckpoints();
   }, [sub, loadCheckpoints]);
+  useEffect(() => {
+    if (sub === "procedural") void loadSqlExamples();
+  }, [sub, loadSqlExamples]);
 
   const pillarById = (id: string) => data?.pillars.find((p) => p.id === id);
 
@@ -336,6 +375,69 @@ export default function MemoryBrowser() {
               <div className="db-meta">Canonical metric SQL / aliases</div>
             </div>
           </div>
+
+          <h3 className="db-h">Learned examples（自学习回流，可回滚）</h3>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div className="db-meta">{sqlEx ? `${sqlEx.count} non-seed examples` : "loading…"}</div>
+            <button
+              type="button"
+              className="db-refresh"
+              style={{ background: "#dc2626" }}
+              onClick={() => void doPurge()}
+            >
+              回滚到 seed 基线
+            </button>
+          </div>
+          {purgeMsg && <div className="db-error">{purgeMsg}</div>}
+          {sqlExError && <div className="db-error">{sqlExError}</div>}
+          {!sqlEx ? (
+            <div className="db-empty">Loading…</div>
+          ) : sqlEx.learned.length === 0 ? (
+            <div className="db-empty">无非 seed 样例（只有 seed 基线）</div>
+          ) : (
+            <div className="db-scrolly" style={{ marginBottom: 16 }}>
+              <table className="db-table">
+                <thead>
+                  <tr>
+                    <th className="dbcol">question</th>
+                    <th className="dbcol">sql</th>
+                    <th className="dbcol">source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sqlEx.learned.map((x) => (
+                    <tr key={x.id}>
+                      <td className="dbcell" title={x.question}>{x.question}</td>
+                      <td className="dbcell" title={x.sql}><code>{x.sql}</code></td>
+                      <td className="db-meta">{x.source}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <h3 className="db-h">Seed 基线（只读）</h3>
+          {sqlEx && (
+            <div className="db-scrolly">
+              <table className="db-table">
+                <thead>
+                  <tr>
+                    <th className="dbcol">question</th>
+                    <th className="dbcol">sql</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sqlEx.seed.map((x) => (
+                    <tr key={x.id}>
+                      <td className="dbcell" title={x.question}>{x.question}</td>
+                      <td className="dbcell" title={x.sql}><code>{x.sql}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
