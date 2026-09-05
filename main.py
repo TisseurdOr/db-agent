@@ -25,12 +25,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from anthropic import Anthropic
-
-from db.seed import init_db
-from harness.context.schema_discovery import get_schema_discovery
+from harness.bootstrap import bootstrap_data
+from harness.config import DEFAULT_MODEL
 from harness.context.system_prompt import build_system_prompt
-from harness.context.template_matcher import get_template_matcher, init_metric_registry
+from harness.context.template_matcher import get_template_matcher
+from harness.llm_client import get_anthropic_client
 from harness.memory.preturn_recall import (
     ensure_memory_stack,
     recall_for_turn,
@@ -38,7 +37,6 @@ from harness.memory.preturn_recall import (
 )
 from harness.memory.short_term_memory import ConversationManager
 from harness.orchestration.single.tools_bundle import TOOL_HANDLERS, TOOLS
-from harness.tools.hbase import _seed_hbase_store
 from harness.tools.knowledge import build_knowledge_base_index
 
 # 用户输入
@@ -96,7 +94,7 @@ async def main():
     parser = argparse.ArgumentParser(description="自然语言数据库分析 Agent")
     parser.add_argument(
         "--model", "-m",
-        default=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+        default=DEFAULT_MODEL,
         help="模型名 (默认: deepseek-chat，也可用 deepseek-v4-flash / deepseek-v4-pro)",
     )
     parser.add_argument(
@@ -119,27 +117,16 @@ async def main():
     os.environ["AGENT_USER"] = args.user
 
     # 启动校验：必需配置缺失立即友好退出（fail fast）
-    api_key = _require_env("ANTHROPIC_API_KEY")
+    _require_env("ANTHROPIC_API_KEY")
 
-    init_db()
-    _seed_hbase_store()
-    init_metric_registry()  # 初始化业务指标模板库
+    bootstrap_data()
     try:
-        get_schema_discovery().build_index()  # 预计算表字段 embedding
-    except Exception as e:
-        print(f"[schema_discovery] 索引构建跳过: {e}")
+        from harness.observation.tracer import cleanup_expired_traces
+        cleanup_expired_traces()
+    except Exception:
+        pass
 
-    # Anthropic SDK 初始化——base_url 和 api_key 从 .env 读。
-    # 如果用 DeepSeek 兼容 endpoint：.env 里设
-    #   ANTHROPIC_BASE_URL=https://api.deepseek.com/v1
-    #   ANTHROPIC_API_KEY=sk-xxx
-    # SDK 的 messages.stream() 需要 endpoint 支持 SSE streaming。
-    client = Anthropic(
-        api_key=api_key,
-        base_url=os.environ.get("ANTHROPIC_BASE_URL"),
-    )
-    from harness.observation.opik_tracing import wrap_anthropic_client
-    client = wrap_anthropic_client(client)
+    client = get_anthropic_client()
 
     # 对话记忆管理器——最近 N 轮保留原文，更早的压缩成摘要。
     # 摘要由 streaming_agent 每轮调用前注入 System Prompt，实现跨轮上下文记忆。
@@ -253,18 +240,29 @@ async def main():
                 # HITL 审批：graph 在敏感 SQL 处暂停，等待人工确认
                 if isinstance(result, dict) and result.get("__interrupt__"):
                     interrupt_data = result["data"]
+                    hitl_type = interrupt_data.get("type", "?")
                     print(f"\n{'='*50}")
-                    print("⚠️  敏感查询需要审批")
-                    print(f" 👩‍💻👨‍💻🧑‍💻用户: {interrupt_data.get('user', '?')}")
-                    print(f"  🤖SQL:  {interrupt_data.get('sql', '?')}")
+                    if hitl_type == "clarify":
+                        print("❓ 需要澄清")
+                        questions = interrupt_data.get("questions", "")
+                        if questions:
+                            print(questions)
+                    else:
+                        print("⚠️  敏感查询需要审批")
+                        print(f" 👩‍💻👨‍💻🧑‍💻用户: {interrupt_data.get('user', '?')}")
+                        print(f"  🤖SQL:  {interrupt_data.get('sql', '?')}")
                     print(f"{'='*50}")
-                    choice = input("  是否继续执行? (y/n): ").strip().lower()
-                    approved = choice == "y"
-                    result = await multi_runner.resume(approved=approved)
-                    # 自学习：用户批准的 SQL（敏感列 HITL / 置信度门）有人工背书
-                    if approved and interrupt_data.get("sql"):
-                        from harness.memory.feedback import learn_from_hitl
-                        learn_from_hitl(user_input, interrupt_data.get("sql", ""))
+                    if hitl_type == "clarify":
+                        clarified = input("  你的回答: ").strip()
+                        result = await multi_runner.resume(approved=True, clarified_query=clarified)
+                    else:
+                        choice = input("  是否继续执行? (y/n): ").strip().lower()
+                        approved = choice == "y"
+                        result = await multi_runner.resume(approved=approved)
+                        # 自学习：用户批准的 SQL（敏感列 HITL / 置信度门）有人工背书
+                        if approved and interrupt_data.get("sql"):
+                            from harness.memory.feedback import learn_from_hitl
+                            learn_from_hitl(user_input, interrupt_data.get("sql", ""))
                     print(f"\nAgent: {result}")
                 else:
                     print(f"\nAgent: {result}")

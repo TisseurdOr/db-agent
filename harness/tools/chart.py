@@ -1,8 +1,8 @@
-"""ECharts 数据大屏 Tool — 生成暗色主题交互式 HTML 仪表盘。
+"""ECharts 数据大屏 Tool — 生成结构化面板数据（前端 React 渲染）+ 可选 HTML。
 
-替代旧 matplotlib PNG 方案。
-支持单图和多面板 dashboard 两种模式，浏览器直接打开。
-基于 ECharts 5.5 CDN，零依赖安装。
+支持单图和多面板 dashboard 两种模式。
+前端 Dashboard tab 读 /api/dashboard/latest 的 JSON（与 Ops/Eval 同款样式），
+HTML 文件保留作兼容/独立打开。
 """
 
 import json
@@ -10,13 +10,43 @@ import os
 from datetime import datetime
 
 CHART_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "charts"))
+_LATEST_JSON = "dashboard_latest.json"
 
-# 最近一次生成的大屏相对 URL（前端 Dashboard tab 用，单机 demo 够用）
-_latest_dashboard_url: str | None = None
+# 最近一次大屏（内存）；进程重启后从 JSON 回退
+_latest_dashboard: dict | None = None
 
 
 def get_latest_dashboard_url() -> str | None:
-    return _latest_dashboard_url
+    dash = get_latest_dashboard()
+    return (dash or {}).get("url")
+
+
+def get_latest_dashboard() -> dict | None:
+    """返回 {title, panels, updated_at, url, panel_count}；无数据时 None。"""
+    global _latest_dashboard
+    if _latest_dashboard:
+        return _latest_dashboard
+    path = os.path.join(CHART_DIR, _LATEST_JSON)
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                _latest_dashboard = json.load(f)
+            return _latest_dashboard
+        except (OSError, json.JSONDecodeError):
+            pass
+    return None
+
+
+def _normalize_panels(panels: list) -> list[dict]:
+    out = []
+    for p in panels:
+        out.append({
+            "type": str(p.get("type", "bar")).lower().strip(),
+            "title": str(p.get("title") or "面板"),
+            "labels": [str(x) for x in (p.get("labels") or [])],
+            "values": [float(x) for x in (p.get("values") or [])],
+        })
+    return out
 
 
 # 暗色主题调色板
@@ -37,7 +67,7 @@ DARK_THEME = {
 TOOL_SCHEMA = {
     "name": "render_chart",
     "description": (
-        "生成 ECharts 数据大屏 HTML 文件并返回路径。暗色主题、鼠标交互、自适应布局。\n"
+        "生成数据大屏（前端 Dashboard 实时渲染）。暗色主题、多面板。\n"
         "两种模式：\n"
         "1. 单图模式：传 chart_type / title / labels / values\n"
         "2. 大屏模式：传 panels 数组，每个面板 {type, title, labels, values}\n"
@@ -259,23 +289,42 @@ def render_chart(
     else:
         return {"error": True, "hint": "请提供 panels（大屏模式）或 chart_type+labels+values（单图模式）"}
 
+    panels = _normalize_panels(panels)
     os.makedirs(CHART_DIR, exist_ok=True)
-    html = _build_html(title, panels)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"dashboard_{ts}.html"
     filepath = os.path.join(CHART_DIR, filename)
+    html = _build_html(title, panels)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(html)
 
-    global _latest_dashboard_url
-    _latest_dashboard_url = f"/charts/{filename}"
+    url = f"/charts/{filename}"
+    updated_at = datetime.now().isoformat(timespec="seconds")
+    payload = {
+        "title": title,
+        "panels": panels,
+        "panel_count": len(panels),
+        "updated_at": updated_at,
+        "url": url,
+    }
+    # 结构化快照：前端实时大屏 + 进程重启回退
+    latest_path = os.path.join(CHART_DIR, _LATEST_JSON)
+    snap_path = os.path.join(CHART_DIR, f"dashboard_{ts}.json")
+    for p in (latest_path, snap_path):
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    global _latest_dashboard
+    _latest_dashboard = payload
 
     return {
         "dashboard_path": filepath,
-        "url": _latest_dashboard_url,
+        "url": url,
         "panels": len(panels),
+        "panel_data": panels,
         "title": title,
-        "hint": f"大屏已生成，共 {len(panels)} 个面板。在浏览器中打开。",
+        "updated_at": updated_at,
+        "hint": f"大屏已生成，共 {len(panels)} 个面板。请打开前端 Dashboard 查看。",
     }
 
 

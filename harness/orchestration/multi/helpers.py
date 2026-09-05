@@ -3,11 +3,11 @@
 从原 orchestrator.py 拆分（职责：编排的"手"）。
 """
 
-import os
 import time
 
 from langchain_core.runnables import RunnableConfig
 
+from harness.config import DEFAULT_MODEL
 from harness.constraints.circuit_breaker import DEGRADED_MESSAGE, CircuitOpenError
 from harness.observation.opik_tracing import (
     opik_tag_route,
@@ -15,6 +15,14 @@ from harness.observation.opik_tracing import (
 )
 from harness.observation.ops_metrics import record_error, record_tokens
 from harness.observation.tracer import TraceContext
+from harness.orchestration.multi.agent_names import (
+    AGENT_ANALYSIS,
+    AGENT_DATA_QUALITY,
+    AGENT_HBASE,
+    AGENT_HIVE,
+    AGENT_SQL,
+    AGENT_STRATEGY,
+)
 from harness.orchestration.multi.base import is_agent_timeout
 from harness.orchestration.multi.state import MultiAgentState, agent_config
 
@@ -147,17 +155,17 @@ def _next_step_after_sql(state: MultiAgentState, results: dict) -> dict:
 
     plan_agents = {s["agent"] for s in plan}
     # 只有 plan 声明了 analysis 才过置信度门；否则直接终态
-    if "analysis" in plan_agents and "analysis" not in executed:
+    if AGENT_ANALYSIS in plan_agents and AGENT_ANALYSIS not in executed:
         if state.get("_skip_confidence"):
-            return {"results": results, "next": "analysis"}
+            return {"results": results, "next": AGENT_ANALYSIS}
         return {"results": results, "next": "confidence_gate"}
 
-    return _next_step(state, results, "sql")
+    return _next_step(state, results, AGENT_SQL)
 async def _run_agent_node(state, config, agent, agent_name, result_key):
     """通用 Agent 节点：取 task → 执行 → 写 results。"""
     client = agent_config(config)["_client"]
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
     task = next(s["task"] for s in state["plan"] if s["agent"] == agent_name)
     span = trace.start_span(agent_name, task[:60])
     print(f"⏳ {agent_name.upper()} Agent: {task[:60]}...")
@@ -187,8 +195,8 @@ def _next_step(state: MultiAgentState, results: dict, current: str) -> dict:
         return {"results": results, "next": pending[0]["agent"]}
 
     plan_agents = {s["agent"] for s in plan}
-    if "analysis" in plan_agents and "analysis" not in executed:
-        return {"results": results, "next": "analysis"}
+    if AGENT_ANALYSIS in plan_agents and AGENT_ANALYSIS not in executed:
+        return {"results": results, "next": AGENT_ANALYSIS}
 
     # plan 已跑完且不需要 analysis：
     # 多引擎结果要拼接（sql+hive），不能只取 sql 丢掉 hive
@@ -197,11 +205,11 @@ def _next_step(state: MultiAgentState, results: dict, current: str) -> dict:
         answer = "\n\n".join(f"【{k}】\n{v}" for k, v in non_empty.items())
     else:
         answer = (
-            results.get("sql")
-            or results.get("strategy")
-            or results.get("data_quality")
-            or results.get("hive")
-            or results.get("hbase")
+            results.get(AGENT_SQL)
+            or results.get(AGENT_STRATEGY)
+            or results.get(AGENT_DATA_QUALITY)
+            or results.get(AGENT_HIVE)
+            or results.get(AGENT_HBASE)
             or "\n\n".join(str(v) for v in results.values() if v)
         )
     return {"results": results, "next": "done", "final_answer": answer}

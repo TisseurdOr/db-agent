@@ -4,7 +4,7 @@
     python scripts/generate_project_deck.py
 
 输出:
-    docs/db-agent-项目讲解.pptx
+    docs/简历与经历/db-agent-项目讲解.pptx
 
 依赖:
     python-pptx（本地离线生成，不需要 2slides API）
@@ -192,7 +192,7 @@ def add_diagram_slide(prs, title, subtitle, image_path, max_w=12.2, max_h=5.6):
     y = Inches(1.7) + (Inches(5.0) - Inches(h_in)) / 2
     s.shapes.add_picture(image_path, x, y, width=Inches(w_in), height=Inches(h_in))
     add_text(s, Inches(0.7), Inches(6.9), Inches(12.0), Inches(0.4),
-             [("图片来源：docs/engineering-mechanisms.md（本对话生成）", 0, 11, False, MUTED)],
+             [("图片来源：docs/项目介绍/engineering-mechanisms.md（本对话生成）", 0, 11, False, MUTED)],
              align=PP_ALIGN.CENTER)
 
 
@@ -600,7 +600,7 @@ def build():
     add_text(s, Inches(1.0), Inches(6.2), Inches(11.3), Inches(0.6),
              [("联系/演示信息占位", 0, 13, False, MUTED)])
 
-    out = "docs/db-agent-项目讲解.pptx"
+    out = "docs/简历与经历/db-agent-项目讲解.pptx"
     prs.save(out)
     print(f"已生成: {out}")
 

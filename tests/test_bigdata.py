@@ -1,6 +1,6 @@
 """测试 bigdata 工具: generate_hbase_query + search_hive_syntax + Router 路由。"""
 
-from harness.orchestration.multi.router import route_override
+from harness.orchestration.multi.router import incomplete_query_reason, route_override
 from harness.tools.hbase import generate_hbase_query
 from harness.tools.hive import search_hive_syntax
 
@@ -301,3 +301,38 @@ def test_metric_sales_含退款_routes_strategy():
     plan = route_override("销售额包含退款吗")
     assert plan is not None
     assert any(s["agent"] == "strategy" for s in plan)
+
+
+def test_sales_plus_commission_plus_chart_routes_sql_strategy_analysis():
+    """订单销售 + 提成制度 + 画图/建议 → sql + strategy + analysis（勿只派 sql）。"""
+    q = "帮我看看最近订单销售情况，结合公司提成制度给销售团队可执行建议，并画图展示"
+    plan = route_override(q)
+    assert plan is not None
+    agents = [s["agent"] for s in plan]
+    assert agents == ["sql", "strategy", "analysis"]
+
+
+def test_sales_plus_policy_without_advice_routes_sql_strategy():
+    """有数据词 + 制度词、但无解读/出图 → sql + strategy，不加 analysis。"""
+    plan = route_override("查一下订单销售额，并看下提成制度原文")
+    assert plan is not None
+    agents = [s["agent"] for s in plan]
+    assert "sql" in agents and "strategy" in agents
+    assert "analysis" not in agents
+
+# ── 硬规则澄清（clarify 不依赖 LLM）──
+
+def test_incomplete_query_detects_vague():
+    """短且含糊、无具体信号词的查询应判为需要澄清。"""
+    for q in ("帮我找下哪个", "看看数据", "上个月的情况怎么样", "帮我查一下", "看看", "有什么数据"):
+        assert incomplete_query_reason(q), q
+
+
+def test_incomplete_query_ignores_concrete():
+    """含具体对象/维度/时间/引擎的查询不得误判为澄清。"""
+    for q in (
+        "哪个部门销售额最高", "查询员工的薪资情况", "对比本月和上月销售额",
+        "华东区有哪些客户", "销售人员的提成比例是多少", "用 HBase scan orders 表",
+        "今天销售怎么样", "最近订单怎么样", "你好", "帮我查一下华东的销售额",
+    ):
+        assert incomplete_query_reason(q) is None, q

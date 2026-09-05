@@ -34,7 +34,7 @@ export default function ChatInput({ onSend, disabled }: Props) {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={handleKey}
-        placeholder="输入查询，如「华东地区上个月销售额最高的产品」"
+        placeholder="Ask a question, e.g. top product sales in East China last month"
         disabled={disabled}
         rows={2}
         className="chat-input-ta"
@@ -45,7 +45,7 @@ export default function ChatInput({ onSend, disabled }: Props) {
         onClick={handleSend}
         disabled={disabled || !text.trim()}
       >
-        发送
+        Send
       </button>
     </div>
   );

@@ -5,7 +5,7 @@
 
 import re
 
-from harness.orchestration.multi.router import _CHITCHAT_MARKERS, _META_QUESTION_RE
+from harness.orchestration.multi.router import _META_QUESTION_RE, is_chitchat_query
 
 # 记忆正文若本身是元问答，注入时跳过——否则「最近一条」常是污染过的元问答。
 # 也覆盖「这次对话第一句是什么」等自指问题。
@@ -21,8 +21,7 @@ _META_MEMORY_RE = re.compile(
 
 def is_chitchat(query: str) -> bool:
     """闲聊跳过向量召回，避免无意义 embedding。"""
-    q = (query or "").strip().lower()
-    return any(m in q for m in _CHITCHAT_MARKERS)
+    return is_chitchat_query(query)
 
 
 def is_meta_question(query: str) -> bool:

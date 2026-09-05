@@ -160,23 +160,21 @@ class SchemaDiscovery:
                 return  # 已有索引，跳过
 
         conn = sqlite3.connect(self.db_path)
-        tables = [
-            row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name NOT LIKE 'agent_%' AND name != 'user_memory' "
-                "AND name NOT LIKE 'sqlite_%'"
-            ).fetchall()
-        ]
-        conn.close()
+        try:
+            tables = [
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'agent_%' AND name != 'user_memory' "
+                    "AND name NOT LIKE 'sqlite_%'"
+                ).fetchall()
+            ]
 
-        ids_list = []
-        docs_list = []
-        metas_list = []
+            ids_list = []
+            docs_list = []
+            metas_list = []
 
-        for table in tables:
-            cols = _COLUMN_DESCRIPTIONS.get(table, {})
-            conn = sqlite3.connect(self.db_path)
-            try:
+            for table in tables:
+                cols = _COLUMN_DESCRIPTIONS.get(table, {})
                 cursor = conn.execute(f"PRAGMA table_info('{table}')")
                 for row in cursor.fetchall():
                     col_name = row[1]
@@ -199,8 +197,8 @@ class SchemaDiscovery:
                         "type": col_type,
                         "values": "/".join(values),  # 空串表示未做值索引
                     })
-            finally:
-                conn.close()
+        finally:
+            conn.close()
 
         if not docs_list:
             return

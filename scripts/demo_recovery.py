@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
+from harness.config import DEFAULT_MODEL
+
 os.environ.setdefault("AGENT_USER", "dba")  # dba 可 run_query，演示不被权限拦截
 
 from harness.constraints.retry import acall_with_retry
@@ -113,7 +115,7 @@ async def demo_replan():
     try:
         runner = await MultiAgentRunner.create(
             client,
-            model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+            model=DEFAULT_MODEL,
             enable_data_quality=False,
             checkpoint_db="/tmp/demo_recovery_state.db",
             thread_id=f"demo-replan-{os.getpid()}",

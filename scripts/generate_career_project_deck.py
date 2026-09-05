@@ -1,13 +1,13 @@
 """生成「工作经历 + 项目讲解」面试 PPT。
 
 叙事顺序：先工作经历（花旗 Olympus），再项目经历（db-agent），中间有能力迁移桥接页。
-内容来源：docs/平安背稿.md、docs/项目案例.md、docs/功能点评分表.md、此前对话定稿。
+内容来源：docs/面试/公司面经/平安背稿.md、docs/项目介绍/项目案例.md、docs/项目介绍/功能点评分表.md、此前对话定稿。
 
 用法:
     python scripts/generate_career_project_deck.py
 
 输出:
-    docs/工作经历与项目讲解.pptx
+    docs/简历与经历/工作经历与项目讲解.pptx
 """
 
 from pathlib import Path

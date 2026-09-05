@@ -150,6 +150,35 @@ async def test_run_streaming_interrupt(monkeypatch, fake_runner):
 
 
 @pytest.mark.asyncio
+async def test_run_streaming_interrupt_via_return_value(monkeypatch, fake_runner):
+    """LangGraph 1.x：ainvoke 返回带 __interrupt__ 时也应 emit interrupt（不依赖 raise）。"""
+    monkeypatch.setattr("server.runner_wrapper.guard_input", lambda q: (True, ""))
+    monkeypatch.setattr("server.runner_wrapper.flush_opik", lambda: None)
+    monkeypatch.setattr("server.runner_wrapper.get_current_opik_trace_id", lambda: "")
+    monkeypatch.setattr("server.runner_wrapper.capture_opik_trace_id_for_graph", lambda g: "")
+
+    payload = {"type": "hitl_approval", "sql": "SELECT salary FROM employees"}
+    fake_runner.graph.ainvoke = AsyncMock(return_value={
+        "final_answer": "",
+        "__interrupt__": (SimpleNamespace(value=payload),),
+    })
+    # snapshot 无 interrupts：模拟只靠返回值识别
+    fake_runner.graph.aget_state = AsyncMock(return_value=SimpleNamespace(interrupts=[], values={}))
+
+    sr = StreamingRunner(fake_runner)
+    queue = asyncio.Queue()
+    await sr.run_streaming("查工资", queue)
+
+    events = []
+    while not queue.empty():
+        events.append(await queue.get())
+
+    interrupt_events = [e for e in events if e[0] == "interrupt"]
+    assert len(interrupt_events) == 1
+    assert interrupt_events[0][1]["data"]["type"] == "hitl_approval"
+
+
+@pytest.mark.asyncio
 async def test_resume_streaming(monkeypatch, fake_runner):
     """resume 后继续执行并 emit done。"""
     fake_runner._current_config = {
@@ -338,19 +367,44 @@ def test_business_api_ok_without_token_env(monkeypatch):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def test_dashboard_latest_endpoint(client, monkeypatch):
-    """GET /api/dashboard/latest 应返回 url 字段（未生成时为 null）。"""
+    """GET /api/dashboard/latest 返回结构化大屏字段。"""
     monkeypatch.delenv("WEB_API_TOKEN", raising=False)
-    resp = client.get("/api/dashboard/latest")
+    resp = client.get("/api/dashboard/latest?user_id=dba")
     assert resp.status_code == 200
-    assert "url" in resp.json()
+    body = resp.json()
+    assert "url" in body
+    assert "panels" in body
+    assert "title" in body
 
 
 def test_render_chart_updates_latest_url(monkeypatch, tmp_path):
-    """render_chart 生成后应更新 get_latest_dashboard_url，且 url 为相对路径。"""
+    """render_chart 生成后应更新 get_latest_dashboard，并写 JSON 快照。"""
     from harness.tools import chart as chart_mod
     monkeypatch.setattr(chart_mod, "CHART_DIR", str(tmp_path))
+    chart_mod._latest_dashboard = None
 
-    result = chart_mod.render_chart(title="测试", chart_type="bar", labels=["a"], values=[1])
+    result = chart_mod.render_chart(title="测试", chart_type="bar", labels=["a", "b"], values=[1, 2])
     assert result["url"].startswith("/charts/dashboard_")
     assert chart_mod.get_latest_dashboard_url() == result["url"]
+    dash = chart_mod.get_latest_dashboard()
+    assert dash is not None
+    assert dash["title"] == "测试"
+    assert len(dash["panels"]) == 1
+    assert dash["panels"][0]["labels"] == ["a", "b"]
+    assert (tmp_path / "dashboard_latest.json").exists()
     assert (tmp_path / result["dashboard_path"].rsplit("/", 1)[-1]).exists()
+
+
+def test_dashboard_forbidden_for_manager(client):
+    resp = client.get("/api/dashboard/latest?user_id=zhoufang")
+    assert resp.status_code == 403
+
+
+def test_dashboard_ok_for_analyst(client):
+    resp = client.get("/api/dashboard/latest?user_id=analyst")
+    assert resp.status_code == 200
+
+
+def test_dashboard_forbidden_without_user(client):
+    resp = client.get("/api/dashboard/latest")
+    assert resp.status_code == 403

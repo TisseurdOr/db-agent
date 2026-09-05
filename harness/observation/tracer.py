@@ -24,11 +24,13 @@
 """
 
 import json
+import os
+import random
 import re as _re_mask
 import sys
 import time
 import uuid
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 # ── 审计脱敏：SQL 参数打码 ──
@@ -51,9 +53,71 @@ def mask_sql(sql: str) -> str:
     return masked
 
 
-# Trace 文件目录
+# Trace 文件目录（一天一个 YYYY-MM-DD.jsonl）
 TRACE_DIR = Path(__file__).resolve().parents[2] / "logs" / "traces"
 TRACE_DIR.mkdir(parents=True, exist_ok=True)
+
+# 保留天数：删掉文件名日期 < today-(N-1) 的 jsonl。0 = 关闭清理。
+DEFAULT_TRACE_RETENTION_DAYS = 30
+# save() 时触发清理的概率（启动时总会跑一次）
+_TRACE_CLEANUP_PROB = float(os.getenv("TRACE_CLEANUP_PROB", "0.01"))
+
+
+def _retention_days() -> int:
+    raw = os.getenv("TRACE_RETENTION_DAYS", str(DEFAULT_TRACE_RETENTION_DAYS)).strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_TRACE_RETENTION_DAYS
+
+
+def _parse_trace_date(path: Path) -> date | None:
+    """从 YYYY-MM-DD.jsonl 解析日期；非法文件名返回 None（不删）。"""
+    stem = path.stem
+    try:
+        return datetime.strptime(stem, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def cleanup_expired_traces(
+    retention_days: int | None = None,
+    trace_dir: Path | None = None,
+    *,
+    today: date | None = None,
+) -> list[Path]:
+    """删除超过保留期的按日 trace 文件。返回已删除路径列表。
+
+    保留窗口：最近 retention_days 个自然日（含今天）→
+    cutoff = today - (days - 1)；文件日期 < cutoff 则删。
+    retention_days=0 或负数视为关闭。
+    """
+    days = _retention_days() if retention_days is None else retention_days
+    if days <= 0:
+        return []
+    root = trace_dir or TRACE_DIR
+    if not root.exists():
+        return []
+    ref = today or date.today()
+    cutoff = ref - timedelta(days=days - 1)
+    deleted: list[Path] = []
+    for path in sorted(root.glob("*.jsonl")):
+        file_day = _parse_trace_date(path)
+        if file_day is None:
+            continue
+        if file_day < cutoff:
+            try:
+                path.unlink()
+                deleted.append(path)
+            except OSError:
+                pass
+    if deleted:
+        print(
+            f"[trace] retention={days}d：删除 {len(deleted)} 个过期文件 "
+            f"(早于 {cutoff.isoformat()})"
+        )
+    return deleted
+
 
 # 每天的 trace 存一个 JSONL 文件
 def _trace_file() -> Path:
@@ -185,12 +249,20 @@ class TraceContext:
         }
 
     def save(self) -> Path:
-        """写入当天的 JSONL 文件。返回文件路径。"""
+        """写入当天的 JSONL 文件。返回文件路径。
+
+        偶尔（默认 1%）顺带跑一次 retention 清理，避免只依赖进程启动。
+        """
         if not self.finished_at:
             self.finished_at = time.time()
         filepath = _trace_file()
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(json.dumps(self.to_dict(), ensure_ascii=False) + "\n")
+        try:
+            if _TRACE_CLEANUP_PROB > 0 and random.random() < _TRACE_CLEANUP_PROB:
+                cleanup_expired_traces()
+        except Exception:
+            pass
         return filepath
 
     # ── 便捷方法：给 orchestrator 用的 ──
@@ -320,7 +392,16 @@ if __name__ == "__main__":
     parser.add_argument("--id", type=str, help="按 trace_id 查看")
     parser.add_argument("--date", type=str, help="指定日期 (YYYY-MM-DD)")
     parser.add_argument("--stats", action="store_true", help="聚合统计：错误率/节点分布/Top 错误")
+    parser.add_argument(
+        "--cleanup", action="store_true",
+        help=f"按 TRACE_RETENTION_DAYS（默认 {DEFAULT_TRACE_RETENTION_DAYS}）删除过期按日 jsonl",
+    )
     args = parser.parse_args()
+
+    if args.cleanup:
+        deleted = cleanup_expired_traces()
+        print(f"已删除 {len(deleted)} 个文件" if deleted else "无需删除（无过期文件或已关闭 retention）")
+        sys.exit(0)
 
     if args.stats:
         if args.date:

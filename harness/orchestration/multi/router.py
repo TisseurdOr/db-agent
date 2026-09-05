@@ -5,6 +5,14 @@
 
 import re
 
+from harness.orchestration.multi.agent_names import (
+    AGENT_ANALYSIS,
+    AGENT_HBASE,
+    AGENT_HIVE,
+    AGENT_SQL,
+    AGENT_STRATEGY,
+)
+
 # ── Router System Prompt（LLM 兜底用）──
 
 ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划的 JSON。
@@ -41,7 +49,13 @@ ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划
 - 长背景提到「口径/指标」但末尾是「帮我查询…是多少」→ 只用 sql，不要 strategy
 
 输出格式（只输出 JSON，不要其他文字）:
-{"plan": [{"agent": "sql", "task": "具体任务描述"}], "combine": true}
+{"plan": [{"agent": "sql", "task": "具体任务描述"}], "combine": true, "confidence": "high"}
+
+confidence 取值（必须填）:
+- "high": 意图明确，直接执行
+- "medium": 基本明确，可能有歧义
+- "low": 查询缺失关键信息（对象/维度/时间/口径不明），如「帮我找下哪个」「看看数据」「上个月的情况怎么样」。
+  confidence="low" 时系统会先向用户澄清，plan 仍给出你的最佳猜测。
 
 每个 task 要具体、完整。不确定时宁可少派 agent，也不要默认加 sql。
 
@@ -125,6 +139,12 @@ _SQL_ENGINE_RE = re.compile(r"(?<![a-z])sql(?![a-z])|sqlite|关系(?:数据)?库
 _COMPARE_DATA_MARKERS = ("订单", "销售", "员工", "数据", "部门", "产品")
 
 
+def is_chitchat_query(query: str) -> bool:
+    """闲聊检测统一口径：命中闲聊标记或「你是谁」句式。"""
+    q = (query or "").strip().lower()
+    return any(m in q for m in _CHITCHAT_MARKERS) or bool(_CHITCHAT_WHO_RE.search(q))
+
+
 def route_override(query: str, prev_agents: list[str] | None = None) -> list[dict] | None:
     """明确意图时返回硬编码 plan；否则返回 None，交给 LLM。
 
@@ -147,12 +167,12 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
 
     # scanner/scanning ≠ HBase scan：无显式 hbase 标记时硬返回 analysis，不交给 LLM
     if _SCANNER_FALSE_RE.search(q_lower) and not any(m in q_lower for m in _HBASE_MARKERS):
-        return [{"agent": "analysis", "task": q}]
+        return [{"agent": AGENT_ANALYSIS, "task": q}]
 
     # 粘贴的 Hive 方言语句（如 INSERT OVERWRITE ... PARTITION）→ 必须 hive，别当 SQLite
     if looks_like_hiveql and not has_hbase and not has_sql_engine:
         return [{
-            "agent": "hive",
+            "agent": AGENT_HIVE,
             "task": (
                 "用户直接粘贴了 HiveQL/Hive 方言语句（不是自然语言问题）。"
                 "请按 Hive 语义解释、指出与本地模拟表的差异，必要时改写成可执行的 Hive/Impala 查询。"
@@ -164,17 +184,17 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
     engine_plan = []
     if has_sql_engine:
         engine_plan.append({
-            "agent": "sql",
+            "agent": AGENT_SQL,
             "task": f"针对关系库/SQL 侧回答：{q}",
         })
     if has_hbase:
         engine_plan.append({
-            "agent": "hbase",
+            "agent": AGENT_HBASE,
             "task": f"针对 HBase 侧回答：{q}" if (has_hive or has_sql_engine) else q,
         })
     if has_hive:
         engine_plan.append({
-            "agent": "hive",
+            "agent": AGENT_HIVE,
             "task": f"针对 Hive 侧回答：{q}" if (has_hbase or has_sql_engine) else q,
         })
     if engine_plan:
@@ -183,7 +203,7 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
     # 粘贴的普通 SQL 语句（无 Hive 方言）→ sql，按「解释/改写粘贴语句」处理
     if looks_like_stmt and not has_hbase:
         return [{
-            "agent": "sql",
+            "agent": AGENT_SQL,
             "task": (
                 "用户直接粘贴了 SQL 语句（不是自然语言问题）。"
                 "请检查表名/语法是否适配本地 SQLite，解释问题并给出可执行改写。"
@@ -191,15 +211,12 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
             ),
         }]
 
-    is_chitchat = (
-        any(m in q_lower for m in _CHITCHAT_MARKERS) or bool(_CHITCHAT_WHO_RE.search(q))
-    )
-    if is_chitchat:
+    if is_chitchat_query(q):
         if not has_sql_kw and not any(m in q for m in _STRATEGY_MARKERS):
             return []
 
     if _META_QUESTION_RE.search(q):
-        return [{"agent": "analysis", "task": "用户询问对话历史，请根据上下文回答"}]
+        return [{"agent": AGENT_ANALYSIS, "task": "用户询问对话历史，请根据上下文回答"}]
 
     # 指标口径查询：「GMV怎么算」「销售额包含退款吗」→ strategy（lookup_metric）
     # 但若明确在查数（「帮我查询…总金额是多少」），即使背景提到「口径/指标」也不走 strategy。
@@ -208,44 +225,96 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
     has_metric_pattern = bool(_METRIC_LOOKUP_RE.search(q))
     is_concrete_data_ask = bool(_DATA_QUERY_ASK_RE.search(q))
     if has_metric_alias and has_metric_pattern and not is_concrete_data_ask:
-        return [{"agent": "strategy", "task": q}]
+        return [{"agent": AGENT_STRATEGY, "task": q}]
 
     has_strategy = any(m in q for m in _STRATEGY_MARKERS)
     if has_strategy and not has_sql_kw:
-        return [{"agent": "strategy", "task": q}]
+        return [{"agent": AGENT_STRATEGY, "task": q}]
 
     if any(m in q for m in _COMPARE_MARKERS) and any(m in q for m in _COMPARE_DATA_MARKERS):
         return [
-            {"agent": "sql", "task": q},
-            {"agent": "analysis", "task": f"对比分析：{q}"},
+            {"agent": AGENT_SQL, "task": q},
+            {"agent": AGENT_ANALYSIS, "task": f"对比分析：{q}"},
         ]
 
     # 列表示意：有哪些表 → 直接 sql（跳过 Router LLM）
     if _LIST_TABLES_RE.search(q) and not has_hbase and not has_hive:
-        return [{"agent": "sql", "task": "列出数据库中的所有表名"}]
+        return [{"agent": AGENT_SQL, "task": "列出数据库中的所有表名"}]
+
+    # 数据 + 制度对照（订单/销售 + 提成/政策）：必须 sql+strategy；
+    # 要解读/出图/建议时再加 analysis。此前落空走 LLM，常被只派 sql。
+    needs_analysis = any(m in q for m in (
+        "图表", "画图", "可视化", "生成图表", "用图",
+        "给建议", "给出建议", "可执行建议", "并分析", "解读",
+    )) or ("分析" in q and any(m in q for m in ("趋势", "建议", "原因", "洞察", "同比", "环比")))
+
+    if has_sql_kw and has_strategy:
+        plan = [
+            {"agent": AGENT_SQL, "task": q},
+            {"agent": AGENT_STRATEGY, "task": f"查阅相关制度/政策：{q}"},
+        ]
+        if needs_analysis:
+            plan.append({
+                "agent": AGENT_ANALYSIS,
+                "task": f"结合查询结果与制度给出分析、建议并可视化：{q}",
+            })
+        return plan
 
     # 拼音/错别字数据查询：「查询销shou 额」→ sql（策略类已在上面拦截）
     if _FUZZY_SALES_RE.search(q) and not has_strategy:
-        return [{"agent": "sql", "task": q}]
+        return [{"agent": AGENT_SQL, "task": q}]
 
     # 纯数据查询硬规则：跳过 Router LLM（「有多少员工」「销售额最高的部门」）
     # 只有明确要解读/出图时才附带 analysis
     if has_sql_kw and not has_strategy:
-        needs_analysis = any(m in q for m in (
-            "图表", "画图", "可视化", "生成图表", "用图",
-            "给建议", "给出建议", "并分析", "解读",
-        )) or ("分析" in q and any(m in q for m in ("趋势", "建议", "原因", "洞察", "同比", "环比")))
         if needs_analysis:
             return [
-                {"agent": "sql", "task": q},
-                {"agent": "analysis", "task": f"基于查询结果分析：{q}"},
+                {"agent": AGENT_SQL, "task": q},
+                {"agent": AGENT_ANALYSIS, "task": f"基于查询结果分析：{q}"},
             ]
-        return [{"agent": "sql", "task": q}]
+        return [{"agent": AGENT_SQL, "task": q}]
 
     # ── 上下文继承：上一轮只有 hbase/hive，本轮无冲突信号 → 继承 ──
     if prev_agents and not has_hbase and not has_hive and not has_sql_kw and not has_strategy:
-        prev_set = {a for a in prev_agents if a in ("hbase", "hive")}
+        prev_set = {a for a in prev_agents if a in (AGENT_HBASE, AGENT_HIVE)}
         if len(prev_set) == 1:
             return [{"agent": prev_set.pop(), "task": q}]
 
+    return None
+
+
+# ── 硬规则兜底：明显不完整/含糊的查询 → 直接进 clarify（不依赖 LLM 输出 confidence）──
+# 只在 route_override 返回 None（硬规则没兜住）时启用；
+# 命中条件：短查询 + 命中含糊句式 + 不含任何具体信号词，三重保守。
+_INCOMPLETE_RE = re.compile(
+    r"(帮我找下哪个|帮我找找|帮我找下|找下哪个|找哪个|找一下|找找|帮我看看|"
+    r"看看数据|看看|看一下|帮我查一下|查询一下|查一查|查查|查一下|"
+    r"上个月的情况|上周情况|情况怎么样|怎么样|如何|"
+    r"有什么数据|有什么|数据呢|分析分析|分析下)"
+)
+# 具体信号词——命中任一即视为完整，不触发澄清（防误伤）
+_CONCRETE_HINT_RE = re.compile(
+    r"(销售|订单|员工|部门|客户|产品|商品|趋势|对比|统计|"
+    r"多少|几个|排名|最高|最低|最大|最小|第一|倒数|"
+    r"销售部|市场部|研发部|人事部|财务部|运营部|"
+    r"华东|华南|华北|华中|西南|西北|"
+    r"hbase|hive|hue|impala|sql|sqlite|关系库|"
+    r"提成|年假|考勤|政策|制度|口径|GMV|gmv|DAU|dau|"
+    r"昨天|今天|上周|本周|上月|本月|最近|\d)"
+)
+
+
+def incomplete_query_reason(query: str) -> str | None:
+    """检测明显不完整/含糊的查询，返回澄清原因；完整查询返回 None。
+
+    三重保守：① 短查询（≤12 字）② 命中含糊句式 ③ 不含具体信号词。
+    命中后 Router 直接进 clarify 节点，不花 LLM。
+    """
+    q = (query or "").strip()
+    if not q or len(q) > 12:
+        return None
+    if _CONCRETE_HINT_RE.search(q):
+        return None
+    if _INCOMPLETE_RE.search(q):
+        return "查询缺少对象/维度/时间，需要澄清"
     return None

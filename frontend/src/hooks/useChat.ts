@@ -1,4 +1,5 @@
 import { useReducer, useCallback } from "react";
+import { loadPersistedUserId, persistUserId } from "../rbacStorage";
 import type { ChatState, Message, SSEEvent, InterruptData, ChartConfig } from "../types";
 
 type Action =
@@ -221,6 +222,7 @@ function chatReducer(state: ChatState, action: Action): ChatState {
     }
 
     case "SET_USER_ID": {
+      persistUserId(action.userId);
       return { ...state, userId: action.userId };
     }
 
@@ -251,19 +253,23 @@ function newSessionId(): string {
   return `s-${Date.now().toString(36)}`;
 }
 
-const initialState: ChatState = {
-  messages: [],
-  isStreaming: false,
-  datasource: "sqlite",
-  sessionId: newSessionId(),
-  userId: "viewer",
-  enableDq: false,
-  hitlActive: false,
-  hitlData: null,
-};
+
+function createInitialState(): ChatState {
+  return {
+    messages: [],
+    isStreaming: false,
+    datasource: "sqlite",
+    sessionId: newSessionId(),
+    userId: loadPersistedUserId(),
+    enableDq: false,
+    hitlActive: false,
+    hitlData: null,
+  };
+}
 
 export function useChat() {
-  const [state, dispatch] = useReducer(chatReducer, initialState);
+  // lazy init：每次挂载都读 localStorage（避免 HMR/模块缓存钉死 viewer）
+  const [state, dispatch] = useReducer(chatReducer, undefined, createInitialState);
 
   const handleSSEEvent = useCallback((event: SSEEvent) => {
     const raw = event as unknown as Record<string, unknown>;
@@ -349,6 +355,7 @@ export function useChat() {
   }, []);
 
   const setUserId = useCallback((userId: string) => {
+    persistUserId(userId);
     dispatch({ type: "SET_USER_ID", userId });
   }, []);
 

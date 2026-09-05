@@ -273,7 +273,7 @@ async def memory_checkpoints(limit: int = 40):
             "session-scoped persistence — not Semantic long-term facts. "
             "Raw tables also live in Database → agent_state.db."
         ),
-        "path": str(AGENT_STATE_DB),
+        "path": str(AGENT_STATE_DB.relative_to(ROOT)),
         "sqlite_count": len(rows),
         "checkpoints": rows,
         "live": live,
@@ -355,10 +355,10 @@ async def memory_overview():
             "arch_note": "Not a MEMORY box — the dashed edge from Reply into MEMORY on Architecture.",
         },
         "paths": {
-            "demo_db": str(DEMO_DB),
-            "chroma": str(CHROMA_DIR),
-            "traces": str(TRACE_DIR),
-            "agent_state": str(AGENT_STATE_DB),
+            "demo_db": str(DEMO_DB.relative_to(ROOT)),
+            "chroma": str(CHROMA_DIR.relative_to(ROOT)),
+            "traces": str(TRACE_DIR.relative_to(ROOT)),
+            "agent_state": str(AGENT_STATE_DB.relative_to(ROOT)),
         },
         "checkpoint_arch": {
             "arch_node": "Short-term (session thread)",

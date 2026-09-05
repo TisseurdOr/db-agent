@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -23,13 +24,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from anthropic import Anthropic
-
-from db.seed import init_db
-from harness.context.schema_discovery import get_schema_discovery
-from harness.context.template_matcher import init_metric_registry
+from harness.bootstrap import bootstrap_data
+from harness.config import DEFAULT_MODEL
+from harness.llm_client import get_anthropic_client
+from harness.orchestration.multi.agent_names import (
+    AGENT_ANALYSIS,
+    AGENT_DATA_QUALITY,
+    AGENT_HBASE,
+    AGENT_HIVE,
+    AGENT_SQL,
+    AGENT_STRATEGY,
+)
 from harness.orchestration.multi.orchestrator import MultiAgentRunner
-from harness.tools.hbase import _seed_hbase_store
 
 # ═══════════════════════════════════════════════════════════════════════
 # 页面配置
@@ -57,22 +63,10 @@ st.markdown("""
 
 @st.cache_resource
 def init_system():
-    init_db()
-    _seed_hbase_store()
-    init_metric_registry()
-    try:
-        get_schema_discovery().build_index()
-    except Exception:
-        pass  # embedding 不可用时跳过，Agent 降级用 list_tables/describe_table
-    client = Anthropic(
-        api_key=os.environ["ANTHROPIC_API_KEY"],
-        base_url=os.environ.get("ANTHROPIC_BASE_URL"),
-    )
-    from harness.observation.opik_tracing import wrap_anthropic_client
-    return wrap_anthropic_client(client)
+    bootstrap_data()
+    return get_anthropic_client()
 
 client = init_system()
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -191,8 +185,8 @@ with st.sidebar:
         if plan:
             st.markdown("**执行计划:**")
             agent_emoji = {
-                "sql": "🗄️", "strategy": "📋", "analysis": "📊",
-                "hbase": "🗃️", "hive": "🐝", "data_quality": "🔬",
+                AGENT_SQL: "🗄️", AGENT_STRATEGY: "📋", AGENT_ANALYSIS: "📊",
+                AGENT_HBASE: "🗃️", AGENT_HIVE: "🐝", AGENT_DATA_QUALITY: "🔬",
             }
             for step in plan:
                 agent = step.get("agent", "?")
@@ -214,6 +208,39 @@ with st.sidebar:
             st.caption(f"本轮 {t:,} tokens")
     else:
         st.caption("发送消息后显示执行详情")
+
+    st.divider()
+    st.subheader("🧪 RAG 召回率（消融）")
+
+    ablation_path = Path(__file__).resolve().parent / "logs" / "ablation_results.json"
+
+    if st.button("🔄 运行消融实验", use_container_width=True):
+        import subprocess
+        with st.spinner("跑消融中（含 LLM HyDE/rerank，约几分钟）..."):
+            proc = subprocess.run(
+                [sys.executable, "-m", "tests.eval_retrieval_ablation",
+                 "--json", "logs/ablation_results.json"],
+                cwd=str(Path(__file__).resolve().parent),
+                capture_output=True, text=True,
+            )
+        if proc.returncode == 0:
+            st.success("消融完成")
+        else:
+            st.error(proc.stderr[-400:] or proc.stdout[-400:])
+
+    if ablation_path.exists():
+        data = json.loads(ablation_path.read_text(encoding="utf-8"))
+        st.caption(f"更新 {data['generated_at']} · 正例 {data['n_pos']} / 负例 {data['n_neg']}")
+        lines = ["| 配置 | hit@1 | hit@3 | hit@5 | hit@10 | MRR |",
+                 "|---|---|---|---|---|---|"]
+        for c in data["configs"]:
+            lines.append(
+                f"| {c['name']} | {c['hit@1']:.0%} | {c['hit@3']:.0%} "
+                f"| {c['hit@5']:.0%} | {c['hit@10']:.0%} | {c['mrr']:.3f} |"
+            )
+        st.markdown("\n".join(lines))
+    else:
+        st.caption("暂无消融数据，点上方按钮生成")
 
 
 # ═══════════════════════════════════════════════════════════════════════

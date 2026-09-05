@@ -8,6 +8,7 @@ import pytest
 from db.seed import init_db
 from harness.constraints.entitlement import (
     authorize_tool,
+    can_access_dashboard,
     check_entitlement,
     check_entitlement_by_role,
     check_table_access,
@@ -78,8 +79,16 @@ def test_viewer_cannot_run_query():
     assert "无权使用" in result.reason
 
 
-def test_analyst_can_use_hbase():
+def test_analyst_can_use_db_not_hbase():
+    """analyst 可查库；HBase 仍仅 dba。"""
     user = get_user("analyst")
+    for tool in ("run_query", "list_tables", "describe_table", "discover_relevant_schema"):
+        assert authorize_tool(user, tool).passed, tool
+    assert not authorize_tool(user, "run_hbase").passed
+
+
+def test_dba_can_use_hbase():
+    user = get_user("dba")
     assert authorize_tool(user, "run_hbase").passed
 
 
@@ -98,16 +107,15 @@ def test_analyst_can_access_business_tables():
         assert check_table_access(user, table).passed, table
 
 
-def test_viewer_cannot_access_employees():
+def test_viewer_cannot_access_any_table():
     user = get_user("viewer")
-    result = check_table_access(user, "employees")
+    result = check_table_access(user, "orders")
     assert not result.passed
-    assert "employees" in result.reason
 
 
-def test_support_narrow_table_whitelist():
+def test_support_cannot_access_db_tables():
     user = get_user("support")
-    assert check_table_access(user, "orders").passed
+    assert not check_table_access(user, "orders").passed
     assert not check_table_access(user, "employees").passed
 
 
@@ -141,12 +149,6 @@ def test_rewrite_sql_no_filter_for_dba():
     assert rewrite_sql(user, sql) == sql
 
 
-def test_rewrite_sql_no_filter_for_analyst():
-    user = get_user("analyst")
-    sql = "SELECT * FROM employees"
-    assert rewrite_sql(user, sql) == sql
-
-
 def test_rewrite_sql_unrelated_table_not_altered():
     user = get_user("xiaoyiming")
     sql = "SELECT * FROM departments"
@@ -157,32 +159,32 @@ def test_rewrite_sql_unrelated_table_not_altered():
 # 5. 敏感列 HITL
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_salary_query_needs_approval_for_analyst():
-    user = get_user("analyst")
+def test_salary_query_needs_approval_for_manager():
+    user = get_user("xiaoyiming")
     assert needs_approval(user, "SELECT name, salary FROM employees")
 
 
 def test_cost_query_needs_approval():
-    user = get_user("analyst")
+    user = get_user("zhoufang")
     assert needs_approval(user, "SELECT cost FROM products")
 
 
 def test_budget_query_needs_approval():
-    user = get_user("analyst")
+    user = get_user("zhoufang")
     assert needs_approval(user, "SELECT budget FROM departments")
 
 
 def test_non_sensitive_query_no_approval():
-    user = get_user("analyst")
+    user = get_user("zhoufang")
     assert not needs_approval(user, "SELECT name FROM departments")
 
 
 def test_check_entitlement_returns_approval_flag_for_sensitive_sql():
-    user = get_user("analyst")
+    """dba 无敏感列 HITL；manager 有。这里用 manager 验证 needs_approval 标志。"""
+    user = get_user("xiaoyiming")
     result = check_entitlement(user, tool_name="run_query", sql="SELECT salary FROM employees")
     assert result.passed
     assert result.needs_approval
-    assert "dept_id" not in (result.sql or "")  # analyst 无 row_filter
 
 
 def test_check_entitlement_marks_sensitive_for_manager():
@@ -204,11 +206,11 @@ def test_check_entitlement_run_query_denied_for_viewer():
     assert "无权使用" in result.reason
 
 
-def test_check_entitlement_run_query_table_denied():
+def test_check_entitlement_run_query_denied_for_support():
     user = get_user("support")
-    result = check_entitlement(user, tool_name="run_query", sql="SELECT * FROM employees")
+    result = check_entitlement(user, tool_name="run_query", sql="SELECT * FROM orders")
     assert not result.passed
-    assert "无权访问" in result.reason
+    assert "无权使用" in result.reason
 
 
 def test_check_entitlement_write_sql_blocked():
@@ -219,25 +221,26 @@ def test_check_entitlement_write_sql_blocked():
     assert not result.passed
 
 
-def test_check_entitlement_describe_table_allowed():
+def test_check_entitlement_describe_table_denied_for_viewer():
     user = get_user("viewer")
     result = check_entitlement(user, tool_name="describe_table", table="orders")
-    assert result.passed
-
-
-def test_check_entitlement_describe_table_denied():
-    user = get_user("viewer")
-    result = check_entitlement(user, tool_name="describe_table", table="employees")
     assert not result.passed
+    assert "无权使用" in result.reason
 
 
-def test_check_entitlement_list_tables_filters():
+def test_check_entitlement_list_tables_denied_for_viewer():
     user = get_user("viewer")
     all_tables = ["departments", "employees", "orders", "products", "customers"]
     result = check_entitlement(user, tool_name="list_tables", tables=all_tables)
+    assert not result.passed
+
+
+def test_check_entitlement_list_tables_ok_for_manager():
+    user = get_user("zhoufang")
+    all_tables = ["departments", "employees", "orders"]
+    result = check_entitlement(user, tool_name="list_tables", tables=all_tables)
     assert result.passed
-    assert "employees" not in result.tables
-    assert "orders" in result.tables
+    assert set(result.tables) == set(all_tables)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -284,6 +287,15 @@ def test_check_entitlement_by_role_denies_unknown_role():
 
 
 def test_check_entitlement_by_role_sensitive_column():
-    ok, reason = check_entitlement_by_role("analyst", "SELECT salary FROM employees")
+    ok, reason = check_entitlement_by_role("manager", "SELECT salary FROM employees")
     assert not ok
     assert "人工审批" in reason
+
+
+def test_dashboard_access_roles():
+    from harness.constraints.entitlement import get_user
+    assert can_access_dashboard(get_user("dba"))
+    assert can_access_dashboard(get_user("analyst"))
+    assert not can_access_dashboard(get_user("zhoufang"))
+    assert not can_access_dashboard(get_user("viewer"))
+    assert not can_access_dashboard(get_user("support"))

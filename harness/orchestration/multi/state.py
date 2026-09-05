@@ -45,8 +45,8 @@ class DBAgentState(TypedDict):
 
 
 # ── 0023: 多 Agent 编排 ──
-# _client / _model 是 _ 前缀——由 MultiAgentRunner.invoke() 注入，
-# 不作为 LangGraph state channel 被追踪（但 TypedDict 声明了才能传进去）。
+# _client / _model 等 _ 前缀键现在走 ConfigurablePayload（agent_config()），
+# 不再放 state。
 
 class ConfigurablePayload(TypedDict, total=False):
     """MultiAgentRunner 注入 configurable 的自定义键。
@@ -78,35 +78,9 @@ class MultiAgentState(TypedDict):
     final_answer: str           # 最终输出（analysis 写入）
     next: str                   # 下一个节点名（_next_step 写入，edge_router 读取）
     _stats: Annotated[dict, _merge_stats]  # 各节点累计: input_tokens/output_tokens/turns/elapsed/nodes
-    _client: object             # ⚠️ 已废弃——现在走 configurable，不再放 state
-    _model: str                 # ⚠️ 已废弃——同上
     _inject_dq: bool            # 是否注入 DataQuality（首轮为 True）
     _reflection_attempts: int   # Reflection 节点重试次数（上限 2）
     _replan_attempts: int       # 失败重规划次数（上限 1——防 router↔agent 死循环）
     _replan_feedback: str       # Agent 失败原因，回喂 Router 重排计划后清空
     _skip_confidence: bool      # Web 交互跳过置信度门
     _skip_reflection: bool      # Web 交互跳过 Reflection
-
-
-
-'''
-state = {query: "华东", plan: [...], results: {}, next: "", ...}
-
-node_sql(state):
-    task = state["plan"]里找 agent=="sql" 的 task    ← 读 plan
-    result = await sql_agent.run(task)               ← 执行
-    results = {**state["results"], "sql": result}     ← 读+写 results
-    return _next_step(state, results, "sql")
-         │
-         ├── executed = {"sql"}                       ← 看 results keys
-         ├── pending = plan里 agent 不在 executed 的  ← 比对 plan 和 executed
-         └── return {results, next: "analysis"}      ← 写 next
-
-edge_router(state):
-    return state["next"]  # → "analysis"             ← 读 next
-         │
-    LangGraph 查 targets: "analysis" → node_analysis ← 用 targets
-
-plan 是路线图，executed 是已打卡的站，_next_step 对比两者决定下一站，next 是站牌，targets 是站牌→站点的翻译。
-
-'''

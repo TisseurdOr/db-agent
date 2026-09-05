@@ -25,8 +25,11 @@ DISCOVER_SCHEMA_TOOL = {
 }
 
 
-def discover_relevant_schema(query_intent: str) -> dict:
-    """语义检索相关表和字段。"""
+def discover_relevant_schema(query_intent: str, user_id: str | None = None) -> dict:
+    """语义检索相关表和字段。仅 dba/manager 等有库权限的角色可用。"""
+    ent = guard(user_id, "discover_relevant_schema")
+    if isinstance(ent, dict):
+        return ent
     schema_text = discover_schema_for_query(query_intent)
     if not schema_text:
         return {

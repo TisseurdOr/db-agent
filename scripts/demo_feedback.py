@@ -16,6 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
+from harness.config import DEFAULT_MODEL
+
 os.environ.setdefault("AGENT_USER", "dba")
 
 
@@ -122,7 +124,7 @@ async def demo_live_agent():
     )
     runner = await MultiAgentRunner.create(
         client,
-        model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+        model=DEFAULT_MODEL,
         enable_data_quality=False,
         checkpoint_db="/tmp/demo_feedback_state.db",
         thread_id=f"demo-feedback-{os.getpid()}",

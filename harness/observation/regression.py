@@ -85,3 +85,59 @@ def check_regression(
             "可能是最近改动引入了回归，请检查！"
         ]
     return []
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 跑分历史 —— 每次评测追加一条 JSONL，供 Web Eval 页画趋势
+# ═══════════════════════════════════════════════════════════════════════════════
+# eval_baseline.json 只保留每个 mode 的「最近一次」；历史趋势需要逐次留痕。
+# eval_runner.py 每次跑完调 append_history()，Eval 页读 load_history()。
+
+HISTORY_FILE = Path(__file__).resolve().parents[2] / "logs" / "eval_history.jsonl"
+
+
+def append_history(mode: str, stats: dict) -> None:
+    """把本次评测结果追加进历史（logs/eval_history.jsonl）。
+
+    stats 支持的键: pass_rate, case_count, passed, total, model, judge, failed_ids。
+    写盘失败静默（评测主流程不能被留痕拖垮）。
+    """
+    try:
+        HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "mode": mode,
+            "pass_rate": float(stats.get("pass_rate", 0.0)),
+            "case_count": int(stats.get("case_count", 0)),
+            "passed": int(stats.get("passed", 0)),
+            "total": int(stats.get("total", 0)),
+            "model": str(stats.get("model", "") or ""),
+            "judge": bool(stats.get("judge", False)),
+            "failed_ids": list(stats.get("failed_ids", [])),
+        }
+        with open(HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def load_history(mode: str | None = None) -> list[dict]:
+    """读全部跑分历史（可选按 mode 过滤），按时间升序；损坏行跳过。"""
+    if not HISTORY_FILE.exists():
+        return []
+    records: list[dict] = []
+    try:
+        with open(HISTORY_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return []
+    if mode:
+        records = [r for r in records if r.get("mode") == mode]
+    records.sort(key=lambda r: r.get("ts", ""))
+    return records

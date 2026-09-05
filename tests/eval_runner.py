@@ -42,8 +42,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
-# eval 需要查库；未显式配置时用 analyst，避免默认 viewer 无权 run_query
-os.environ.setdefault("AGENT_USER", "analyst")
+# eval 需要查库；仅 dba/manager 有库权限，未显式配置时用 dba
+os.environ.setdefault("AGENT_USER", "dba")
 
 from anthropic import Anthropic
 
@@ -543,10 +543,23 @@ async def main():
         eval_mode = "single"
     passed_count = sum(1 for r in results if r.passed)
     rate = passed_count / len(results) if results else 0.0
-    from harness.observation.regression import check_regression, save_baseline
+    from harness.observation.regression import (
+        append_history,
+        check_regression,
+        save_baseline,
+    )
     for warning in check_regression(eval_mode, {"pass_rate": rate, "case_count": len(results)}):
         print(f"{RED}{warning}{RESET}")
     save_baseline(eval_mode, {"pass_rate": rate, "case_count": len(results)})
+    append_history(eval_mode, {
+        "pass_rate": rate,
+        "case_count": len(results),
+        "passed": passed_count,
+        "total": len(results),
+        "model": args.model if full_cases else "",
+        "judge": bool(args.judge),
+        "failed_ids": [r.case.id for r in results if not r.passed],
+    })
 
     # ── Judge: LLM-as-Judge 打分（使用 Kimi，独立于被测模型） ──
     judge_by_id: dict[str, dict] = {}

@@ -27,6 +27,7 @@ load_dotenv()
 from anthropic import Anthropic
 
 from db.seed import init_db
+from harness.config import DEFAULT_MODEL
 from harness.context.schema_discovery import get_schema_discovery
 from harness.context.template_matcher import init_metric_registry
 from harness.observation.opik_tracing import flush_opik, track_entrypoint, wrap_anthropic_client
@@ -56,7 +57,7 @@ def _boot() -> MultiAgentRunner:
         base_url=os.environ.get("ANTHROPIC_BASE_URL"),
     )
     client = wrap_anthropic_client(client)
-    model = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
+    model = DEFAULT_MODEL
 
     fut = asyncio.run_coroutine_threadsafe(
         MultiAgentRunner.create(client, model=model, enable_data_quality=False),

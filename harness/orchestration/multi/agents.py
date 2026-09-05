@@ -4,6 +4,14 @@
 orchestrator.py 只需调用 result, usage = agent.run(client, task) 即可。
 """
 
+from harness.orchestration.multi.agent_names import (
+    AGENT_ANALYSIS,
+    AGENT_DATA_QUALITY,
+    AGENT_HBASE,
+    AGENT_HIVE,
+    AGENT_SQL,
+    AGENT_STRATEGY,
+)
 from harness.orchestration.multi.base import ConfiguredAgent
 from harness.tools.analysis import (
     ANALYZE_RESULTS_TOOL,
@@ -62,7 +70,7 @@ SQL 报错时的自愈协议（最多自动重试 2 次）：
 无论如何不要编造数据。查询结果为空时如实报告为空，不要虚构行。"""
 
 sql_agent = ConfiguredAgent(
-    name="sql",
+    name=AGENT_SQL,
     system_prompt=SQL_AGENT_PROMPT,
     tools=[
         DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL,
@@ -91,13 +99,13 @@ ANALYSIS_AGENT_PROMPT = """你是数据分析师 Agent。你不会写 SQL、不�
 - 对比不同维度（地区、时间、部门、产品）
 - 用业务语言解释数据，而不是报 SQL 结果行数
 - 发现问题时主动标注（'华东 Q2 环比下降 15%，值得关注'）
-- 发现适合可视化的趋势或占比时，主动调 render_chart 生成数据大屏（暗色主题 HTML，多面板布局）
+- 发现适合可视化的趋势或占比时，主动调 render_chart 生成数据大屏（前端 Dashboard 实时渲染，多面板）
 
 回答要简洁：先给结论和关键数字，再补简短依据。不要道歉开场，不要大段可视化字符。
 如果数据不够支撑分析，说清楚缺什么，不要强行下结论。"""
 
 analysis_agent = ConfiguredAgent(
-    name="analysis",
+    name=AGENT_ANALYSIS,
     system_prompt=ANALYSIS_AGENT_PROMPT,
     tools=[
         ANALYZE_RESULTS_TOOL, COMPARE_PERIODS_TOOL, render_chart.tool_schema,
@@ -125,7 +133,7 @@ STRATEGY_AGENT_PROMPT = """你是战略分析 Agent。你不会查数据库、�
 - 不确定时标注推测，不编造制度内容"""
 
 strategy_agent = ConfiguredAgent(
-    name="strategy",
+    name=AGENT_STRATEGY,
     system_prompt=STRATEGY_AGENT_PROMPT,
     tools=[search_knowledge_base.tool_schema, lookup_metric.tool_schema],
     handlers={"search_knowledge_base": search_knowledge_base, "lookup_metric": lookup_metric},
@@ -154,7 +162,7 @@ HBASE_AGENT_PROMPT = """你是 HBase 查询 Agent。你能生成 HBase Shell 命
 - 写操作（put/delete）自动标注警告"""
 
 hbase_agent = ConfiguredAgent(
-    name="hbase",
+    name=AGENT_HBASE,
     system_prompt=HBASE_AGENT_PROMPT,
     tools=[
         generate_hbase_query.tool_schema,
@@ -201,7 +209,7 @@ HIVE_AGENT_PROMPT = """你是 Hive/Impala 查询 Agent。你能生成 HiveQL/Imp
 3. 重写 2 次后仍失败：停止重试，如实报告错误，不要编造数据"""
 
 hive_agent = ConfiguredAgent(
-    name="hive",
+    name=AGENT_HIVE,
     system_prompt=HIVE_AGENT_PROMPT,
     tools=[
         LIST_HIVE_TABLES_TOOL,
@@ -247,7 +255,7 @@ DATA_QUALITY_PROMPT = """你是数据质量 Agent。你不会修改数据、不�
 - 检查不超过 5 条 SQL，避免过度扫描"""
 
 data_quality_agent = ConfiguredAgent(
-    name="data_quality",
+    name=AGENT_DATA_QUALITY,
     system_prompt=DATA_QUALITY_PROMPT,
     tools=[LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL],
     handlers={"list_tables": list_tables, "describe_table": describe_table, "run_query": run_query},

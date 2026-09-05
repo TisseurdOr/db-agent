@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { loadPersistedUserId } from "../rbacStorage";
 import "./DatabaseBrowser.css";
 
 type StoreKind = "sqlite" | "jsonl" | "hbase";
@@ -93,7 +94,8 @@ function cellStr(v: unknown): string {
   return s.length > 120 ? `${s.slice(0, 120)}…` : s;
 }
 
-export default function DatabaseBrowser() {
+export default function DatabaseBrowser({ userId }: { userId: string }) {
+  const effectiveUserId = userId || loadPersistedUserId();
   const [storeId, setStoreId] = useState("demo");
   const [stores, setStores] = useState<StoreSummary[]>([]);
   const [active, setActive] = useState<ActiveStore | null>(null);
@@ -102,16 +104,36 @@ export default function DatabaseBrowser() {
   const [table, setTable] = useState<TableDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [forbidden, setForbidden] = useState<string | null>(null);
 
   const [sql, setSql] = useState(QUERY_EXAMPLES.demo[0]);
   const [qResult, setQResult] = useState<QueryResult | null>(null);
   const [qRunning, setQRunning] = useState(false);
 
   const loadOverview = useCallback(async (sid: string) => {
+    if (!effectiveUserId) {
+      setError("缺少 RBAC userId，请先在侧栏选择身份");
+      return;
+    }
     setLoading(true);
     setError(null);
+    setForbidden(null);
     try {
-      const res = await fetch(`/api/database?store=${encodeURIComponent(sid)}`);
+      // 显式拼 user_id，避免 URLSearchParams 丢参 / 旧缓存模块不带身份
+      const url = `/api/database?store=${encodeURIComponent(sid)}&user_id=${encodeURIComponent(effectiveUserId)}`;
+      const res = await fetch(url, { headers: { "X-Agent-User": effectiveUserId } });
+      if (res.status === 403) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body.detail || body;
+        const msg = (typeof detail === "string" ? detail : null)
+          || detail.message
+          || detail.suggestion
+          || "当前角色无权浏览数据库";
+        setForbidden(msg);
+        setStores([]);
+        setActive(null);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as { stores: StoreSummary[]; active: ActiveStore };
       setStores(json.stores);
@@ -122,7 +144,7 @@ export default function DatabaseBrowser() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [effectiveUserId]);
 
   const resolveStoreForTable = useCallback((sid: string, eng: EngineTab) => {
     if (sid === "demo" && eng === "hbase") return "hbase";
@@ -135,9 +157,15 @@ export default function DatabaseBrowser() {
     setError(null);
     try {
       const apiStore = resolveStoreForTable(sid, eng);
-      const res = await fetch(
-        `/api/database/table/${encodeURIComponent(name)}?store=${encodeURIComponent(apiStore)}&limit=80`,
-      );
+      const url = `/api/database/table/${encodeURIComponent(name)}?store=${encodeURIComponent(apiStore)}&limit=80&user_id=${encodeURIComponent(effectiveUserId)}`;
+      const res = await fetch(url, { headers: { "X-Agent-User": effectiveUserId } });
+      if (res.status === 403) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body.detail || body;
+        setForbidden(detail.message || "当前角色无权浏览数据库");
+        setTable(null);
+        return;
+      }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setTable((await res.json()) as TableDetail);
     } catch (e) {
@@ -146,11 +174,11 @@ export default function DatabaseBrowser() {
     } finally {
       setLoading(false);
     }
-  }, [resolveStoreForTable]);
+  }, [resolveStoreForTable, effectiveUserId]);
 
   useEffect(() => {
     void loadOverview(storeId);
-  }, [storeId, loadOverview]);
+  }, [storeId, effectiveUserId, loadOverview]);
 
   useEffect(() => {
     if (!tableName || engine === "overview" || engine === "query") {
@@ -222,9 +250,20 @@ export default function DatabaseBrowser() {
     try {
       const res = await fetch("/api/database/query", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ store: storeId === "hbase" ? "demo" : storeId, sql }),
+        headers: { "Content-Type": "application/json", "X-Agent-User": effectiveUserId },
+        body: JSON.stringify({ store: storeId === "hbase" ? "demo" : storeId, sql, user_id: effectiveUserId }),
       });
+      if (res.status === 403) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body.detail || body;
+        setQResult({
+          ok: false,
+          error: detail.message || "当前角色无权执行 SQL",
+          columns: [],
+          rows: [],
+        });
+        return;
+      }
       setQResult((await res.json()) as QueryResult);
     } catch (e) {
       setQResult({ ok: false, error: e instanceof Error ? e.message : String(e), columns: [], rows: [] });
@@ -234,6 +273,28 @@ export default function DatabaseBrowser() {
   };
 
   const showGroupedTables = storeId === "demo" && (engine === "sql" || engine === "hive" || engine === "hbase" || engine === "meta");
+
+  if (forbidden) {
+    return (
+      <div className="db-wrap">
+        <div className="db-head">
+          <div>
+            <h2 className="db-title">Database — access restricted</h2>
+            <div className="db-sub">Only DBA / managers / analysts can browse local stores</div>
+          </div>
+        </div>
+        <div className="ops-chart" style={{ padding: "36px 20px", textAlign: "center", marginTop: 12 }}>
+          <div style={{ color: "#e05050", fontSize: 14, fontWeight: 600, marginBottom: 8 }}>403 Forbidden</div>
+          <div style={{ color: "#aaa", fontSize: 13, lineHeight: 1.6 }}>
+            {forbidden}
+            <br />
+            请在左侧 <strong style={{ color: "#4a6cf7" }}>RBAC identity</strong> 切换为
+            「研发DBA」「部门经理」或「数据分析师」后重试。
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="db-wrap">
@@ -288,7 +349,6 @@ export default function DatabaseBrowser() {
             </p>
           </div>
           <div className="db-card">
-            <div className="db-path">{active.path}</div>
             <div className="db-meta">
               {active.exists
                 ? `${fmtSize(active.size)} · ${active.kind} · ${active.summary}`

@@ -62,19 +62,19 @@ def _opik_overview() -> dict:
 # 架构图节点字典：id 与 trace span.node / SSE step node 一一对应。
 # label 与 frontend/src/components/ThinkingSteps.tsx 的 LABELS 保持一致。
 NODES = [
-    {"id": "preprocessing",   "label": "输入护栏",     "group": "constraints"},
-    {"id": "router",          "label": "意图路由",     "group": "core"},
-    {"id": "clarify",         "label": "需求澄清",     "group": "core"},
-    {"id": "data_quality",    "label": "数据质量",     "group": "agents"},
-    {"id": "sql",             "label": "SQL Agent",    "group": "agents"},
-    {"id": "hbase",           "label": "HBase Agent",  "group": "agents"},
-    {"id": "hive",            "label": "Hive Agent",   "group": "agents"},
-    {"id": "strategy",        "label": "制度检索",     "group": "agents"},
-    {"id": "analysis",        "label": "综合分析",     "group": "agents"},
-    {"id": "confidence_gate", "label": "置信度门控",   "group": "core"},
-    {"id": "reflection",      "label": "质量反思",     "group": "core"},
-    {"id": "graph",           "label": "多Agent编排",  "group": "core"},
-    {"id": "guardrail",       "label": "护栏拦截",     "group": "constraints"},
+    {"id": "preprocessing",   "label": "Input guardrail",     "group": "constraints"},
+    {"id": "router",          "label": "Intent routing",      "group": "core"},
+    {"id": "clarify",         "label": "Clarify",             "group": "core"},
+    {"id": "data_quality",    "label": "Data quality",        "group": "agents"},
+    {"id": "sql",             "label": "SQL Agent",           "group": "agents"},
+    {"id": "hbase",           "label": "HBase Agent",         "group": "agents"},
+    {"id": "hive",            "label": "Hive Agent",          "group": "agents"},
+    {"id": "strategy",        "label": "Policy retrieval",    "group": "agents"},
+    {"id": "analysis",        "label": "Analysis",            "group": "agents"},
+    {"id": "confidence_gate", "label": "Confidence gate",     "group": "core"},
+    {"id": "reflection",      "label": "Reflection",          "group": "core"},
+    {"id": "graph",           "label": "Multi-agent graph",   "group": "core"},
+    {"id": "guardrail",       "label": "Guardrail block",     "group": "constraints"},
 ]
 
 
@@ -125,7 +125,6 @@ def _hero(stats_all: dict) -> dict:
         "facts": _count_table("user_memory"),
         "feedback": _count_table("user_feedback"),
         "tokens": tokens,
-        "path": str(ROOT),
     }
 
 @router.get("/overview")

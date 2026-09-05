@@ -29,6 +29,13 @@ export interface InterruptData {
   tool?: string;
   user?: string;
   role?: string;
+  questions?: string;
+  query?: string;
+  operation?: string;
+  table_name?: string;
+  row_key?: string;
+  column?: string;
+  value?: string;
 }
 
 export interface PlanStep {
@@ -75,6 +82,10 @@ export interface RbacUser {
   role_name: string;
   dept_id?: number | null;
   dept_name?: string | null;
+  /** 是否可浏览 Database（viewer/support 为 false） */
+  can_access_database?: boolean;
+  /** 是否可看 Dashboard 大屏（仅 dba / analyst） */
+  can_access_dashboard?: boolean;
 }
 
 export interface ChatState {

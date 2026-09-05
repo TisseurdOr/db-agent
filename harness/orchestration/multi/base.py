@@ -3,12 +3,12 @@
 不依赖 LangGraph。orchestrator 把 task 丢给 Agent，Agent 跑完 tool loop 返回文本结果。
 """
 
-import os
 import time
 
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
 
+from harness.config import DEFAULT_MODEL
 from harness.constraints.idempotency import run_tool_with_guard
 from harness.constraints.retry import acall_with_retry
 
@@ -152,6 +152,6 @@ class ConfiguredAgent:
             system_prompt=self.system_prompt,
             tools=self.tools,
             handlers=self.handlers,
-            model=model or os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+            model=model or DEFAULT_MODEL,
             verbose=verbose,
         )

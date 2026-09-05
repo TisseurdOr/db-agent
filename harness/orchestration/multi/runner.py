@@ -27,6 +27,7 @@ from harness.observation.opik_tracing import (
 )
 from harness.observation.ops_metrics import record_elapsed, record_query
 from harness.observation.tracer import TraceContext
+from harness.orchestration.multi.agent_names import AGENT_SQL
 from harness.orchestration.multi.cache import RouterCache
 from harness.orchestration.multi.graph import build_multi_agent_graph
 from harness.orchestration.multi.state import agent_config
@@ -333,7 +334,7 @@ class MultiAgentRunner:
 
         # 提取 SQL（从 sql agent 的结果中）
         sql_text = ""
-        sql_result = results.get("sql", "")
+        sql_result = results.get(AGENT_SQL, "")
         if sql_result:
             sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
             sql_text = sql_match.group(0).strip() if sql_match else ""

@@ -46,6 +46,7 @@ class ResumeRequest(BaseModel):
     query_id: str = ""  # 前端兼容字段；实际按 session_id 定位 runner
     approved: bool = True
     session_id: str = "default"  # 按会话定位 runner，避免全局 active 串线
+    clarified_query: str = ""  # clarify 中断时用户对澄清问题的回答
 
 
 def _heartbeat_chunk() -> str:
@@ -156,7 +157,7 @@ async def _stream_resume(request: Request, req: ResumeRequest, registry) -> Asyn
 
     bg_task = asyncio.create_task(
         _run_and_collect(
-            lambda: StreamingRunner(runner).resume_streaming(req.approved, queue), queue
+            lambda: StreamingRunner(runner).resume_streaming(req.approved, queue, req.clarified_query), queue
         )
     )
     state: dict = {}

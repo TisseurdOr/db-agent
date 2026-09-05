@@ -9,6 +9,8 @@ import {
 import Dashboard from "./Dashboard";
 import DatabaseBrowser from "./DatabaseBrowser";
 import MemoryBrowser from "./MemoryBrowser";
+import OpsPanel from "./OpsPanel";
+import EvalPanel from "./EvalPanel";
 import type { MainTabId } from "./Sidebar";
 
 interface Props {
@@ -16,6 +18,7 @@ interface Props {
   liveActivity: LiveActivity[];
   queryPulse: number;
   theme?: "dark" | "light";
+  userId: string;
 }
 
 const REFRESH_MS = 10_000;
@@ -27,9 +30,11 @@ const TAB_TITLE: Record<MainTabId, string> = {
   dashboard: "Dashboard",
   memory: "Memory",
   database: "Database",
+  ops: "Ops metrics",
+  eval: "Eval results",
 };
 
-export default function MainTabs({ tab, liveActivity, queryPulse, theme = "dark" }: Props) {
+export default function MainTabs({ tab, liveActivity, queryPulse, theme = "dark", userId }: Props) {
   const [data, setData] = useState<OverviewData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -100,10 +105,16 @@ export default function MainTabs({ tab, liveActivity, queryPulse, theme = "dark"
         <div className="main-tab-panel"><MemoryBrowser /></div>
       )}
       {tab === "database" && (
-        <div className="main-tab-panel"><DatabaseBrowser /></div>
+        <div className="main-tab-panel"><DatabaseBrowser userId={userId} /></div>
       )}
       {tab === "dashboard" && (
-        <div className="main-tab-panel"><Dashboard /></div>
+        <div className="main-tab-panel"><Dashboard userId={userId} /></div>
+      )}
+      {tab === "ops" && (
+        <div className="main-tab-panel"><OpsPanel /></div>
+      )}
+      {tab === "eval" && (
+        <div className="main-tab-panel"><EvalPanel /></div>
       )}
     </div>
   );

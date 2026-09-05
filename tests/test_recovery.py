@@ -166,6 +166,23 @@ def test_trace_elapsed_never_negative():
     assert "-" not in trace.summary().split("·")[0]  # 摘要里不出现负秒数
 
 
+def test_graph_has_clarify_edge():
+    """图接线回归：router 必须能条件边到 clarify（曾是无触发源的死节点）。"""
+    from harness.orchestration.multi.orchestrator import build_multi_agent_graph
+
+    graph = build_multi_agent_graph()
+    edges = {(e.source, e.target) for e in graph.get_graph().edges}
+    assert ("router", "clarify") in edges
+
+
+def test_router_prompt_requires_confidence():
+    """ROUTER_PROMPT 必须要求 LLM 输出 confidence 字段——否则 clarify 永远无法触发。"""
+    from harness.orchestration.multi.router import ROUTER_PROMPT
+
+    assert '"confidence"' in ROUTER_PROMPT
+    assert '"low"' in ROUTER_PROMPT
+
+
 def test_graph_has_replan_edges():
     """图接线回归：每个业务 Agent 节点必须有回 Router 的边。
 

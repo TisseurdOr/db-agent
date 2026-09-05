@@ -6,6 +6,14 @@
 
 from langgraph.graph import END, StateGraph
 
+from harness.orchestration.multi.agent_names import (
+    AGENT_ANALYSIS,
+    AGENT_DATA_QUALITY,
+    AGENT_HBASE,
+    AGENT_HIVE,
+    AGENT_SQL,
+    AGENT_STRATEGY,
+)
 from harness.orchestration.multi.nodes import (
     node_analysis,
     node_clarify,
@@ -50,13 +58,13 @@ def build_multi_agent_graph(checkpointer=None):
 
     builder.add_node("router", node_router)
     builder.add_node("clarify", node_clarify)
-    builder.add_node("data_quality", node_data_quality)
-    builder.add_node("sql", node_sql)
+    builder.add_node(AGENT_DATA_QUALITY, node_data_quality)
+    builder.add_node(AGENT_SQL, node_sql)
     builder.add_node("confidence_gate", node_confidence_gate)
-    builder.add_node("strategy", node_strategy)
-    builder.add_node("hbase", node_hbase)
-    builder.add_node("hive", node_hive)
-    builder.add_node("analysis", node_analysis)
+    builder.add_node(AGENT_STRATEGY, node_strategy)
+    builder.add_node(AGENT_HBASE, node_hbase)
+    builder.add_node(AGENT_HIVE, node_hive)
+    builder.add_node(AGENT_ANALYSIS, node_analysis)
     builder.add_node("reflection", node_reflection)
 
     builder.set_entry_point("router")
@@ -65,12 +73,12 @@ def build_multi_agent_graph(checkpointer=None):
     targets = {
         "router": "router",  # 失败重规划：Agent 节点失败后回 Router 重排计划
         "clarify": "clarify",
-        "data_quality": "data_quality",
-        "sql": "sql",
-        "strategy": "strategy",
-        "hbase": "hbase",
-        "hive": "hive",
-        "analysis": "analysis",
+        AGENT_DATA_QUALITY: AGENT_DATA_QUALITY,
+        AGENT_SQL: AGENT_SQL,
+        AGENT_STRATEGY: AGENT_STRATEGY,
+        AGENT_HBASE: AGENT_HBASE,
+        AGENT_HIVE: AGENT_HIVE,
+        AGENT_ANALYSIS: AGENT_ANALYSIS,
         "confidence_gate": "confidence_gate",
         "reflection": "reflection",
         "done": END,
@@ -78,13 +86,13 @@ def build_multi_agent_graph(checkpointer=None):
 
     builder.add_conditional_edges("router", edge_router, targets)
     builder.add_conditional_edges("clarify", edge_router, targets)
-    builder.add_conditional_edges("data_quality", edge_router, targets)
-    builder.add_conditional_edges("sql", edge_router, targets)
-    builder.add_conditional_edges("strategy", edge_router, targets)
-    builder.add_conditional_edges("hbase", edge_router, targets)
-    builder.add_conditional_edges("hive", edge_router, targets)
+    builder.add_conditional_edges(AGENT_DATA_QUALITY, edge_router, targets)
+    builder.add_conditional_edges(AGENT_SQL, edge_router, targets)
+    builder.add_conditional_edges(AGENT_STRATEGY, edge_router, targets)
+    builder.add_conditional_edges(AGENT_HBASE, edge_router, targets)
+    builder.add_conditional_edges(AGENT_HIVE, edge_router, targets)
     builder.add_conditional_edges("confidence_gate", edge_router, targets)
-    builder.add_conditional_edges("analysis", edge_router, targets)
+    builder.add_conditional_edges(AGENT_ANALYSIS, edge_router, targets)
     builder.add_conditional_edges("reflection", edge_router, targets)
 
     return builder.compile(checkpointer=checkpointer)

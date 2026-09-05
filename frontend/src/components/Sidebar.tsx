@@ -1,16 +1,33 @@
+import { useCallback, useEffect, useState } from "react";
 import DataSourceSelector from "./DataSourceSelector";
 import RoleSelector from "./RoleSelector";
 import DqToggle from "./DqToggle";
+import type { RbacUser } from "../types";
+import {
+  IconBarChart,
+  IconBot,
+  IconChevronLeft,
+  IconChevronRight,
+  IconClock,
+  IconCpu,
+  IconDatabase,
+  IconLayers,
+  IconLineChart,
+  IconMoon,
+  IconSun,
+} from "./NavIcons";
 
-export type MainTabId = "arch" | "nodes" | "queries" | "dashboard" | "database" | "memory";
+export type MainTabId = "arch" | "nodes" | "queries" | "dashboard" | "database" | "memory" | "ops" | "eval";
 
-const NAV: { id: MainTabId; label: string; icon: string }[] = [
-  { id: "arch", label: "Architecture", icon: "🗺️" },
-  { id: "nodes", label: "Node stats", icon: "📊" },
-  { id: "queries", label: "Recent queries", icon: "🕘" },
-  { id: "dashboard", label: "Dashboard", icon: "📈" },
-  { id: "memory", label: "Memory", icon: "🧠" },
-  { id: "database", label: "Database", icon: "🗄️" },
+const NAV: { id: MainTabId; label: string; icon: typeof IconLayers }[] = [
+  { id: "arch", label: "Architecture", icon: IconLayers },
+  { id: "nodes", label: "Node stats", icon: IconBarChart },
+  { id: "queries", label: "Recent queries", icon: IconClock },
+  { id: "dashboard", label: "Dashboard", icon: IconLineChart },
+  { id: "memory", label: "Memory", icon: IconCpu },
+  { id: "database", label: "Database", icon: IconDatabase },
+  { id: "ops", label: "Ops metrics", icon: IconLineChart },
+  { id: "eval", label: "Eval results", icon: IconBarChart },
 ];
 
 interface Props {
@@ -44,11 +61,64 @@ export default function Sidebar({
   theme,
   onToggleTheme,
 }: Props) {
+  // viewer/support 关库；其余先乐观打开，等 RoleSelector 回调校准
+  const [canAccessDatabase, setCanAccessDatabase] = useState(
+    () => userId !== "viewer" && userId !== "support",
+  );
+  // Dashboard：仅 dba / analyst（部门经理不可）
+  const [canAccessDashboard, setCanAccessDashboard] = useState(
+    () => userId === "dba" || userId === "analyst",
+  );
+
+  useEffect(() => {
+    setCanAccessDatabase(userId !== "viewer" && userId !== "support");
+    setCanAccessDashboard(userId === "dba" || userId === "analyst");
+  }, [userId]);
+
+  const handleDatabaseAccessChange = useCallback(
+    (canAccess: boolean, _user: RbacUser | null) => {
+      setCanAccessDatabase(canAccess);
+      if (!canAccess && activeTab === "database") {
+        onTabChange("arch");
+      }
+    },
+    [activeTab, onTabChange],
+  );
+
+  const handleDashboardAccessChange = useCallback(
+    (canAccess: boolean, _user: RbacUser | null) => {
+      setCanAccessDashboard(canAccess);
+      if (!canAccess && activeTab === "dashboard") {
+        onTabChange("arch");
+      }
+    },
+    [activeTab, onTabChange],
+  );
+
+  // 保险：权限关掉后若仍停在受限页，强制离开
+  useEffect(() => {
+    if (!canAccessDatabase && activeTab === "database") {
+      onTabChange("arch");
+    }
+    if (!canAccessDashboard && activeTab === "dashboard") {
+      onTabChange("arch");
+    }
+  }, [canAccessDatabase, canAccessDashboard, activeTab, onTabChange]);
+
+  const navItems = NAV.filter((item) => {
+    if (item.id === "database") return canAccessDatabase;
+    if (item.id === "dashboard") return canAccessDashboard;
+    return true;
+  });
+
   return (
     <aside className="app-sidebar">
       <div className="app-sidebar-brand">
-        <div>
-          <h2 className="app-sidebar-title">🤖 db-agent</h2>
+        <div className="app-sidebar-brand-text">
+          <h2 className="app-sidebar-title">
+            <IconBot className="app-sidebar-brand-icon" />
+            db-agent
+          </h2>
           <p className="app-sidebar-sub">AI data analysis agent</p>
         </div>
         <div className="app-sidebar-brand-actions">
@@ -59,7 +129,7 @@ export default function Sidebar({
             title={theme === "dark" ? "Light background" : "Dark background"}
             aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
           >
-            {theme === "dark" ? "☀" : "☾"}
+            {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
           <button
             type="button"
@@ -69,30 +139,41 @@ export default function Sidebar({
             aria-label={chatOpen ? "Hide chat" : "Show chat"}
             aria-pressed={chatOpen}
           >
-            {chatOpen ? "▶" : "◀"}
+            {chatOpen ? <IconChevronRight /> : <IconChevronLeft />}
           </button>
         </div>
       </div>
 
       <nav className="app-sidebar-nav" aria-label="Main views">
         <div className="app-sidebar-section">Views</div>
-        {NAV.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={`app-sidebar-link ${activeTab === item.id ? "on" : ""}`}
-            onClick={() => onTabChange(item.id)}
-          >
-            <span>{item.icon}</span>
-            <span>{item.label}</span>
-          </button>
-        ))}
+        {navItems.map((item) => {
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              className={`app-sidebar-link ${activeTab === item.id ? "on" : ""}`}
+              onClick={() => onTabChange(item.id)}
+            >
+              <span className="app-sidebar-link-icon"><Icon /></span>
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
 
       <div className="app-sidebar-section">Settings</div>
-      <DataSourceSelector datasource={datasource} onChange={onDatasourceChange} />
-      <RoleSelector userId={userId} onChange={onUserIdChange} disabled={disabled} />
+      <RoleSelector
+        userId={userId}
+        onChange={onUserIdChange}
+        onDatabaseAccessChange={handleDatabaseAccessChange}
+        onDashboardAccessChange={handleDashboardAccessChange}
+        disabled={disabled}
+      />
       <DqToggle enabled={enableDq} onChange={onEnableDqChange} disabled={disabled} />
+
+      <div className="app-sidebar-section">Data source</div>
+      <DataSourceSelector datasource={datasource} onChange={onDatasourceChange} />
 
       <div className="app-sidebar-model">
         <div className="app-sidebar-section">Model</div>

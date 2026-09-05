@@ -2,7 +2,7 @@
 #
 # 扩数据的原因：原来 3 个部门 + 5 条订单只能做基本的 select 验证，
 # 面试时说不出"趋势分析"、"同比环比"、"多维下钻"这类词。
-# 现在 6 部门 + 200+ 订单（跨 14 个月）+ 40 员工 + 15 产品 + 12 客户，
+# 现在 6 部门 + 400+ 订单（2025-06-01 ~ 2026-09-01）+ 40 员工 + 15 产品 + 12 客户，
 # Agent 能做时间序列对比、部门绩效排名、产品动销分析、地区/行业下钻。
 
 import os
@@ -137,12 +137,12 @@ def init_db(reset: bool = False):
         DELETE FROM dwd_user_events;
         DELETE FROM dim_products_hive;
 
-        -- agent_roles: 5 种角色
-        INSERT INTO agent_roles VALUES ('dba',     '研发DBA',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document","write_query"]', null, null, null, 0);
-        INSERT INTO agent_roles VALUES ('manager', '部门经理',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', null, '{"employees":"dept_id"}', null, 1);
-        INSERT INTO agent_roles VALUES ('analyst', '数据分析师','["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","employees","products","customers","orders","ods_orders_hive","dwd_user_events","dim_products_hive"]', null, null, 1);
-        INSERT INTO agent_roles VALUES ('viewer',  '访客',      '["list_tables","describe_table","search_knowledge_base","read_document"]', '["departments","products","customers","orders","ods_orders_hive","dwd_user_events","dim_products_hive"]', null, '["产品手册","部门介绍","销售制度"]', 0);
-        INSERT INTO agent_roles VALUES ('support', '技术支持',  '["run_query","list_tables","describe_table","search_knowledge_base","read_document"]', '["products","customers","orders"]', null, '["技术文档","产品手册"]', 0);
+        -- agent_roles: dba/manager/analyst 可访问数据库；viewer/support 不可
+        INSERT INTO agent_roles VALUES ('dba',     '研发DBA',  '["run_query","list_tables","describe_table","discover_relevant_schema","search_knowledge_base","read_document","write_query","run_hbase","generate_hbase_query"]', null, null, null, 0);
+        INSERT INTO agent_roles VALUES ('manager', '部门经理',  '["run_query","list_tables","describe_table","discover_relevant_schema","search_knowledge_base","read_document"]', null, '{"employees":"dept_id"}', null, 1);
+        INSERT INTO agent_roles VALUES ('analyst', '数据分析师','["run_query","list_tables","describe_table","discover_relevant_schema","search_knowledge_base","read_document"]', '["departments","employees","products","customers","orders","ods_orders_hive","dwd_user_events","dim_products_hive"]', null, null, 1);
+        INSERT INTO agent_roles VALUES ('viewer',  '访客',      '["search_knowledge_base","read_document"]', '[]', null, '["产品手册","部门介绍","销售制度"]', 0);
+        INSERT INTO agent_roles VALUES ('support', '技术支持',  '["search_knowledge_base","read_document"]', '[]', null, '["技术文档","产品手册"]', 0);
 
         -- agent_users: 10 个用户
         INSERT INTO agent_users VALUES ('dba',        '研发DBA',  'dba',     3);
@@ -245,33 +245,42 @@ def init_db(reset: bool = False):
             )
             emp_id += 1
 
-    # ── orders: 跨 2025-06-01 到 2026-07-15，~220 条 ──
+    # ── orders: 跨 2025-06-01 到 2026-09-01（含），~400+ 条 ──
     statuses = ["completed", "pending", "cancelled"]
     status_weights = [0.60, 0.28, 0.12]
+    base_prices = [50000, 20000, 5000, 150000, 30000, 80000, 40000,
+                   15000, 60000, 25000, 10000, 45000, 35000, 20000, 8000]
 
     order_id = 1
     start_date = datetime(2025, 6, 1)
-    end_date = datetime(2026, 7, 15)
-    total_days = (end_date - start_date).days
+    end_date = datetime(2026, 9, 1)
+    total_days = (end_date - start_date).days + 1  # 含末日
 
     for day_offset in range(total_days):
         date = start_date + timedelta(days=day_offset)
         month = date.month
 
-        # 每月 15-25 单，Q4 和 Q2 偏多
-        base_orders = 0.55
-        if month in (6, 12):     # 年中/年末冲业绩
-            base_orders = 0.8
-        elif month in (1, 2):    # 春节淡季
-            base_orders = 0.3
+        # 日均约 1 单，旺季可到 2–3 单；覆盖到 9/1 方便演示「本月/上月」
+        base_orders = 0.78
+        if month in (6, 8, 9, 11, 12):  # 年中、暑期冲量、年末
+            base_orders = 0.95
+        elif month in (1, 2):            # 春节淡季
+            base_orders = 0.4
 
-        for _ in range(random.choices([0, 1, 2], weights=[1 - base_orders, base_orders * 0.7, base_orders * 0.3])[0]):
+        n = random.choices(
+            [0, 1, 2, 3],
+            weights=[
+                max(0.05, 1 - base_orders),
+                base_orders * 0.45,
+                base_orders * 0.35,
+                base_orders * 0.20,
+            ],
+        )[0]
+        for _ in range(n):
             dept_id = random.randint(1, 6)
             customer_id = random.randint(1, 12)
             product_id = random.randint(1, 15)
 
-            base_prices = [50000, 20000, 5000, 150000, 30000, 80000, 40000,
-                          15000, 60000, 25000, 10000, 45000, 35000, 20000, 8000]
             total = round(base_prices[product_id - 1] * random.uniform(0.7, 1.4), -2)
             quantity = random.choices([1, 2, 3, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
             status = random.choices(statuses, weights=status_weights)[0]
@@ -283,33 +292,34 @@ def init_db(reset: bool = False):
             )
             order_id += 1
 
-    # ── ods_orders_hive: Hive 风格订单表 ~60 行 ──
+    # ── ods_orders_hive: Hive 风格订单表（每 3 天一条，旺季可多 region）──
     # 分区: dt (日期), region (地区)
     regions = ["华东", "华南", "华北", "西南", "华中"]
     hive_order_id = 1
-    for day_offset in range(0, total_days, 5):  # 每 5 天一条
+    for day_offset in range(0, total_days, 3):
         date = start_date + timedelta(days=day_offset)
         dt = date.strftime("%Y-%m-%d")
-        region = random.choice(regions)
-        product_id = random.randint(1, 15)
-        customer_id = random.randint(1, 12)
-        total = round(base_prices[product_id - 1] * random.uniform(0.7, 1.4), -2)
-        quantity = random.choices([1, 2, 3, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
-        status = random.choices(statuses, weights=status_weights)[0]
+        n_hive = 2 if date.month in (6, 8, 9, 12) else 1
+        for _ in range(n_hive):
+            region = random.choice(regions)
+            product_id = random.randint(1, 15)
+            customer_id = random.randint(1, 12)
+            total = round(base_prices[product_id - 1] * random.uniform(0.7, 1.4), -2)
+            quantity = random.choices([1, 2, 3, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
+            status = random.choices(statuses, weights=status_weights)[0]
 
-        conn.execute(
-            "INSERT INTO ods_orders_hive VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (dt, region, f"HIV_{hive_order_id:04d}", customer_id, product_id,
-             total, quantity, status, date.strftime("%Y-%m-%d"), "PARQUET"),
-        )
-        hive_order_id += 1
+            conn.execute(
+                "INSERT INTO ods_orders_hive VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (dt, region, f"HIV_{hive_order_id:04d}", customer_id, product_id,
+                 total, quantity, status, date.strftime("%Y-%m-%d"), "PARQUET"),
+            )
+            hive_order_id += 1
 
-    # ── dwd_user_events: Hive 风格埋点事件表 ~50 行 ──
+    # ── dwd_user_events: Hive 风格埋点事件表 ~120 行（覆盖全时间窗）──
     event_types = ["page_view", "click", "add_cart", "purchase", "login", "logout", "search"]
     event_pages = ["/home", "/products", "/cart", "/checkout", "/account", "/search", "/detail"]
-    for i in range(50):
-        days_ago = random.randint(0, 60)
-        event_date = (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
+    for i in range(120):
+        event_date = (start_date + timedelta(days=random.randint(0, total_days - 1))).strftime("%Y-%m-%d")
         user_id = random.randint(1, 20)
         etype = random.choice(event_types)
         page = random.choice(event_pages)
@@ -354,7 +364,7 @@ def init_db(reset: bool = False):
     print(f"  [SQL]  departments: 6, employees: {emp_count}, products: 15, customers: {cust_count}, orders: {order_count}")
     print(f"  [Hive] ods_orders_hive: {hive_order_count}, dwd_user_events: {hive_event_count}, dim_products_hive: {hive_prod_count}")
     print("  [HBase] 内存模拟表: orders / user_profile / product_catalog（启动时 seed）")
-    print("  时间范围: 2025-06-01 ~ 2026-07-15")
+    print(f"  时间范围: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
     print("  能力: 多 Agent 编排 · SQL/Hive/HBase · 权限 HITL · 记忆 · Task board")
 
 

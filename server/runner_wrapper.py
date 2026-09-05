@@ -15,8 +15,30 @@ from harness.observation.opik_tracing import (
     get_current_opik_trace_id,
 )
 from harness.observation.tracer import TraceContext
+from harness.orchestration.multi.agent_names import AGENT_ANALYSIS, AGENT_SQL
 from harness.orchestration.multi.orchestrator import MultiAgentRunner
 from server.sse import SSEEvent
+
+
+def _interrupt_payload(result, snapshot) -> dict | None:
+    """从 ainvoke 返回值或 checkpoint snapshot 取出 HITL payload。
+
+    LangGraph ≥1.x：`ainvoke` 遇 `interrupt()` 通常 **不抛** GraphInterrupt，
+    而是返回 `{...state, "__interrupt__": (Interrupt,...)}`；旧版才 raise。
+    两路都要认，否则会把半截 result 当成成功 → 空 final_answer / 前端像挂死。
+    """
+    if snapshot is not None and getattr(snapshot, "interrupts", None):
+        first = snapshot.interrupts[0]
+        val = getattr(first, "value", first)
+        return val if isinstance(val, dict) else {"message": str(val)}
+
+    if isinstance(result, dict):
+        raw = result.get("__interrupt__")
+        if raw:
+            first = raw[0] if isinstance(raw, (list, tuple)) else raw
+            val = getattr(first, "value", first)
+            return val if isinstance(val, dict) else {"message": str(val)}
+    return None
 
 
 class RunnerRegistry:
@@ -311,26 +333,34 @@ class StreamingRunner:
             "_reflection_attempts": 0,
             "_replan_attempts": 0,
             "_replan_feedback": "",
-            # Web 交互：跳过置信度门 + Reflection，少 1~2 轮 LLM
-            "_skip_confidence": True,
-            "_skip_reflection": True,
+            # 演示模式：开启置信度门 + Reflection（CLI 默认即开启；Web 原来为加速首答而跳过）
+            "_skip_confidence": False,
+            "_skip_reflection": False,
         }
 
         # 不再发笼统的 graph step——router / 各 Agent 会各自推 step_start/end，避免长静默
         try:
             result = await self.runner.graph.ainvoke(state, config=config)
         except GraphInterrupt:
+            # 旧版 LangGraph：interrupt() 以异常冒泡；新版通常直接 return 带 __interrupt__
             result = None
 
-        # Check for HITL interrupt
         snapshot = await self.runner.graph.aget_state(config)
-        if snapshot and snapshot.interrupts:
-            interrupt_data = snapshot.interrupts[0].value if snapshot.interrupts else {}
+        interrupt_data = _interrupt_payload(result, snapshot)
+        if interrupt_data is not None:
+            # 暂停时也留一份 state，方便 resume / 调试
+            if snapshot and getattr(snapshot, "values", None):
+                self.runner._last_state = dict(snapshot.values)
             await queue.put(("interrupt", SSEEvent.interrupt(interrupt_data)))
             return
 
         if result is None:
             await queue.put(("error", SSEEvent.error("无法回答")))
+            return
+
+        # 防御：带 __interrupt__ 的半截 dict 不应当成功态往下走
+        if isinstance(result, dict) and result.get("__interrupt__"):
+            await queue.put(("error", SSEEvent.error("图已暂停但未解析到审批数据，请重试")))
             return
 
         self.runner._last_state = result
@@ -381,15 +411,15 @@ class StreamingRunner:
         ))
         await self._commit_short_term(query, answer, trace_id=tid)
 
-    async def resume_streaming(self, approved: bool, queue: asyncio.Queue) -> None:
+    async def resume_streaming(self, approved: bool, queue: asyncio.Queue, clarified_query: str = "") -> None:
         """Resume after HITL pause, emitting remaining events to queue."""
         token = set_request_user(getattr(self.runner, "_web_user_id", None))
         try:
-            await self._resume_streaming_impl(approved, queue)
+            await self._resume_streaming_impl(approved, queue, clarified_query)
         finally:
             reset_request_user(token)
 
-    async def _resume_streaming_impl(self, approved: bool, queue: asyncio.Queue) -> None:
+    async def _resume_streaming_impl(self, approved: bool, queue: asyncio.Queue, clarified_query: str = "") -> None:
         t_total = time.time()
 
         config = self.runner._current_config
@@ -399,7 +429,7 @@ class StreamingRunner:
 
         from langgraph.types import Command
         result = await self.runner.graph.ainvoke(
-            Command(resume={"approved": approved}),
+            Command(resume={"approved": approved, "clarified_query": clarified_query}),
             config=config,
         )
 
@@ -459,13 +489,13 @@ def _extract_chart_data(result: dict) -> list[dict]:
     results = result.get("results", {})
 
     # Check Analysis Agent results for render_chart output
-    analysis_result = results.get("analysis", "")
+    analysis_result = results.get(AGENT_ANALYSIS, "")
     if isinstance(analysis_result, str) and "dashboard_path" in analysis_result:
         # render_chart was called — try to extract chart_config from its return
         pass  # config should be in the render_chart return value directly
 
     # Fallback: auto-generate chart from SQL query results
-    sql_result_text = results.get("sql", "")
+    sql_result_text = results.get(AGENT_SQL, "")
     if not charts and sql_result_text:
         charts.extend(_auto_chart_from_sql_result(sql_result_text))
 

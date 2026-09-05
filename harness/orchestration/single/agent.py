@@ -19,6 +19,7 @@ import os
 
 from anthropic import Anthropic
 
+from harness.config import DEFAULT_MODEL
 from harness.constraints.circuit_breaker import DEGRADED_MESSAGE, CircuitOpenError
 from harness.constraints.idempotency import run_tool_with_guard
 from harness.constraints.retry import (
@@ -41,8 +42,6 @@ from harness.memory.vector_store import VectorMemory
 #   2. 测试友好——传 mock handler 不需要动模块级变量
 #   3. 每个 agent 实例可以用不同的 Tool 组合，互不干扰
 #
-# 模型选择优先级: 参数 > 环境变量 > 默认值
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 MAX_TURNS = 10
 
 
@@ -126,7 +125,7 @@ async def streaming_agent(
             这样第二轮问"其中..."时无需重新探索表结构。
     """
     if model is None:
-        model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+        model = DEFAULT_MODEL
     #----TOKEN BUDGET--初始化
     if budget is None:
         budget = TokenBudget(
@@ -302,7 +301,7 @@ async def agent_loop(
 ) -> str:
     """非 streaming 版本——供测试和 batch 场景使用。"""
     if model is None:
-        model = os.getenv("ANTHROPIC_MODEL", DEFAULT_MODEL)
+        model = DEFAULT_MODEL
 
     messages = [{"role": "user", "content": user_message}]
     cacheable_system_blocks = _build_cacheable_system(system_prompt)

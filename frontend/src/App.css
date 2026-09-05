@@ -271,10 +271,30 @@ html, body, #root {
   border-color: #3b4f6b;
 }
 .app-sidebar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 16px;
   font-weight: 700;
   color: #ddd;
   margin: 0 0 4px;
+}
+.app-sidebar-brand-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.app-sidebar-link-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.side-radio-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 .app-sidebar-sub {
   font-size: 12px;

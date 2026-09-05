@@ -13,9 +13,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from harness.constraints.entitlement import can_access_database, get_user
 from harness.constraints.guardrails import DANGEROUS_SQL_KEYWORDS, guard_sql
 from harness.observation.tracer import TRACE_DIR, _read_traces
 
@@ -378,8 +379,34 @@ def _store_exists(sid: str) -> bool:
     return bool(path and path.exists())
 
 
+
+def _require_db_browser(user_id: str | None, x_agent_user: str | None = None) -> dict:
+    """Database 页与 Agent 工具权限对齐：无 list_tables/run_query 则 403。
+
+    身份来源：query user_id → 头 X-Agent-User → viewer（缺省不放行）。
+    """
+    uid = (user_id or x_agent_user or "").strip() or "viewer"
+    user = get_user(uid)
+    if not can_access_database(user):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "forbidden",
+                "message": f"角色「{user.get('name')}」无权浏览数据库。",
+                "suggestion": "请切换为研发 DBA 或部门经理后再打开 Database 页。",
+                "user_id": uid,
+                "role": user.get("role"),
+            },
+        )
+    return user
+
 @router.get("/database")
-async def database_overview(store: str = Query("demo")):
+async def database_overview(
+    store: str = Query("demo"),
+    user_id: str | None = Query(None, description="RBAC 用户，与侧栏 identity 一致"),
+    x_agent_user: str | None = Header(None, alias="X-Agent-User"),
+):
+    _require_db_browser(user_id, x_agent_user)
     stores = []
     for sid, meta in STORES.items():
         exists = _store_exists(sid)
@@ -418,7 +445,10 @@ async def database_table(
     table_name: str,
     store: str = Query("demo"),
     limit: int = Query(SAMPLE_LIMIT, ge=1, le=500),
+    user_id: str | None = Query(None),
+    x_agent_user: str | None = Header(None, alias="X-Agent-User"),
 ):
+    _require_db_browser(user_id, x_agent_user)
     if store == "traces":
         if table_name != "traces":
             raise HTTPException(404, "traces store only has table 'traces'")
@@ -455,10 +485,15 @@ async def database_table(
 class SqlQueryRequest(BaseModel):
     sql: str = Field(..., min_length=1, max_length=4000)
     store: str = "demo"
+    user_id: str | None = None
 
 
 @router.post("/database/query")
-async def database_query(req: SqlQueryRequest):
+async def database_query(
+    req: SqlQueryRequest,
+    x_agent_user: str | None = Header(None, alias="X-Agent-User"),
+):
+    _require_db_browser(req.user_id, x_agent_user)
     if req.store in {"traces", "hbase"}:
         return {
             "ok": False,

@@ -1,0 +1,108 @@
+/* Ops / Eval / Dashboard 共用：白底小卡片（对齐截图风格） */
+.ops-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ops-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+.ops-kpi {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.ops-kpi-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #0f172a;
+}
+.ops-kpi-value.good { color: #16a34a; }
+.ops-kpi-value.bad { color: #dc2626; }
+.ops-kpi-value.warn { color: #d97706; }
+.ops-kpi-label {
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 2px;
+}
+.ops-kpi-sub {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 12px;
+}
+.ops-chart {
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.ops-chart-title {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+.ops-meta {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.ops-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ops-run-btn {
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #4338ca;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ops-run-btn:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+.ops-run-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.ops-run-status {
+  font-size: 12px;
+  color: #64748b;
+}
+.ops-run-status.running { color: #d97706; }
+.ops-run-status.ok { color: #16a34a; }
+.ops-run-status.err { color: #dc2626; }
+
+/* Eval 页表格 */
+.eval-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: #334155;
+}
+.eval-table th {
+  text-align: left;
+  color: #64748b;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+}
+.eval-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #f1f5f9;
+}

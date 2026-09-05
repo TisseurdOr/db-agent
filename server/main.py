@@ -11,27 +11,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Opik SDK 在缺 URL 时会交互式询问；本地默认写上，避免卡死启动
+os.environ.setdefault("OPIK_URL_OVERRIDE", "http://localhost:5173/api")
+os.environ.setdefault("OPIK_PROJECT_NAME", "db-agent")
+
 from anthropic import Anthropic
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from db.seed import init_db
-from harness.context.schema_discovery import get_schema_discovery
-from harness.context.template_matcher import init_metric_registry
-from harness.tools.hbase import _seed_hbase_store
+from harness.bootstrap import bootstrap_data
+from harness.config import DEFAULT_MODEL
+from harness.llm_client import get_anthropic_client
 from server.storage import init_feedback_db
 
 # ── Bootstrap ──────────────────────────────────────────────────────────
 
-init_db()
-_seed_hbase_store()
-init_metric_registry()
+bootstrap_data()
 init_feedback_db()
-try:
-    get_schema_discovery().build_index()
-except Exception:
-    pass
 
 # Anthropic client 惰性创建：import server.main 不应依赖 API key，
 # 否则 CI / 无 .env 环境连 test_server 都无法收集。首次真正处理查询时才创建。
@@ -42,20 +39,9 @@ def get_client() -> Anthropic:
     """按需创建 Anthropic client（支持 DeepSeek 兼容 endpoint）。"""
     global _client
     if _client is None:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError(
-                "缺少 ANTHROPIC_API_KEY（请在 .env 或环境变量中配置）"
-            )
-        from harness.observation.opik_tracing import wrap_anthropic_client
-        _client = wrap_anthropic_client(Anthropic(
-            api_key=api_key,
-            base_url=os.getenv("ANTHROPIC_BASE_URL"),
-        ))
+        _client = get_anthropic_client()
     return _client
 
-
-DEFAULT_MODEL = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
 
 # ── FastAPI app ────────────────────────────────────────────────────────
 
@@ -64,6 +50,12 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # Trace 按日文件 retention（默认 30 天）
+    try:
+        from harness.observation.tracer import cleanup_expired_traces
+        cleanup_expired_traces()
+    except Exception:
+        pass
     # 预热向量记忆栈（search_memory / pre-turn recall）+ 默认会话 runner
     try:
         from harness.memory.preturn_recall import ensure_memory_stack
@@ -119,8 +111,10 @@ from server.auth import require_auth  # noqa: E402
 from server.endpoints.dashboard import router as dashboard_router
 from server.endpoints.database import router as database_router
 from server.endpoints.datasource import router as datasource_router
+from server.endpoints.eval import router as eval_router
 from server.endpoints.feedback import router as feedback_router
 from server.endpoints.memory import router as memory_router
+from server.endpoints.ops import router as ops_router
 from server.endpoints.overview import router as overview_router
 from server.endpoints.query import router as query_router
 from server.endpoints.rbac import router as rbac_router
@@ -129,6 +123,8 @@ from server.endpoints.sessions import router as sessions_router
 app.include_router(dashboard_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(query_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(overview_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(ops_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(eval_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(rbac_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(feedback_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(sessions_router, prefix="/api", dependencies=[Depends(require_auth)])

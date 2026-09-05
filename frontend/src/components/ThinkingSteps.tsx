@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Step } from "../types";
 
 interface Props {
@@ -5,20 +6,21 @@ interface Props {
 }
 
 const LABELS: Record<string, string> = {
-  connecting: "连接中",
-  init: "会话初始化",
-  preprocessing: "护栏检查",
-  router: "意图路由",
-  clarify: "需求澄清",
-  data_quality: "数据质量",
-  sql: "SQL 生成",
-  hbase: "HBase 查询",
-  hive: "Hive 查询",
-  strategy: "制度检索",
-  analysis: "综合分析",
-  confidence_gate: "置信度门控",
-  reflection: "质量反思",
-  graph: "多Agent执行",
+  connecting: "Connecting",
+  init: "Session init",
+  preprocessing: "Guardrail check",
+  router: "Intent routing",
+  clarify: "Clarify",
+  data_quality: "Data quality",
+  sql: "SQL Agent",
+  hbase: "HBase Agent",
+  hive: "Hive Agent",
+  strategy: "Policy retrieval",
+  analysis: "Analysis",
+  confidence_gate: "Confidence gate",
+  reflection: "Reflection",
+  graph: "Multi-agent graph",
+  guardrail: "Guardrail block",
 };
 
 const STATUS_ICONS: Record<string, string> = {
@@ -41,7 +43,7 @@ export default function ThinkingSteps({ steps }: Props) {
         style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#888", marginBottom: collapsed ? 0 : 8 }}
       >
         <span style={{ transform: collapsed ? "rotate(-90deg)" : "rotate(0)", transition: "0.2s" }}>▼</span>
-        <span>思考过程 ({steps.length} 步)</span>
+        <span>Thinking ({steps.length} steps)</span>
       </div>
       {!collapsed && (
         <div className="steps-list" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -78,5 +80,3 @@ function StepCard({ step }: { step: Step }) {
     </div>
   );
 }
-
-import { useState } from "react";

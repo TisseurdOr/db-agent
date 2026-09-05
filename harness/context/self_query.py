@@ -21,9 +21,9 @@
 #   - Self-Query 的价值在于 LLM 自动抽取 year/memory_type，用户不需要手动指定
 
 import json
-import os
 import re
 
+from harness.config import DEFAULT_MODEL
 from harness.observation.llm import extract_text, logger
 
 # ─── 领域限定 ──────────────────────────────────────────────────
@@ -142,7 +142,7 @@ def parse_self_query(query: str, llm_client) -> dict:
 
     try:
         resp = llm_client.messages.create(
-            model=os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+            model=DEFAULT_MODEL,
             max_tokens=200,
             messages=[{
                 "role": "user",

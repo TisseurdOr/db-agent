@@ -4,7 +4,6 @@
 """
 
 import json
-import os
 import re
 import time
 
@@ -12,6 +11,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
+from harness.config import DEFAULT_MODEL
 from harness.constraints.confidence import (
     CONFIDENCE_PROMPT,
     format_confidence_report,
@@ -29,6 +29,14 @@ from harness.observation.opik_tracing import (
     opik_tag_sql,
 )
 from harness.observation.tracer import TraceContext, mask_sql
+from harness.orchestration.multi.agent_names import (
+    AGENT_ANALYSIS,
+    AGENT_DATA_QUALITY,
+    AGENT_HBASE,
+    AGENT_HIVE,
+    AGENT_SQL,
+    AGENT_STRATEGY,
+)
 from harness.orchestration.multi.agents import (
     analysis_agent,
     data_quality_agent,
@@ -48,7 +56,12 @@ from harness.orchestration.multi.helpers import (
     _run_agent_node,
     _run_agent_with_timeout,
 )
-from harness.orchestration.multi.router import ROUTER_PROMPT, route_override
+from harness.orchestration.multi.router import (
+    ROUTER_PROMPT,
+    incomplete_query_reason,
+    is_chitchat_query,
+    route_override,
+)
 from harness.orchestration.multi.state import MultiAgentState, agent_config
 
 # Checkpointer 数据库路径。
@@ -105,7 +118,7 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     span = trace.start_span("router", "分析意图")
 
     client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
     router_cache = agent_config(config).get("_router_cache")
 
     # 失败重规划路径：跳过硬规则和缓存——两者都会原样复现失败的 plan，
@@ -121,6 +134,20 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     cached_plan = None
     route_source_fallback = False
     plan_data = {}  # 硬规则路径不经 LLM，后续读 confidence 前必须有默认值
+
+    # 硬规则兜底：route_override 未兜住且查询明显不完整/含糊 → 直接进 clarify，不花 LLM
+    if override is None and not replan_feedback:
+        incomplete_reason = incomplete_query_reason(state["query"])
+        if incomplete_reason:
+            span.task = f"澄清: {incomplete_reason}"
+            trace.finish_span(span, router_usage)
+            print(f"❓ 硬规则澄清: {state['query'][:40]}（{incomplete_reason}）")
+            _annotate_route("clarify_rule", [], router_cache)
+            return {
+                "plan": [],
+                "next": "clarify",
+                "_stats": {"elapsed": route_latency, "nodes": ["router(硬规则澄清)"]},
+            }
 
     if override is not None:
         plan = override
@@ -184,36 +211,48 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
             try:
                 plan_data = json.loads(text) if text else {}
             except json.JSONDecodeError:
-                plan_data = {"plan": [{"agent": "sql", "task": state["query"]}]}
+                # 解析失败：不盲派 SQL——留空走下面的安全兜底链
+                # （闲聊→结束 / 不完整→澄清 / 判不了才最后兜底 sql），
+                # 避免把"不该查库"的问题（制度/回忆/闲聊）误派给 SQL Agent。
+                plan_data = {}
 
         plan = plan_data.get("plan", [])
         if not plan:
             # 空 plan：真闲聊就结束；否则兜底 sql（避免空白回复）
             # 注意：不要用 len>4 —— 「你好，你能做什么」长度很长但仍是闲聊
             query_text = state["query"].strip()
-            q_low = query_text.lower()
-            is_chitchat = any(m in q_low for m in (
-                "你好", "您好", "hi", "hello", "你能做什么", "你会什么",
-            )) or bool(re.search(r"你.{0,4}是谁", query_text))
-            if is_chitchat:
+            if is_chitchat_query(query_text):
                 span.task = "无需数据查询"
                 trace.finish_span(span, router_usage)
                 print(trace.print_progress(span))
                 _annotate_route("llm", [], router_cache)
                 return {"plan": [], "next": "done"}
-            plan = [{"agent": "sql", "task": query_text}]
+            # 明显不完整/含糊 → 澄清，不猜、不派 SQL
+            fallback_reason = incomplete_query_reason(query_text)
+            if fallback_reason:
+                span.task = f"澄清: {fallback_reason}"
+                trace.finish_span(span, router_usage)
+                print(trace.print_progress(span))
+                _annotate_route("llm_clarify", [], router_cache)
+                return {
+                    "plan": [],
+                    "next": "clarify",
+                    "_stats": {"elapsed": router_usage.get("elapsed", 0), "nodes": ["router(兜底澄清)"]},
+                }
+            # 判不了 → 最后兜底 sql（避免空白回复；数据安全由工具层 RBAC/护栏保证，不靠 Router）
+            plan = [{"agent": AGENT_SQL, "task": query_text}]
             span.task = "空 plan → 兜底 sql"
             route_source_fallback = True
 
     # 缓存写入：仅 LLM 路径；硬规则不写缓存（避免污染）；
     # 重规划出的 plan 也不写——它是针对本次失败的补救计划，不是该 query 的通用答案
-    if override is None and cached_plan is None and router_cache is not None and plan and not replan_feedback:
+    if override is None and cached_plan is None and router_cache is not None and plan and not replan_feedback and plan_data.get("confidence") != "low":
         router_cache.set(state["query"], plan)
 
     # DataQuality 首次注入：在 plan 最前面插入 DQ 检查，先扫库再查数。
-    if state.get("_inject_dq") and not any(s["agent"] == "data_quality" for s in plan):
+    if state.get("_inject_dq") and not any(s["agent"] == AGENT_DATA_QUALITY for s in plan):
         plan.insert(0, {
-            "agent": "data_quality",
+            "agent": AGENT_DATA_QUALITY,
             "task": "检查数据库整体数据质量：表行数、日期连续性、NULL比例、异常值。输出事实报告，不做业务判断。",
         })
     plan_names = " → ".join(s["agent"] for s in plan)
@@ -276,7 +315,7 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
     span = trace.start_span("clarify", "澄清模糊问题")
 
     client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
 
     prompt = CLARIFY_PROMPT.format(query=state["query"])
     resp = await acall_with_retry(
@@ -304,48 +343,43 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
     })
 
     # 用户回复后 resume —— 用澄清后的 query 重新路由，并按新语义再召记忆
-    clarified = response.get("clarified_query", "") if isinstance(response, dict) else ""
-    if clarified:
-        print(f"   💬 用户澄清: {clarified[:80]}")
-        from harness.memory.preturn_recall import maybe_rerecall
-        recalled = await maybe_rerecall(
-            state.get("query", ""),
-            state.get("plan"),
-            state.get("_recalled_memories") or "",
-            client=client,
-            clarified_query=clarified,
-        )
-        return {
-            "query": clarified,
-            "next": "router",
-            "_recalled_memories": recalled,
-        }
+    # 用户取消（approved=False）或没给回答 → 结束本轮，避免同 query 反复触发 clarify 死循环
+    if isinstance(response, dict):
+        if response.get("approved") is False or not (response.get("clarified_query") or "").strip():
+            print("   🚫 用户取消澄清")
+            return {
+                "final_answer": "问题信息不足，已取消查询。请补充对象/维度/时间后重试。",
+                "messages": [AIMessage(content="问题信息不足，已取消查询。请补充对象/维度/时间后重试。")],
+                "next": "done",
+            }
+        clarified = str(response.get("clarified_query", "")).strip()
+        if clarified:
+            print(f"   💬 用户澄清: {clarified[:80]}")
+            from harness.memory.preturn_recall import maybe_rerecall
+            recalled = await maybe_rerecall(
+                state.get("query", ""),
+                state.get("plan"),
+                state.get("_recalled_memories") or "",
+                client=client,
+                clarified_query=clarified,
+            )
+            return {
+                "query": clarified,
+                "next": "router",
+                "_recalled_memories": recalled,
+            }
 
-    return {"next": "router"}
+    return {"next": "done"}
 async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> dict:
     """DataQuality Agent: 扫一遍数据质量（NULL 比例、日期连续性、异常值）。"""
-    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
-    client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
-    task = next(s["task"] for s in state["plan"] if s["agent"] == "data_quality")
-    span = trace.start_span("data_quality", task[:60])
-    print(f"⏳ DataQuality: {task[:60]}...")
-    result, usage = await _run_agent_with_timeout(data_quality_agent, client, task, model, span, "DataQuality", config=config)
-    trace.finish_span(span, usage, error=span.error)
-    print(f"✅ DataQuality ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
-    _finish_agent_task(config, "data_quality", failed=is_agent_timeout(result))
-    results = {**state.get("results", {}), "data_quality": result}
-    replan = _maybe_replan(state, results, "data_quality", result)
-    if replan:
-        return replan
-    return _next_step(state, results, "data_quality")
+    return await _run_agent_node(state, config, data_quality_agent, AGENT_DATA_QUALITY, AGENT_DATA_QUALITY)
 async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     """SQL Agent: 查数据库（list_tables / describe_table / run_query）。"""
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
-    task = next(s["task"] for s in state["plan"] if s["agent"] == "sql")
-    span = trace.start_span("sql", task[:60])
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
+    task = next(s["task"] for s in state["plan"] if s["agent"] == AGENT_SQL)
+    span = trace.start_span(AGENT_SQL, task[:60])
     print(f"⏳ SQL Agent: {task[:60]}...")
 
     # 清掉上一轮残留的成功 SQL，避免超时失败时误回流探索性查询
@@ -383,7 +417,7 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL", context=context, config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ SQL Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
-    _finish_agent_task(config, "sql", failed=is_agent_timeout(result))
+    _finish_agent_task(config, AGENT_SQL, failed=is_agent_timeout(result))
 
     # 自学习回流（第 3 项）：优先用工具层捕获的成功 SQL（比从自然语言抽更准）
     if not is_agent_timeout(result):
@@ -398,8 +432,8 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
             source="auto",
         )
 
-    results = {**state.get("results", {}), "sql": result}
-    replan = _maybe_replan(state, results, "sql", result)
+    results = {**state.get("results", {}), AGENT_SQL: result}
+    replan = _maybe_replan(state, results, AGENT_SQL, result)
     if replan:
         return replan
     # SQL 生成后先过置信度门，再决定下一步
@@ -414,17 +448,17 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("confidence_gate", "SQL 置信度评估")
 
-    sql_result = state.get("results", {}).get("sql", "")
+    sql_result = state.get("results", {}).get(AGENT_SQL, "")
     if not sql_result:
         trace.finish_span(span, {"input_tokens": 0, "output_tokens": 0, "turns": 0})
-        return _next_step(state, state["results"], "sql")
+        return _next_step(state, state["results"], AGENT_SQL)
 
     # 提取 SQL 语句
     sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
     sql = sql_match.group(0).strip() if sql_match else sql_result[:500]
 
     client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
 
     prompt = CONFIDENCE_PROMPT.format(
         query=state["query"],
@@ -478,30 +512,16 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
             }
 
     # 置信度通过，继续下一步
-    return _next_step(state, state["results"], "sql")
+    return _next_step(state, state["results"], AGENT_SQL)
 async def node_strategy(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Strategy Agent: 查公司制度文档（search_knowledge_base）。"""
-    client = agent_config(config)["_client"]
-    trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
-    task = next(s["task"] for s in state["plan"] if s["agent"] == "strategy")
-    span = trace.start_span("strategy", task[:60])
-    print(f"⏳ Strategy Agent: {task[:60]}...")
-    result, usage = await _run_agent_with_timeout(strategy_agent, client, task, model, span, "Strategy", config=config)
-    trace.finish_span(span, usage, error=span.error)
-    print(f"✅ Strategy Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
-    _finish_agent_task(config, "strategy", failed=is_agent_timeout(result))
-    results = {**state.get("results", {}), "strategy": result}
-    replan = _maybe_replan(state, results, "strategy", result)
-    if replan:
-        return replan
-    return _next_step(state, results, "strategy")
+    return await _run_agent_node(state, config, strategy_agent, AGENT_STRATEGY, AGENT_STRATEGY)
 async def node_hbase(state: MultiAgentState, config: RunnableConfig) -> dict:
     """HBase Agent: 生成 HBase Shell 命令。"""
-    return await _run_agent_node(state, config, hbase_agent, "hbase", "hbase")
+    return await _run_agent_node(state, config, hbase_agent, AGENT_HBASE, AGENT_HBASE)
 async def node_hive(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Hive Agent: 生成 Hive/Impala 查询。"""
-    return await _run_agent_node(state, config, hive_agent, "hive", "hive")
+    return await _run_agent_node(state, config, hive_agent, AGENT_HIVE, AGENT_HIVE)
 async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Analysis Agent: 综合所有中间结果 + 记忆，生成最终回答。
 
@@ -512,10 +532,10 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     4. 中间结果（results）—— 上游 Agent 的执行输出
     """
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
-    span = trace.start_span("analysis", "综合分析")
+    span = trace.start_span(AGENT_ANALYSIS, "综合分析")
 
     client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
     context_parts = []
     # Layer 1: 早期对话摘要——ConversationManager 将超窗口消息压缩为摘要
     if state.get("_conversation_summary"):
@@ -574,7 +594,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
         }
     # 处理超时情况，正常情况是NONE，超时才传参进span
     trace.finish_span(span, usage, error=span.error)
-    _finish_agent_task(config, "analysis", failed=is_agent_timeout(result))
+    _finish_agent_task(config, AGENT_ANALYSIS, failed=is_agent_timeout(result))
 
     # 把最终回答写回 messages —— Checkpointer 自动持久化，
     # 下一轮 Router 和 Analysis 就能从 messages 里看到这轮说了什么。
@@ -628,7 +648,7 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
     attempts = state.get("_reflection_attempts", 0)
 
     client = agent_config(config)["_client"]
-    model = agent_config(config).get("_model", os.getenv("ANTHROPIC_MODEL", "deepseek-chat"))
+    model = agent_config(config).get("_model", DEFAULT_MODEL)
 
     # 拼接上游数据作为审查依据
     context = "\n".join(str(v)[:1000] for v in state.get("results", {}).values() if v)
@@ -695,6 +715,6 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
 
     return {
         "results": results_with_feedback,
-        "next": "analysis",
+        "next": AGENT_ANALYSIS,
         "_reflection_attempts": attempts + 1,
     }

@@ -166,8 +166,6 @@ export function OverviewHeroStrip({
           </span>
           <span className="ov-hero-sep">·</span>
           <span>updated {ago}</span>
-          <span className="ov-hero-sep">·</span>
-          <span className="ov-hero-path" title={hero.path}>{hero.path}</span>
         </div>
       </div>
       <div className="ov-hero-tiles">

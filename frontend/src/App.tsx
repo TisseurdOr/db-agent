@@ -134,7 +134,7 @@ export default function App() {
       handleSSEEvent({
         type: "step_start",
         node: "connecting",
-        task: "连接服务",
+        task: "Connecting",
       } as import("./types").SSEEvent);
       queryIdRef.current = null;
       setQueryPulse((p) => p + 1);
@@ -149,10 +149,15 @@ export default function App() {
     [state.sessionId, state.datasource, state.userId, state.enableDq, state.isStreaming, connect, abort, cancelLastStream, addUserMessage, startAssistant, handleSSEEvent]
   );
 
-  const handleApprove = useCallback(() => {
+  const handleApprove = useCallback((clarified?: string) => {
     const qid = queryIdRef.current || "resume";
-    resume();
-    connect("/api/query/resume", { query_id: qid, approved: true, session_id: state.sessionId });
+    resume(); // 先关弹窗
+    connect("/api/query/resume", {
+      query_id: qid,
+      approved: true,
+      session_id: state.sessionId,
+      clarified_query: clarified || "",
+    });
   }, [connect, resume, state.sessionId]);
 
   const handleReject = useCallback(() => {
@@ -217,7 +222,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
       />
       <main className="main-area">
-        <MainTabs tab={mainTab} liveActivity={liveActivity} queryPulse={queryPulse} theme={theme} />
+        <MainTabs tab={mainTab} liveActivity={liveActivity} queryPulse={queryPulse} theme={theme} userId={state.userId} />
       </main>
       {chatOpen && (
         <ChatDock

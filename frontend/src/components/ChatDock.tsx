@@ -1,3 +1,4 @@
+import { IconChevronRight } from "./NavIcons";
 import MessageBubble from "./MessageBubble";
 import ChatInput from "./ChatInput";
 import type { Message } from "../types";
@@ -16,21 +17,21 @@ interface Props {
 
 /** 节点 → 简短动作文案（与 Overview STAGE 对应） */
 const ACTION: Record<string, string> = {
-  init: "初始化会话",
-  preprocessing: "输入护栏检查",
-  router: "意图路由",
-  clarify: "需求澄清",
-  sql: "SQL 查询",
-  hbase: "HBase 查询",
-  hive: "Hive 查询",
-  strategy: "制度检索",
-  analysis: "综合分析",
-  data_quality: "数据质量扫描",
-  confidence_gate: "置信度门控",
-  reflection: "质量反思",
-  graph: "多 Agent 编排",
-  guardrail: "护栏拦截",
-  connecting: "连接服务",
+  init: "Session init",
+  preprocessing: "Input guardrail",
+  router: "Intent routing",
+  clarify: "Clarify",
+  sql: "SQL query",
+  hbase: "HBase query",
+  hive: "Hive query",
+  strategy: "Policy retrieval",
+  analysis: "Analysis",
+  data_quality: "Data quality scan",
+  confidence_gate: "Confidence gate",
+  reflection: "Reflection",
+  graph: "Multi-agent graph",
+  guardrail: "Guardrail block",
+  connecting: "Connecting",
 };
 
 export default function ChatDock({
@@ -45,15 +46,15 @@ export default function ChatDock({
 }: Props) {
   const latest = liveActivity.length > 0 ? liveActivity[liveActivity.length - 1] : null;
   const statusText = latest
-    ? `${latest.status === "running" ? "🔶" : latest.status === "error" ? "❌" : "✅"} ${
-        ACTION[latest.node] ?? latest.node
-      }${latest.status === "running" ? " 进行中…" : " 已完成"}`
+    ? `${ACTION[latest.node] ?? latest.node}${
+        latest.status === "running" ? " · running" : latest.status === "error" ? " · error" : " · done"
+      }`
     : null;
 
   return (
     <aside className="chat-dock">
       <div className="chat-dock-header">
-        <span className="chat-dock-title-text">💬 Chat</span>
+        <span className="chat-dock-title-text">Chat</span>
         {statusText && (
           <span className={`chat-dock-status ${latest?.status ?? ""}`} title={latest?.task}>
             {statusText}
@@ -63,28 +64,27 @@ export default function ChatDock({
           type="button"
           className="chat-dock-new"
           onClick={onNewChat}
-          title="开启新对话（新 thread）"
+          title="Start a new thread"
         >
-          新对话
+          New chat
         </button>
         <button
           type="button"
           className="chat-dock-toggle"
           onClick={onHide}
-          title="隐藏聊天（可在左侧 db-agent 旁重新打开）"
+          title="Hide chat (reopen from the sidebar)"
         >
-          ▶
+          <IconChevronRight />
         </button>
       </div>
 
       <div className="chat-dock-messages">
         {messages.length === 0 && (
           <div className="chat-dock-empty">
-            <div style={{ fontSize: 22, marginBottom: 6 }}>🤖</div>
             <div style={{ fontSize: 12, color: "#888", lineHeight: 1.7 }}>
-              新对话已就绪
+              New thread ready.
               <br />
-              在这里提问，左侧流程图会实时点亮。
+              Ask here; the architecture view lights up live.
             </div>
           </div>
         )}

@@ -45,9 +45,13 @@ def _seed_hbase_store():
     statuses = ["pending", "completed", "cancelled", "shipped"]
     regions = ["华东", "华南", "华北", "西南"]
 
-    for i in range(1, 31):
+    from datetime import datetime, timedelta
+    h_start = datetime(2025, 6, 1)
+    h_span = (datetime(2026, 9, 1) - h_start).days
+    for i in range(1, 81):
         rk = f"order_{i:03d}"
         _HBASE_ROW_ORDER["orders"].append(rk)
+        d = h_start + timedelta(days=random.randint(0, h_span))
         _HBASE_STORE["orders"][rk] = {
             "cf:order_id": str(i),
             "cf:customer_id": str(random.randint(1, 12)),
@@ -55,7 +59,7 @@ def _seed_hbase_store():
             "cf:quantity": str(random.randint(1, 20)),
             "cf:status": random.choice(statuses),
             "cf:region": random.choice(regions),
-            "cf:created_at": f"2025-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
+            "cf:created_at": d.strftime("%Y-%m-%d"),
         }
 
     # ── user_profile 表 ──
@@ -73,7 +77,7 @@ def _seed_hbase_store():
             "info:email": f"user{i}@example.com",
             "info:age": str(random.randint(22, 55)),
             "info:region": random.choice(regions),
-            "behavior:last_login": f"2025-{random.randint(1,12):02d}-{random.randint(1,28):02d}",
+            "behavior:last_login": (h_start + timedelta(days=random.randint(0, h_span))).strftime("%Y-%m-%d"),
             "behavior:pv": str(random.randint(10, 5000)),
             "behavior:purchases": str(random.randint(0, 30)),
         }
@@ -168,7 +172,7 @@ def run_hbase(
     op = (operation or "").strip().lower()
     tbl = (table_name or "").strip()
 
-    # 角色白名单：dba/analyst 才有 run_hbase（viewer/support/manager 无权）
+    # 角色白名单：仅 dba 有 run_hbase（manager/analyst/viewer/support 无权）
     ent = guard(None, "run_hbase")
     if isinstance(ent, dict):
         return ent

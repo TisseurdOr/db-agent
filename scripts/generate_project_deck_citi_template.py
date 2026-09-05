@@ -7,7 +7,7 @@
     templates/Citi_prez_SzokePeter_template.pptx
 
 输出:
-    docs/db-agent-项目讲解-Citi模板.pptx
+    docs/简历与经历/db-agent-项目讲解-Citi模板.pptx
 
 说明:
     - 保留模板母版 / 版式（Citi logo、页脚、页码、版式设计）
@@ -21,7 +21,7 @@ from pptx import Presentation
 from pptx.util import Inches
 
 TEMPLATE = "templates/Citi_prez_SzokePeter_template.pptx"
-OUTPUT = "docs/db-agent-项目讲解-Citi模板.pptx"
+OUTPUT = "docs/简历与经历/db-agent-项目讲解-Citi模板.pptx"
 SW, SH = 10.0, 7.5
 
 

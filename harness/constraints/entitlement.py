@@ -41,6 +41,7 @@ _DEFAULT_ROLES: dict[str, dict] = {
     "dba": {
         "name": "研发DBA",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
+                          "discover_relevant_schema",
                           "search_knowledge_base", "read_document", "write_query",
                           "run_hbase", "generate_hbase_query"],
         "db_tables": None,
@@ -51,17 +52,19 @@ _DEFAULT_ROLES: dict[str, dict] = {
     "manager": {
         "name": "部门经理",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
+                          "discover_relevant_schema",
                           "search_knowledge_base", "read_document"],
         "db_tables": None,
         "db_row_filter": {"employees": "dept_id"},
         "docs_filter": None,
         "sensitive_check": True,
     },
+    # dba / manager / analyst 可访问数据库；viewer / support 不可
     "analyst": {
         "name": "数据分析师",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
-                          "search_knowledge_base", "read_document",
-                          "run_hbase", "generate_hbase_query"],
+                          "discover_relevant_schema",
+                          "search_knowledge_base", "read_document"],
         "db_tables": [
             "departments", "employees", "products", "customers", "orders",
             "ods_orders_hive", "dwd_user_events", "dim_products_hive",
@@ -72,21 +75,16 @@ _DEFAULT_ROLES: dict[str, dict] = {
     },
     "viewer": {
         "name": "访客",
-        "allowed_tools": ["list_tables", "describe_table",
-                          "search_knowledge_base", "read_document"],
-        "db_tables": [
-            "departments", "products", "customers", "orders",
-            "ods_orders_hive", "dwd_user_events", "dim_products_hive",
-        ],
+        "allowed_tools": ["search_knowledge_base", "read_document"],
+        "db_tables": [],
         "db_row_filter": None,
         "docs_filter": ["产品手册", "部门介绍", "销售制度"],
         "sensitive_check": False,
     },
     "support": {
         "name": "技术支持",
-        "allowed_tools": ["run_query", "list_tables", "describe_table",
-                          "search_knowledge_base", "read_document"],
-        "db_tables": ["products", "customers", "orders"],
+        "allowed_tools": ["search_knowledge_base", "read_document"],
+        "db_tables": [],
         "db_row_filter": None,
         "docs_filter": ["技术文档", "产品手册"],
         "sensitive_check": False,
@@ -511,6 +509,25 @@ def needs_approval_hbase(operation: str) -> bool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 数据库浏览器 / 控制台访问（与 Agent 工具权限对齐）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def can_access_database(user: dict | None = None, user_id: str | None = None) -> bool:
+    """仅拥有 list_tables 或 run_query 的角色可浏览 Database 页（当前：dba / manager / analyst）。"""
+    if user is None:
+        user = get_user(resolve_user_id(user_id))
+    tools = user.get("permissions", {}).get("allowed_tools") or []
+    return "list_tables" in tools or "run_query" in tools
+
+
+def can_access_dashboard(user: dict | None = None, user_id: str | None = None) -> bool:
+    """数据大屏仅 DBA / 数据分析师可看；部门经理 / 访客 / 技术支持不可。"""
+    if user is None:
+        user = get_user(resolve_user_id(user_id))
+    return user.get("role") in ("dba", "analyst")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # System Prompt 注入（Layer 1 软约束）
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -527,10 +544,12 @@ def build_permission_context(user: dict) -> str:
 
     # 数据范围
     tables = perms.get("db_tables")
-    if tables:
-        rows.append(f"可访问表: {', '.join(tables)}")
-    else:
+    if tables is None:
         rows.append("可访问表: 全部")
+    elif not tables:
+        rows.append("可访问表: 无（本角色不能访问数据库）")
+    else:
+        rows.append(f"可访问表: {', '.join(tables)}")
 
     # 行级过滤
     row_filter = perms.get("db_row_filter")

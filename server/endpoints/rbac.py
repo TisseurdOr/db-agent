@@ -5,7 +5,13 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
-from harness.constraints.entitlement import get_user, list_roles, list_users
+from harness.constraints.entitlement import (
+    can_access_dashboard,
+    can_access_database,
+    get_user,
+    list_roles,
+    list_users,
+)
 
 router = APIRouter()
 
@@ -40,9 +46,12 @@ async def get_rbac():
     users = []
     for u in list_users():
         dept_id = u.get("dept_id")
+        full = get_user(u["id"])
         users.append({
             **u,
             "dept_name": depts.get(dept_id) if dept_id is not None else None,
+            "can_access_database": can_access_database(full),
+            "can_access_dashboard": can_access_dashboard(full),
         })
     try:
         roles = list_roles()
@@ -53,7 +62,8 @@ async def get_rbac():
         "users": users,
         "roles": roles,
         "hint": {
-            "manager": "部门经理启用行级隔离：查 employees 时自动加 WHERE dept_id=本部门",
+            "manager": "DBA / 经理 / 数据分析师可访问数据库；经理查 employees 时自动加 WHERE dept_id=本部门",
+            "db_access": "viewer / support 不能浏览 Database；Dashboard 仅 dba / analyst（经理不可）",
         },
     }
 
@@ -74,4 +84,6 @@ async def get_rbac_user(user_id: str):
         "db_tables": perms.get("db_tables"),
         "sensitive_check": perms.get("sensitive_check"),
         "row_filter": perms.get("db_row_filter"),
+        "can_access_database": can_access_database(user),
+        "can_access_dashboard": can_access_dashboard(user),
     }

@@ -26,11 +26,10 @@ export default function ChatArea({ messages, isStreaming, sessionId, onSend, onF
             textAlign: "center", color: "#666", marginTop: "20vh",
             fontSize: 15, lineHeight: 2,
           }}>
-            <div style={{ fontSize: 40, marginBottom: 16 }}>🤖</div>
-            <div style={{ color: "#aaa", fontSize: 18, fontWeight: 600 }}>db-agent · AI 数据分析助手</div>
-            <div>用自然语言查询数据库</div>
+            <div style={{ color: "#aaa", fontSize: 18, fontWeight: 600 }}>db-agent · AI data analysis</div>
+            <div>Query the database in natural language</div>
             <div style={{ fontSize: 13, color: "#555", marginTop: 16 }}>
-              试试：华东地区销售额最高的产品 · 各部门平均工资 · orders 表结构
+              Try: top product sales in East China · average salary by department · orders schema
             </div>
           </div>
         )}

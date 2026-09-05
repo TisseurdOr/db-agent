@@ -1,9 +1,10 @@
 # short_term_memory.py
 import json
-import os
 from pathlib import Path
 
 from anthropic import Anthropic
+
+from harness.config import DEFAULT_MODEL
 
 _DB_DIR = Path(__file__).resolve().parents[2] / "db"
 
@@ -21,7 +22,7 @@ REDUCE_SUMMARY_PROMPT = """将多段对话摘要合并为一段更短的全局�
 async def compress_history(client: Anthropic, old_messages: list, model=None):
     """将旧消息压缩为一段摘要。压缩任务不需要旗舰模型，用便宜的即可。"""
     if model is None:
-        model = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
+        model = DEFAULT_MODEL
     text = "\n".join([
         f"{'用户' if m['role']=='user' else '助手'}: {str(m['content'])[:500]}"
         for m in old_messages
@@ -43,7 +44,7 @@ async def compress_history(client: Anthropic, old_messages: list, model=None):
 async def reduce_summaries(client: Anthropic, summary_text: str, model=None) -> str:
     """Map-reduce：把过长摘要压成更短的全局摘要。"""
     if model is None:
-        model = os.getenv("ANTHROPIC_MODEL", "deepseek-chat")
+        model = DEFAULT_MODEL
     if not (summary_text or "").strip():
         return ""
     if client is None:
@@ -207,7 +208,7 @@ class ConversationManager:
 
         try:
             kwargs = {
-                "model": os.getenv("ANTHROPIC_MODEL", "deepseek-chat"),
+                "model": DEFAULT_MODEL,
                 "messages": messages,
             }
             if system_text:
