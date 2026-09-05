@@ -12,6 +12,7 @@ from harness.orchestration.multi.agent_names import (
     AGENT_SQL,
     AGENT_STRATEGY,
 )
+from harness.orchestration.multi.router_rules import load_rules
 
 # ── Router System Prompt（LLM 兜底用）──
 
@@ -154,6 +155,12 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
     q = (query or "").strip()
     if not q:
         return []
+
+    # 学到的精确匹配规则（eval_improve 闭环写入）——最高优先级，是"过去失败的记忆"。
+    # ponytail: 精确匹配只覆盖已见过的 query；泛化需 LLM 抽 pattern + 控制齿轮防过度泛化。
+    learned = load_rules().get(q)
+    if learned is not None:
+        return [{"agent": a, "task": q} for a in learned]
 
     q_lower = q.lower()
 
