@@ -67,6 +67,13 @@ def test_should_learn_respects_env_kill_switch(monkeypatch):
     assert not should_learn("各部门的订单总金额是多少", GOOD_RESULT)
 
 
+def test_should_learn_force_bypasses_env_but_keeps_quality(monkeypatch):
+    """force=True 跳过 AUTO_LEARN_SQL 门（评测学习阶段用），其余质量门仍生效。"""
+    monkeypatch.setenv("AUTO_LEARN_SQL", "0")
+    assert should_learn("各部门的订单总金额是多少", GOOD_RESULT, force=True)
+    assert not should_learn("", GOOD_RESULT, force=True)  # 空问题仍拒绝
+
+
 def test_sql_executes_validates_against_real_db():
     assert sql_executes("SELECT COUNT(*) FROM orders")
     assert not sql_executes("SELECT no_such_col FROM orders")
@@ -191,3 +198,32 @@ def test_sensitive_sql_blocks_hitl(monkeypatch):
     monkeypatch.setattr("harness.memory.feedback.sql_executes", lambda sql: True)
     assert learn_from_hitl("查手机号", "SELECT phone FROM customers") is False
     assert calls == []
+
+
+# ═══ 语义门（跨模型 judge，可选）══════════════════════════════════════
+
+def test_semantic_verify_degrades_without_key(monkeypatch):
+    """没配 KIMI_API_KEY → 语义门降级放行（退回形式-only 质量门）。"""
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+    assert feedback.semantic_verify("销售额", "SELECT SUM(total) FROM orders") is True
+
+
+def test_parse_semantic_verdict():
+    from harness.memory.feedback import _parse_semantic_verdict
+
+    assert _parse_semantic_verdict('{"correct": true, "reason": "对"}') is True
+    assert _parse_semantic_verdict('{"correct": false, "reason": "口径错"}') is False
+    assert _parse_semantic_verdict("乱码") is None
+
+
+def test_semantic_gate_rejects_wrong_sql(monkeypatch):
+    """语义门判错 → 拒绝回流（即使 SQL 形式合法、能跑通）。"""
+    monkeypatch.setattr(feedback, "semantic_verify", lambda q, s: False)
+    assert not should_learn("各部门的订单总金额是多少", GOOD_RESULT)
+
+
+def test_force_skips_semantic_gate(monkeypatch):
+    """force=True（评测学习，正确性已由 expected 断言验证）→ 跳过语义门。"""
+    monkeypatch.setenv("AUTO_LEARN_SQL", "0")
+    monkeypatch.setattr(feedback, "semantic_verify", lambda q, s: False)
+    assert should_learn("各部门的订单总金额是多少", GOOD_RESULT, force=True)

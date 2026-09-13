@@ -34,7 +34,7 @@ class _FakeRunner:
         self.first = first
         self.resume_calls: list[bool] = []
 
-    async def run(self, query: str):
+    async def run(self, query: str, thread_id: str | None = None):
         return self.first
 
     async def resume(self, approved: bool = True):

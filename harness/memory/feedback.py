@@ -11,6 +11,7 @@
 #   4. 提取出的 SQL 必须能在真实库上跑通（可选硬校验）
 #   5. 环境变量 AUTO_LEARN_SQL=0 可关掉自动回流
 #   6. 涉及敏感列（薪资/手机/证件/账户等）的 SQL 不自动回流（审计）
+#   7. 语义门（可选，配 KIMI_API_KEY 生效）：跨模型 judge 验"SQL 是否真的回答了问题"
 
 from __future__ import annotations
 
@@ -90,28 +91,98 @@ def extract_sql(text: str) -> str | None:
 
 
 def sql_executes(sql: str, db_path: str = DB_PATH) -> bool:
-    """在真实库上 dry-run：只允许 SELECT/WITH，能执行且不抛错才算可回流。"""
+    """在真实库上 dry-run：只允许 SELECT/WITH，能执行且返回非空结果才算可回流。
+
+    空结果也算失败——枚举值猜错（如 status='active' 而真实是 'completed'）会
+    跑通但返回 0 行，这类 SQL 不该作为 few-shot 参照回流。
+    """
     cleaned = sql.strip().upper()
     if not cleaned.startswith(("SELECT", "WITH")):
         return False
     try:
         conn = sqlite3.connect(db_path)
         try:
-            conn.execute(sql).fetchmany(1)
-            return True
+            row = conn.execute(sql).fetchmany(1)
+            return bool(row)
         finally:
             conn.close()
     except sqlite3.Error:
         return False
 
 
-def should_learn(question: str, result_text: str, sql: str | None = None) -> bool:
+# 语义门：用独立模型（Kimi）验"SQL 是否真的回答了问题"。形式合法 ≠ 语义正确，
+# 问"销售额"却算了"数量"这类答非所问，正则/执行校验都发现不了。
+_SEMANTIC_JUDGE_PROMPT = """你是 SQL 语义审查员。判断这条 SQL 是否真正回答了用户的问题。
+
+注意：不是判断语法对不对（语法已经验证过了），而是判断语义对不对——查的表、过滤条件、聚合方式、分组维度，是否符合问题的意图。
+
+常见错误：
+- 问"销售额"却算了"数量"
+- 问"各产品销量"却按月份分组
+- 问 A 地区却查了 B 地区
+
+只输出 JSON，不要任何其他文字：
+{"correct": true/false, "reason": "一句话说明"}
+"""
+
+
+def _parse_semantic_verdict(text: str) -> bool | None:
+    """解析 judge 返回的 JSON，取 correct 字段。解析失败返回 None（降级放行）。"""
+    m = re.search(r'"correct"\s*:\s*(true|false)', text, re.IGNORECASE)
+    if not m:
+        return None
+    return m.group(1).lower() == "true"
+
+
+def semantic_verify(question: str, sql: str) -> bool:
+    """语义门（可选）：用独立模型（Kimi）判断 SQL 是否真的回答了问题。
+
+    跨模型 judge 的原因：同一家模型会偏袒自己的错误（六维线 5.3），用 Kimi
+    评 DeepSeek 才像外部评审。
+
+    降级：没配 KIMI_API_KEY 或调用失败时返回 True（跳过语义门，退回形式-only
+    质量门）——语义门是"更严"，不是"替代"，没了它不更糟。
+    """
+    api_key = os.getenv("KIMI_API_KEY", "")
+    if not api_key:
+        return True
+    try:
+        from anthropic import Anthropic
+
+        from harness.observation.llm import extract_text
+
+        client = Anthropic(
+            api_key=api_key,
+            base_url=os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/anthropic"),
+        )
+        resp = client.messages.create(
+            model=os.getenv("KIMI_MODEL", "kimi-k2.5"),
+            max_tokens=512,
+            system=_SEMANTIC_JUDGE_PROMPT,
+            messages=[{"role": "user", "content": f"用户问题: {question}\nSQL: {sql}"}],
+        )
+        text = extract_text(resp, context="semantic_gate") or ""
+        verdict = _parse_semantic_verdict(text)
+        if verdict is False:
+            return False
+        return True  # 明确正确，或解析失败 → 降级放行
+    except Exception:
+        return True
+
+
+def should_learn(
+    question: str, result_text: str, sql: str | None = None, *, force: bool = False
+) -> bool:
     """质量门：全部通过才允许写回样例库。
 
     自愈场景会在文本里留下 'no such column' 等字样——只要最终抽出的
     SQL 能在真实库上跑通，就允许回流；纯错误 JSON / 超时一律拒绝。
+
+    force=True 跳过 AUTO_LEARN_SQL 环境门——评测学习阶段在事实断言
+    （expected）通过后显式写入，此时正确性已由外部验证，无需再靠
+    "能执行"这种事后信号。其余质量门（SELECT-only / 敏感列 / 真实库跑通）始终生效。
     """
-    if os.getenv("AUTO_LEARN_SQL", "1") in ("0", "false", "False"):
+    if not force and os.getenv("AUTO_LEARN_SQL", "1") in ("0", "false", "False"):
         return False
     if not question or not question.strip():
         return False
@@ -131,7 +202,14 @@ def should_learn(question: str, result_text: str, sql: str | None = None) -> boo
     if sensitive:
         print(f"   🚫 自学习: 跳过敏感 SQL 回流（{label}）")
         return False
-    return sql_executes(sql)
+    if not sql_executes(sql):
+        return False
+    # 语义门（可选）：force=True（评测学习，正确性已由 expected 事实断言验证）
+    # 跳过这刀；普通自动回流用独立模型 Kimi 验"SQL 是否真的回答了问题"。
+    if not force and not semantic_verify(question.strip(), sql):
+        print(f"   🚫 自学习: 语义门拒绝（SQL 未正确回答问题）: {question[:40]}…")
+        return False
+    return True
 
 
 def learn_from_success(
@@ -139,6 +217,8 @@ def learn_from_success(
     result_text: str = "",
     sql: str | None = None,
     source: str = "auto",
+    *,
+    force: bool = False,
 ) -> bool:
     """成功路径回流。返回是否写入样例库。
 
@@ -146,9 +226,12 @@ def learn_from_success(
       auto  — SQL Agent 正常跑通后自动回流
       hitl  — 用户批准敏感查询后回流（人工背书，权重更高的语义）
       user  — 用户显式纠正/确认（预留给 CLI）
+
+    force=True 供评测学习阶段使用：该样例的正确性已由 expected 事实断言
+    验证过，跳过 AUTO_LEARN_SQL 环境门直接写入（质量门仍生效）。
     """
     sql = sql or extract_sql(result_text)
-    if not should_learn(question, result_text, sql):
+    if not should_learn(question, result_text, sql, force=force):
         return False
     ok = record_sql_example(question.strip(), sql, source=source)
     if ok:

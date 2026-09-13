@@ -61,6 +61,10 @@ class EvalCase:
     # 从「回答里有没有提关键词」升级到「回答的事实对不对」。
     # 例: "哪个部门销售额最高" → expected="财务部"（唯一正确答案）
     # 填值前先用 SQL 在 db/demo.db 里核实，不要凭感觉写。
+    expected_sql: str = ""
+    # expected_sql: 标准答案的「来源 SQL」（治本）。非空时 eval_runner 用它实查
+    # db/demo.db 得到 ground truth，替代写死的 expected。orders 表由 seed.py 按日期
+    # 动态生成（end_date 推进 → 行数/排名变），写死 expected 会过时；配了它断言永远对着真实数据。
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -237,6 +241,7 @@ OUTPUT_CASES = [
         },
         # 事实断言：正确答案是财务部（db/demo.db 实查 SUM(orders.total) 验证）
         expected="财务部",
+        expected_sql="SELECT d.name FROM orders o JOIN departments d ON o.dept_id=d.id GROUP BY d.name ORDER BY SUM(o.total) DESC LIMIT 1",
     ),
     EvalCase(
         id="output-003",
@@ -272,6 +277,7 @@ OUTPUT_CASES = [
         },
         # 事实断言：销售部员工数 = 8（db/demo.db 实查 COUNT(employees)）
         expected="8",
+        expected_sql="SELECT COUNT(*) FROM employees WHERE dept_id=(SELECT id FROM departments WHERE name='销售部')",
     ),
     EvalCase(
         id="output-006",
@@ -288,9 +294,10 @@ OUTPUT_CASES = [
         id="output-007",
         category="output_quality",
         query="一共下了多少笔订单",
-        description="订单总数：338（db 实查）",
-        assertions={"output_contains": ["338"], "max_tokens": 4000},
-        expected="338",
+        description="订单总数（动态实查 COUNT(orders)）",
+        assertions={"max_tokens": 4000},
+        expected="649",
+        expected_sql="SELECT COUNT(*) FROM orders",
     ),
     EvalCase(
         id="output-008",
@@ -299,6 +306,7 @@ OUTPUT_CASES = [
         description="员工总数：39（db 实查）",
         assertions={"output_contains": ["39"], "max_tokens": 4000},
         expected="39",
+        expected_sql="SELECT COUNT(*) FROM employees",
     ),
     EvalCase(
         id="output-009",
@@ -307,14 +315,16 @@ OUTPUT_CASES = [
         description="研发部 12 人（db 实查）",
         assertions={"output_contains": ["员工"], "max_tokens": 4000},
         expected="研发部",
+        expected_sql="SELECT d.name FROM employees e JOIN departments d ON e.dept_id=d.id GROUP BY d.name ORDER BY COUNT(*) DESC LIMIT 1",
     ),
     EvalCase(
         id="output-010",
         category="output_quality",
         query="销量最高的产品是哪个",
-        description="品牌设计套餐 72 件（db 实查 SUM(quantity)）",
+        description="销量最高产品（动态实查 SUM(quantity)）",
         assertions={"output_contains": ["产品"], "max_tokens": 4000},
-        expected="品牌设计套餐",
+        expected="企业培训课程",
+        expected_sql="SELECT p.name FROM orders o JOIN products p ON o.product_id=p.id GROUP BY p.name ORDER BY SUM(o.quantity) DESC LIMIT 1",
     ),
     EvalCase(
         id="output-011",
@@ -323,6 +333,7 @@ OUTPUT_CASES = [
         description="定制开发服务（db 实查 SUM(total)）",
         assertions={"output_contains": ["产品"], "max_tokens": 4000},
         expected="定制开发服务",
+        expected_sql="SELECT p.name FROM orders o JOIN products p ON o.product_id=p.id GROUP BY p.name ORDER BY SUM(o.total) DESC LIMIT 1",
     ),
     EvalCase(
         id="output-012",
@@ -331,6 +342,7 @@ OUTPUT_CASES = [
         description="completed 217 笔（db 实查）",
         assertions={"output_contains": ["订单"], "max_tokens": 4000},
         expected="completed",
+        expected_sql="SELECT status FROM orders GROUP BY status ORDER BY COUNT(*) DESC LIMIT 1",
     ),
     EvalCase(
         id="output-013",
@@ -339,14 +351,16 @@ OUTPUT_CASES = [
         description="2025 年 774.75 万 > 2026 年 574.32 万（db 实查）",
         assertions={"output_contains": ["2025", "2026"], "max_tokens": 6000},
         expected="2025",
+        expected_sql="SELECT strftime('%Y', created_at) FROM orders GROUP BY strftime('%Y', created_at) ORDER BY SUM(total) DESC LIMIT 1",
     ),
     EvalCase(
         id="output-014",
         category="output_quality",
         query="已完成（completed）的订单有多少笔",
-        description="completed 217 笔（db 实查）",
-        assertions={"output_contains": ["217"], "max_tokens": 4000},
-        expected="217",
+        description="completed 订单数（动态实查）",
+        assertions={"max_tokens": 4000},
+        expected="401",
+        expected_sql="SELECT COUNT(*) FROM orders WHERE status='completed'",
     ),
     EvalCase(
         id="output-015",
@@ -355,14 +369,16 @@ OUTPUT_CASES = [
         description="林怡，47483（db 实查）",
         assertions={"output_contains": ["员工"], "max_tokens": 4000},
         expected="林怡",
+        expected_sql="SELECT name FROM employees ORDER BY salary DESC LIMIT 1",
     ),
     EvalCase(
         id="output-016",
         category="output_quality",
         query="2026 年一共下了多少笔订单",
-        description="2026 年 152 笔（db 实查）",
-        assertions={"output_contains": ["152"], "max_tokens": 4000},
-        expected="152",
+        description="2026 年订单数（动态实查）",
+        assertions={"max_tokens": 4000},
+        expected="315",
+        expected_sql="SELECT COUNT(*) FROM orders WHERE strftime('%Y', created_at)='2026'",
     ),
 ]
 

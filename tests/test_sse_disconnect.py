@@ -154,7 +154,7 @@ async def test_resume_uses_session_runner(monkeypatch):
     registry = RunnerRegistry()
     runner = _make_fake_runner()
 
-    async def resume_streaming(self, approved, queue):
+    async def resume_streaming(self, approved, queue, clarified_query=""):
         await queue.put(("text_delta", {"text": "已批准继续"}))
         await queue.put(("done_sentinel", None))
 

@@ -35,6 +35,7 @@
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -46,6 +47,8 @@ load_dotenv()
 os.environ.setdefault("AGENT_USER", "dba")
 
 from anthropic import Anthropic
+
+from db.seed import DB_PATH
 
 # Kimi API 配置（Anthropic 兼容接口，用于 Judge 独立评估）
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "")
@@ -188,6 +191,26 @@ def _agents_from_interrupt(data: dict) -> set[str]:
     return {agent} if agent else set()
 
 
+def _resolve_expected(case: EvalCase) -> str:
+    """返回 case 的标准答案片段。
+
+    优先用 expected_sql 在 db/demo.db 实查（动态 ground truth，防 seed 日期推进导致
+    expected 过时）；expected_sql 为空或实查失败时回退写死的 expected。
+    """
+    if case.expected_sql:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            try:
+                row = conn.execute(case.expected_sql).fetchone()
+            finally:
+                conn.close()
+            if row and row[0] is not None:
+                return str(row[0])
+        except Exception as e:
+            print(f"⚠️ 动态实查失败（{case.id}），回退写死 expected: {e}")
+    return case.expected
+
+
 async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
     """完整用例：调 multi-agent 系统，检查输出和 plan。返回 (result, answer_text)。"""
     result = EvalResult(case)
@@ -195,7 +218,11 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
     answer = ""
 
     try:
-        answer = await runner.run(case.query)
+        # 每个 case 独立 thread_id，隔离 checkpointer 的 messages 累积——
+        # 否则 node_router 读 state["messages"][-6:] 会串进前面 case 的 query，
+        # maybe_rerecall 再把污染后的 plan 拼进 probe，SQL 上下文越滚越脏。
+        tid = f"{getattr(runner, 'thread_id', 'eval')}-{case.id}"
+        answer = await runner.run(case.query, thread_id=tid)
     except Exception as e:
         result.fail(f"Agent 执行异常: {e}")
         result.elapsed = time.time() - t0
@@ -288,12 +315,14 @@ async def _run_full_case(case: EvalCase, runner) -> tuple[EvalResult, str]:
 
     # 事实断言（expected 非空才检查）：标准答案片段必须出现在回答里。
     # 这是从「回答里有没有提关键词」升级到「回答的事实对不对」的关键一环。
-    if case.expected:
-        if case.expected.lower() in answer.lower():
-            result.ok(f"事实正确: 回答包含标准答案「{case.expected}」")
+    # expected_sql 存在时先实查 DB 得到动态 ground truth，防写死值过时。
+    expected = _resolve_expected(case)
+    if expected:
+        if expected.lower() in answer.lower():
+            result.ok(f"事实正确: 回答包含标准答案「{expected}」")
         else:
             result.fail(
-                f"事实错误: 回答不包含标准答案「{case.expected}」。\n"
+                f"事实错误: 回答不包含标准答案「{expected}」。\n"
                 f"    实际回答（前 200 字）: {answer[:200]}"
             )
 
@@ -323,8 +352,9 @@ async def judge_answer(client: Anthropic, case: EvalCase, answer: str, model: st
     让 accuracy 变成「对着标准答案核对」，而不是凭感觉判断数字像不像编的。
     """
     expected_note = ""
-    if case.expected:
-        expected_note = f"\n标准答案（ground truth）: {case.expected}"
+    expected = _resolve_expected(case)
+    if expected:
+        expected_note = f"\n标准答案（ground truth）: {expected}"
     user_msg = (
         f"用户问题: {case.query}\n"
         f"Agent 回答: {answer[:2000]}\n"

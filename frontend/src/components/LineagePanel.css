@@ -1,0 +1,40 @@
+.lp-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 480px;
+}
+
+.lp-head {
+  padding: 4px 0 12px;
+}
+
+.lp-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.lp-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.lp-canvas {
+  flex: 1;
+  min-height: 420px;
+  width: 100%;
+}
+
+.lp-error {
+  padding: 20px;
+  color: #e05050;
+  font-size: 13px;
+}
+
+.lp-empty {
+  padding: 20px;
+  color: #94a3b8;
+  font-size: 13px;
+}

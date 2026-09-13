@@ -5,8 +5,8 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://localhost:8000',
-      '/charts': 'http://localhost:8000',
+      '/api': process.env.BACKEND_URL || 'http://localhost:8000',
+      '/charts': process.env.BACKEND_URL || 'http://localhost:8000',
     },
   },
 })

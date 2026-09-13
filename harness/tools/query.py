@@ -49,8 +49,12 @@ RUN_QUERY_TOOL = {
 }
 
 
-def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
-    """执行 SELECT 查询，自动截断大结果集。"""
+def run_query(sql: str, max_rows: int = 50, user_id: str | None = None, params: list | None = None) -> dict:
+    """执行 SELECT 查询，自动截断大结果集。
+
+    params 供 query_table 传入参数化 value（? 占位符），防止 SQL 注入；
+    直接调用时不传，等价于 execute(sql)。
+    """
     cleaned = sql.strip().upper()
     if not cleaned.startswith("SELECT"):
         return {
@@ -95,7 +99,7 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None) -> dict:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
-        cursor = conn.execute(sql)
+        cursor = conn.execute(sql, params or ())
         rows = [dict(row) for row in cursor.fetchmany(max_rows + 1)]
         truncated = len(rows) > max_rows
         rows = rows[:max_rows] if truncated else rows

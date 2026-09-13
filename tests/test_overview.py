@@ -1,6 +1,7 @@
 """Overview 端点（/api/overview）测试 —— 用临时 trace 目录，零 API 成本。"""
 
 import json
+from datetime import date
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -9,6 +10,8 @@ import server.endpoints.overview as ov_mod
 from server.main import app
 
 client = TestClient(app)
+
+_TODAY = date.today().strftime("%Y-%m-%d")
 
 
 def _write_trace(dir: Path, name: str, traces: list[dict]) -> None:
@@ -61,17 +64,17 @@ def test_load_traces_sorts_desc(monkeypatch, tmp_path):
 def test_load_traces_days_filter(monkeypatch, tmp_path):
     monkeypatch.setattr(ov_mod, "TRACE_DIR", tmp_path)
     _write_trace(tmp_path, "2026-08-01.jsonl", [_trace()])
-    _write_trace(tmp_path, "2026-08-28.jsonl", [_trace()])
+    _write_trace(tmp_path, f"{_TODAY}.jsonl", [_trace()])
     traces = ov_mod._load_traces(days=1)
     assert len(traces) == 1  # 只保留"今天"（文件名即日期）
 
 
 def test_overview_endpoint_shape(monkeypatch, tmp_path):
     monkeypatch.setattr(ov_mod, "TRACE_DIR", tmp_path)
-    _write_trace(tmp_path, "2026-08-28.jsonl", [
-        _trace(query="华东销售额", started_at="2026-08-28T09:00:00",
+    _write_trace(tmp_path, f"{_TODAY}.jsonl", [
+        _trace(query="华东销售额", started_at=f"{_TODAY}T09:00:00",
                spans=[_span("router"), _span("sql", error="表不存在")]),
-        _trace(query="各部门工资", started_at="2026-08-28T09:05:00",
+        _trace(query="各部门工资", started_at=f"{_TODAY}T09:05:00",
                spans=[_span("router"), _span("sql")]),
     ])
     r = client.get("/api/overview")

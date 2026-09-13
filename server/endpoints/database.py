@@ -25,7 +25,7 @@ router = APIRouter()
 ROOT = Path(__file__).resolve().parents[2]
 
 # demo.db 内表按引擎分组（面试/演示口径）
-DEMO_SQL_TABLES = {"departments", "employees", "products", "customers", "orders"}
+DEMO_SQL_TABLES = {"departments", "employees", "products", "customers", "orders", "payments", "shipments", "inventory"}
 DEMO_HIVE_TABLES = {"ods_orders_hive", "dwd_user_events", "dim_products_hive"}
 DEMO_META_TABLES = {"agent_roles", "agent_users", "user_memory", "user_feedback"}
 
@@ -40,6 +40,9 @@ TABLE_DESC: dict[str, dict[str, str]] = {
         "products": "SQL：产品",
         "customers": "SQL：客户",
         "orders": "SQL：订单事实表",
+        "payments": "SQL：支付记录（订单对账）",
+        "shipments": "SQL：发货记录（物流）",
+        "inventory": "SQL：产品库存（多仓）",
         "ods_orders_hive": "Hive：ods 订单层",
         "dwd_user_events": "Hive：dwd 用户事件",
         "dim_products_hive": "Hive：产品维",

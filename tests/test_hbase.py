@@ -118,7 +118,7 @@ def test_get_missing_row():
 def test_count_orders():
     """count 返回表行数。"""
     result = run_hbase(operation="count", table_name="orders")
-    assert result["count"] == 30
+    assert result["count"] == 80
 
 
 def test_count_with_filter():
@@ -332,7 +332,7 @@ def test_desc_table():
     assert result["operation"] == "desc"
     assert result["table"] == "orders"
     assert "cf" in result["column_families"]
-    assert result["row_count"] == 30
+    assert result["row_count"] == 80
     assert result["disabled"] is False
 
 

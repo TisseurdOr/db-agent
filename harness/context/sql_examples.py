@@ -78,6 +78,15 @@ SEED_EXAMPLES = [
             "GROUP BY c.region ORDER BY 总金额 DESC"
         ),
     },
+    {
+        "question": "各产品的销售趋势",
+        "sql": (
+            "SELECT p.name AS 产品, strftime('%Y-%m', o.created_at) AS 月份, "
+            "SUM(o.total) AS 销售额 "
+            "FROM orders o JOIN products p ON o.product_id = p.id "
+            "GROUP BY p.name, 月份 ORDER BY 月份, 销售额 DESC"
+        ),
+    },
 ]
 
 # 检索相似度阈值：低于它的样例宁可不给——错误的参照比没有参照更有害
@@ -145,19 +154,21 @@ class SQLExampleStore:
         return [d.embedding for d in resp.data]
 
     def seed(self):
-        """首次使用时写入种子样例（已有数据则跳过）。"""
+        """写入种子样例（幂等：只补缺失的 seed，不重复 embed 已有的）。"""
         self._ensure_clients()
-        if self._collection.count() > 0:
+        seed_ids = [f"seed_{i}" for i in range(len(SEED_EXAMPLES))]
+        existing = set(self._collection.get(ids=seed_ids).get("ids") or [])
+        missing = [i for i in range(len(SEED_EXAMPLES)) if seed_ids[i] not in existing]
+        if not missing:
             return
-        questions = [ex["question"] for ex in SEED_EXAMPLES]
         now = int(time.time())
         self._collection.add(
-            ids=[f"seed_{i}" for i in range(len(SEED_EXAMPLES))],
-            documents=questions,
-            embeddings=self._embed(questions),
+            ids=[seed_ids[i] for i in missing],
+            documents=[SEED_EXAMPLES[i]["question"] for i in missing],
+            embeddings=self._embed([SEED_EXAMPLES[i]["question"] for i in missing]),
             metadatas=[
-                {"sql": ex["sql"], "source": "seed", "created_at": now, "last_hit_at": now, "hit_count": 0}
-                for ex in SEED_EXAMPLES
+                {"sql": SEED_EXAMPLES[i]["sql"], "source": "seed", "created_at": now, "last_hit_at": now, "hit_count": 0}
+                for i in missing
             ],
         )
 

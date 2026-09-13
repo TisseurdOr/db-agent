@@ -113,6 +113,7 @@ from server.endpoints.database import router as database_router
 from server.endpoints.datasource import router as datasource_router
 from server.endpoints.eval import router as eval_router
 from server.endpoints.feedback import router as feedback_router
+from server.endpoints.lineage import router as lineage_router
 from server.endpoints.memory import router as memory_router
 from server.endpoints.ops import router as ops_router
 from server.endpoints.overview import router as overview_router
@@ -131,6 +132,7 @@ app.include_router(sessions_router, prefix="/api", dependencies=[Depends(require
 app.include_router(datasource_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(database_router, prefix="/api", dependencies=[Depends(require_auth)])
 app.include_router(memory_router, prefix="/api", dependencies=[Depends(require_auth)])
+app.include_router(lineage_router, prefix="/api", dependencies=[Depends(require_auth)])
 
 # ── Chart dashboard HTML (render_chart 产物) ───────────────────────────
 

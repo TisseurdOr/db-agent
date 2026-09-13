@@ -25,6 +25,7 @@ from harness.tools.hive import search_hive_syntax
 from harness.tools.knowledge import search_knowledge_base, search_memory
 from harness.tools.metrics import lookup_metric
 from harness.tools.query import RUN_QUERY_TOOL, run_query
+from harness.tools.query_dsl import QUERY_TABLE_TOOL, query_table
 from harness.tools.schema import (
     DESCRIBE_TABLE_TOOL,
     DISCOVER_SCHEMA_TOOL,
@@ -42,8 +43,12 @@ SQL_AGENT_PROMPT = """你是 SQL Agent。你主要做五件事：
 1. discover_relevant_schema — 根据查询意图智能检索相关表和字段（优先调用）
 2. list_tables — 列出所有表名
 3. describe_table — 查看表结构（列名、类型）
-4. run_query — 在 SQLite 上执行 SELECT（只读）
-5. search_memory — 检索长期对话记忆（Self-Query）；当任务含「上次/之前/刚才」或上下文口径不足时调用
+4. query_table — 受控取数：填结构化取数单查单表（过滤/聚合/排序/取前 N），不写 SQL，更安全
+5. run_query — 在 SQLite 上执行 SELECT（只读），多表 JOIN 或 query_table 覆盖不了时用
+6. search_memory — 检索长期对话记忆（Self-Query）；当任务含「上次/之前/刚才」或上下文口径不足时调用
+
+取数优先级：单表查询优先用 query_table（表名/列名/操作符白名单 + 参数化，无法注入）；
+只有需要多表 JOIN、子查询、CASE WHEN 等 query_table 不支持的场景才退回 run_query 写自由 SQL。
 
 你不会做数据分析、不会解释趋势、不会给业务建议。
 你的唯一职责：准确理解查询意图，写出正确的 SQL，返回查询结果。
@@ -73,13 +78,14 @@ sql_agent = ConfiguredAgent(
     name=AGENT_SQL,
     system_prompt=SQL_AGENT_PROMPT,
     tools=[
-        DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, RUN_QUERY_TOOL,
+        DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, QUERY_TABLE_TOOL, RUN_QUERY_TOOL,
         search_memory.tool_schema,
     ],
     handlers={
         "discover_relevant_schema": discover_relevant_schema,
         "list_tables": list_tables,
         "describe_table": describe_table,
+        "query_table": query_table,
         "run_query": run_query,
         "search_memory": search_memory,
     },

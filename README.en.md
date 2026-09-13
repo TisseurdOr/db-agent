@@ -20,7 +20,7 @@ Ask in plain language, query SQLite / HBase / Hive — with permissions, self-he
 [![FastAPI](https://img.shields.io/badge/Web-FastAPI%20%2B%20SSE-009688)](https://fastapi.tiangolo.com)
 [![Stars](https://img.shields.io/github/stars/TisseurdOr/db-agent?style=social)](https://github.com/TisseurdOr/db-agent/stargazers)
 
-[Features](#1-features-what-it-does) · [Architecture](#2-architecture-how-it-is-split) · [Lifecycle](#3-lifecycle-how-one-query-runs) · [Evolution](#4-evolution-how-it-grew) · [Quick start](#quick-start)
+[Features](#1-features-what-it-does) · [Architecture](#2-architecture-how-it-is-split) · [Lifecycle](#3-lifecycle-how-one-query-runs) · [Evolution](#4-evolution-how-it-grew) · [Quick start](#quick-start) · [API](docs/新手手册/API.md)
 
 </div>
 
@@ -259,7 +259,7 @@ Follow the runtime path, not a folder sweep:
 | 2 | `harness/orchestration/multi/` | multi: graph / runner / nodes / router |
 | 3 | `harness/tools/` · `harness/constraints/entitlement.py` | capabilities & permissions |
 | 4 | `harness/memory/` · `harness/context/` | memory, few-shot, Schema Linking |
-| 5 | `HARNESS.md` · `tests/` · `docs/troubleshooting.md` · `docs/用户手册.md` | architecture, eval, debug, onboarding |
+| 5 | `HARNESS.md` · `tests/` · `docs/操作与排障/troubleshooting.md` · `docs/新手手册/用户手册.md` | architecture, eval, debug, onboarding |
 
 ---
 
@@ -343,18 +343,35 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 Production: `cd frontend && npm run build`; `server/main.py` serves `frontend/dist`.
 
+### API docs
+
+Full reference: **[`docs/新手手册/API.md`](docs/新手手册/API.md)**. With the server up:
+
+| | URL |
+|--|-----|
+| Swagger UI | http://localhost:8000/docs |
+| ReDoc | http://localhost:8000/redoc |
+| OpenAPI JSON | http://localhost:8000/openapi.json |
+
+Quick map:
+
 | Method | Path | Purpose |
 |------|------|------|
 | POST | `/api/query` | SSE streaming Q&A |
 | POST | `/api/query/resume` | Continue after HITL approve/reject |
 | POST | `/api/feedback` | Thumbs + Opik score |
 | GET | `/api/sessions` | Session list (Redis / memory) |
+| GET | `/api/overview` | Architecture cockpit |
+| GET | `/api/memory` | Memory browser |
+| GET | `/api/database` | Database browser |
 | POST | `/api/datasource/upload` | CSV → dedicated SQLite |
 | POST | `/api/datasource/connect` | Connect external SQLite |
-| GET | `/api/health` | Health check |
-| GET | `/api/metrics` | Prometheus text metrics |
+| GET | `/api/health` | Health check (open) |
+| GET | `/api/metrics` | Prometheus text (open) |
 
 `docker compose run --rm db-agent` runs the **CLI**, not the Web UI.
+
+Web auth: when `WEB_API_TOKEN` is set, all routes except `/api/health` and `/api/metrics` need `Authorization: Bearer <token>` (or `X-API-Key`); unset = allow.
 
 > **Optional state externalization**: with `REDIS_URL`, Web sessions and agent checkpoints use Redis (redis-stack); on failure, fall back to memory / SQLite.
 > **Swappable vector backend**: `VECTOR_DB=chroma` (default) or `milvus`.

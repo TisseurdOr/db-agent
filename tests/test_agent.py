@@ -42,7 +42,7 @@ def test_describe_table_unit():
 
 def test_describe_missing_table():
     """测试白名单校验——不存在的表名应返回结构化错误。"""
-    result = describe_table("inventory")
+    result = describe_table("nonexistent_table")
     assert "error" in result
     # 新错误格式：error + message + suggestion + hint（lesson 0008 标准）
     assert result["error"] is True

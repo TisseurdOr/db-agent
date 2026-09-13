@@ -88,14 +88,78 @@ async def eval_run(req: EvalRunRequest):
             "pass_rate": None,
         })
 
-    asyncio.create_task(_run_eval(req.mode))
+    asyncio.create_task(_run_eval("tests.eval_runner", [f"--{req.mode}"], req.mode))
     return {"ok": True, "status": "started", "mode": req.mode, "job": dict(_job)}
 
 
-async def _run_eval(mode: str) -> None:
+@router.post("/eval/selflearn")
+async def eval_selflearn():
+    """触发控制齿轮：三阶段自学习评测 + 退化回滚（后台跑 tests.eval_selflearn）。
+
+    先 --reset 清到 seed 基线再学，保证基线（phase 1）不受上次残留污染。
+    结果写 baseline/history（mode=sql_selflearn），前端 Eval 页趋势图可直接显示。
+    """
+    async with _job_lock:
+        if _job["status"] == "running":
+            raise HTTPException(409, detail={
+                "error": "busy",
+                "message": "已有评测在跑，请稍后再试。",
+                "job": dict(_job),
+            })
+        _job.update({
+            "status": "running",
+            "mode": "sql_selflearn",
+            "started_at": time.time(),
+            "finished_at": None,
+            "exit_code": None,
+            "message": "running eval_selflearn",
+            "pass_rate": None,
+        })
+    asyncio.create_task(_run_eval("tests.eval_selflearn", ["--reset", "--category", "output_quality"], "sql_selflearn"))
+    return {"ok": True, "status": "started", "mode": "sql_selflearn", "job": dict(_job)}
+
+
+@router.post("/eval/confidence")
+async def eval_confidence():
+    """触发置信度校准评测（后台跑 tests.eval_confidence）。
+
+    结果写 logs/confidence_calibration.json，由 GET /eval/confidence 读取。
+    """
+    async with _job_lock:
+        if _job["status"] == "running":
+            raise HTTPException(409, detail={
+                "error": "busy",
+                "message": "已有评测在跑，请稍后再试。",
+                "job": dict(_job),
+            })
+        _job.update({
+            "status": "running",
+            "mode": "sql_confidence",
+            "started_at": time.time(),
+            "finished_at": None,
+            "exit_code": None,
+            "message": "running eval_confidence",
+            "pass_rate": None,
+        })
+    asyncio.create_task(_run_eval("tests.eval_confidence", ["--category", "output_quality"], "sql_confidence"))
+    return {"ok": True, "status": "started", "mode": "sql_confidence", "job": dict(_job)}
+
+
+@router.get("/eval/confidence")
+async def eval_confidence_result():
+    """读置信度校准结果（logs/confidence_calibration.json），文件不存在则返回空。"""
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    path = os.path.join(root, "logs", "confidence_calibration.json")
+    if not os.path.exists(path):
+        return {"generated_at": None, "scored": 0, "gap": None, "rows": []}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+async def _run_eval(module: str, extra_args: list[str], mode: str) -> None:
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     py = sys.executable
-    args = [py, "-m", "tests.eval_runner", f"--{mode}"]
+    args = [py, "-m", module] + extra_args
     env = os.environ.copy()
     env.setdefault("AGENT_USER", "dba")
     try:
@@ -116,11 +180,9 @@ async def _run_eval(mode: str) -> None:
                 break
         # from baseline after run
         baseline = load_baseline()
+        pass_rate = None
         if mode in baseline:
             pass_rate = baseline[mode].get("pass_rate")
-        elif baseline:
-            # 取任意最新
-            pass_rate = next(iter(baseline.values())).get("pass_rate")
 
         ok = proc.returncode == 0
         _job.update({

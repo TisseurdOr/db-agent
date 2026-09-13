@@ -103,6 +103,12 @@ _LIST_TABLES_RE = re.compile(
     r"(有哪些表|哪些表|列出.{0,6}表|表有哪些|list\s+tables|show\s+tables)",
     re.IGNORECASE,
 )
+# 「orders 表有哪些字段/列/结构」——查表结构（describe_table），不是「列出所有表」。
+# 本库表名全英文下划线；后接「表」+「有哪些/有什么/的」+「字段/列/结构」。
+_DESCRIBE_TABLE_RE = re.compile(
+    r"(?P<tbl>[A-Za-z_][A-Za-z0-9_]*)\s*表\s*(?:有哪些|有什么|的)\s*(?:字段|列|结构)",
+    re.IGNORECASE,
+)
 # 拼音/错别字容错：「销shou额」「销 额」≈ 销售额；「查询」+「销」也当数据查询
 _FUZZY_SALES_RE = re.compile(r"销\S{0,8}额|查询.{0,6}销")
 _COMPARE_MARKERS = ("对比", "环比", "同比", "变化", "增减")
@@ -243,6 +249,13 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
             {"agent": AGENT_SQL, "task": q},
             {"agent": AGENT_ANALYSIS, "task": f"对比分析：{q}"},
         ]
+
+    # 「orders 表有哪些字段/列」→ describe 该表（查表结构），不是「列出所有表」。
+    # 必须在 _LIST_TABLES_RE 之前判——「表有哪些」子串会误匹配「表有哪些字段」。
+    m = _DESCRIBE_TABLE_RE.search(q)
+    if m and not has_hbase and not has_hive:
+        tbl = m.group("tbl")
+        return [{"agent": AGENT_SQL, "task": f"查询 {tbl} 表的字段结构（列名、类型），列出所有字段"}]
 
     # 列表示意：有哪些表 → 直接 sql（跳过 Router LLM）
     if _LIST_TABLES_RE.search(q) and not has_hbase and not has_hive:

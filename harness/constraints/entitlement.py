@@ -67,6 +67,7 @@ _DEFAULT_ROLES: dict[str, dict] = {
                           "search_knowledge_base", "read_document"],
         "db_tables": [
             "departments", "employees", "products", "customers", "orders",
+            "payments", "shipments", "inventory",
             "ods_orders_hive", "dwd_user_events", "dim_products_hive",
         ],
         "db_row_filter": None,

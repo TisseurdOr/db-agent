@@ -20,7 +20,7 @@
 [![FastAPI](https://img.shields.io/badge/Web-FastAPI%20%2B%20SSE-009688)](https://fastapi.tiangolo.com)
 [![Stars](https://img.shields.io/github/stars/TisseurdOr/db-agent?style=social)](https://github.com/TisseurdOr/db-agent/stargazers)
 
-[功能](#一功能做什么) · [架构](#二架构怎么拆) · [生命周期](#三生命周期一条-query-怎么走) · [演进](#四演进怎么一步步长出来) · [快速开始](#快速开始)
+[功能](#一功能做什么) · [架构](#二架构怎么拆) · [生命周期](#三生命周期一条-query-怎么走) · [演进](#四演进怎么一步步长出来) · [快速开始](#快速开始) · [API](docs/新手手册/API.md)
 
 </div>
 
@@ -57,7 +57,7 @@ web页面
 | **权限与 HITL** | 5 角色 RBAC（工具/表/行级）+ 敏感列 / 写操作人工审批 | `entitlement.py` · `interrupt()` |
 | **三层护栏** | 输入注入检测 → 仅 SELECT → 输出 PII 过滤 | `guardrails.py` |
 | **自愈与容错** | API 重试 → SQL 自愈 → 失败重规划 → 熔断 / 幂等 / 告警 | `retry` · `circuit_breaker` · `idempotency` |
-| **记忆与自学习** | 短/长期记忆 + HyDE + LLM Rerank 精排 + Schema Linking + 成功 SQL 回流 few-shot | `memory/` · `long_term_memory.py` · `sql_examples.py` |
+| **记忆与自学习** | 短/长期记忆 + 混合检索（BM25 + 向量 RRF 融合）+ HyDE + LLM Rerank 精排 + Schema Linking + 成功 SQL 回流 few-shot | `memory/` · `long_term_memory.py` · `sql_examples.py` |
 | **观测与评测** | Trace JSONL + Opik；47 条 Eval（Kimi Judge / DeepSeek 被测） | `observation/` · `tests/eval_*` |
 | **三种入口** | CLI `db-agent` · Streamlit · FastAPI + React SSE | `main.py` · `app.py` · `server/` |
 
@@ -73,7 +73,7 @@ db-agent  ❯ Router → sql
 
 用户      ❯ 再看一下市场部员工的薪资分布
 
-db-agent  ❯ Entitlement：analyst 可查 salary
+db-agent  ❯ Entitlement：仅 dba/经理可查库
             HITL interrupt() → 等你 y/n
             批准后出分布，并写入 sql_examples 供下次 few-shot
 ```
@@ -149,7 +149,7 @@ db-agent  ❯ Entitlement：analyst 可查 salary
 | Hive | 数仓方言（本地模拟） | `run_query` + 语法模板 |
 | DataQuality | 质量扫描（可选） | 行数 / NULL / 日期连续性 |
 
-学习材料、简历、旧实验在 `sidecar/`，不参与运行。更细的机制说明见 [`HARNESS.md`](HARNESS.md) · [`docs/engineering-mechanisms.md`](docs/engineering-mechanisms.md)。
+学习材料、简历、旧实验在 `sidecar/`，不参与运行。更细的机制说明见 [`HARNESS.md`](HARNESS.md) · [`docs/项目介绍/engineering-mechanisms.md`](docs/项目介绍/engineering-mechanisms.md)。
 
 ---
 
@@ -263,7 +263,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | 2 | `harness/orchestration/multi/` | multi：graph / runner / nodes / router |
 | 3 | `harness/tools/` · `harness/constraints/entitlement.py` | 能力与权限 |
 | 4 | `harness/memory/` · `harness/context/` | 记忆、few-shot、Schema Linking |
-| 5 | `HARNESS.md` · `tests/` · `docs/troubleshooting.md` · `docs/用户手册.md` | 架构、评测、排障、入门 |
+| 5 | `HARNESS.md` · `tests/` · `docs/操作与排障/troubleshooting.md` · `docs/新手手册/用户手册.md` | 架构、评测、排障、入门 |
 
 ---
 
@@ -282,8 +282,10 @@ db-agent --mode multi                       # 进入 CLI（等价于 python main
 ```bash
 db-agent                                   # single（默认）
 db-agent --mode multi
-db-agent --mode multi --user analyst       # 可查 salary，触发 HITL
-db-agent --mode multi --user viewer        # 不能 run_query
+db-agent --mode multi --user dba           # 全库可查
+db-agent --mode multi --user zhoufang     # 经理：行级隔离 + 敏感列 HITL
+db-agent --mode multi --user analyst     # 不能访问数据库（仅知识库）
+db-agent --mode multi --user viewer      # 不能访问数据库
 db-agent --mode multi --user xiaoyiming    # 行级 dept_id=2
 ```
 
@@ -341,11 +343,24 @@ SSE 推节点进度、HITL 弹窗、ECharts 出图、👍/👎 回流 few-shot �
 # 终端 1
 uv run uvicorn server.main:app --reload --port 8000
 
-# 终端 2（Opik 占用 5173 时改 3000）
+# 终端 2（Opik 占用 5173 时改 3000）——开发联调用这个
 cd frontend && npm install && npm run dev -- --port 3000
+# 浏览器打开 http://127.0.0.1:3000
 ```
 
-生产：`cd frontend && npm run build`，`server/main.py` 挂载 `frontend/dist`。
+只开后端时访问 **http://127.0.0.1:8000** 用的是打包产物 `frontend/dist`：**改了前端源码必须** `cd frontend && npm run build` 再硬刷新，否则会一直是旧 UI（典型坑：Database 请求不带 `user_id` → 全员 403）。细节见 **[`docs/新手手册/Web操作手册.md`](docs/新手手册/Web操作手册.md)** §1.1 / §7.5–7.6。
+
+### API 文档
+
+完整说明见 **[`docs/新手手册/API.md`](docs/新手手册/API.md)**。服务起来后也可直接打开交互式文档：
+
+| | URL |
+|--|-----|
+| Swagger UI | http://localhost:8000/docs |
+| ReDoc | http://localhost:8000/redoc |
+| OpenAPI JSON | http://localhost:8000/openapi.json |
+
+常用接口速查：
 
 | 方法 | 路径 | 作用 |
 |------|------|------|
@@ -353,14 +368,17 @@ cd frontend && npm install && npm run dev -- --port 3000
 | POST | `/api/query/resume` | HITL 批准 / 拒绝后继续 |
 | POST | `/api/feedback` | 点赞回流 + Opik 打分 |
 | GET | `/api/sessions` | 会话列表（Redis / 内存） |
+| GET | `/api/overview` | Architecture 驾驶舱 |
+| GET | `/api/memory` | 记忆浏览 |
+| GET | `/api/database` | 库浏览器 |
 | POST | `/api/datasource/upload` | CSV → 独立 SQLite |
 | POST | `/api/datasource/connect` | 连接外部 SQLite |
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/metrics` | Prometheus 文本指标 |
+| GET | `/api/health` | 健康检查（开放） |
+| GET | `/api/metrics` | Prometheus 文本指标（开放） |
 
 `docker compose run --rm db-agent` 跑的是 **CLI**，不是 Web。
 
-Web 鉴权：配置 `WEB_API_TOKEN` 后，除 `/api/health` 外所有接口要求 `Authorization: Bearer <token>`（或 `X-API-Key: <token>`）；未配置时默认放行。
+Web 鉴权：配置 `WEB_API_TOKEN` 后，除 `/api/health`、`/api/metrics` 外所有接口要求 `Authorization: Bearer <token>`（或 `X-API-Key: <token>`）；未配置时默认放行。
 
 Web Runner：按 `session_id` 管理并带空闲 TTL 回收（默认 30 分钟）；HITL resume 按 session 精确定位，不再依赖全局 active。
 
@@ -381,12 +399,13 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 
 ### 角色权限（摘要）
 
-| 角色 | run_query | 可查表 | 行级 | HITL |
-|------|-----------|--------|------|------|
-| dba | yes | 全部 | 无 | 无 |
-| analyst | yes | 5 张业务表 | 无 | salary/cost/budget |
-| manager | yes | 全部 | employees WHERE dept_id=X | salary/cost/budget |
-| viewer | no | 4 张（无 employees） | 无 | 无 |
+| 角色 | 数据库访问 | 可查表 | 行级 | HITL |
+|------|------------|--------|------|------|
+| dba | yes（含 HBase） | 全部 | 无 | 无 |
+| manager | yes | 全部 | employees.dept_id | salary/cost/budget |
+| analyst | no（仅知识库） | 无 | 无 | — |
+| viewer | no（仅知识库） | 无 | 无 | — |
+| support | no（仅知识库） | 无 | 无 | — |
 | support | yes | 3 张 | 无 | 无 |
 
 权限在 `agent_roles` / `agent_users` 表里，改表即生效。
@@ -433,9 +452,9 @@ pyright
 <sub>
 图：<a href="docs/diagrams/">docs/diagrams/</a> ·
 机制：<a href="HARNESS.md">HARNESS.md</a> ·
-案例：<a href="docs/项目案例.md">项目案例</a> ·
-工程图解：<a href="docs/engineering-mechanisms.md">engineering-mechanisms</a> ·
-复盘文章：<a href="docs/项目复盘-可复用模块库.md">可复用模块库</a>
+案例：<a href="docs/项目介绍/项目案例.md">项目案例</a> ·
+工程图解：<a href="docs/项目介绍/engineering-mechanisms.md">engineering-mechanisms</a> ·
+复盘文章：<a href="docs/项目介绍/项目复盘-可复用模块库.md">可复用模块库</a>
 </sub>
 
 </div>

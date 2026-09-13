@@ -21,6 +21,12 @@ from harness.constraints.circuit_breaker import (
     CircuitBreaker,
     CircuitOpenError,
 )
+from harness.constraints.rate_limit import get_rate_limiter
+from harness.observation.langfuse_tracing import (
+    extract_output,
+    start_generation,
+    usage_details,
+)
 
 # 可重试的 HTTP 状态码：
 #   429 限流 / 500 服务端错误 / 502,503 网关、过载 / 529 Anthropic overloaded
@@ -143,26 +149,41 @@ async def acall_with_retry(fn, *args, max_retries: int | None = None,
     if not cb.can_proceed():
         raise CircuitOpenError("熔断器打开，快速失败（不发起调用）")
 
-    for attempt in range(max_retries + 1):
+    model = kwargs.get("model")
+    llm_input = kwargs.get("messages") or kwargs.get("prompt")
+
+    with start_generation(model, llm_input) as gen:
+        rl = get_rate_limiter()
+        await rl.acquire()
         try:
-            if inspect.iscoroutinefunction(fn):
-                result = await fn(*args, **kwargs)
-            else:
-                # 同步 SDK（如 anthropic.Anthropic.messages.create）会阻塞事件循环，
-                # 导致 Web SSE 流冻结（事件积压到查询结束才 flush，前端看不到实时进度）。
-                # 放线程池执行，保持事件循环可运行。
-                result = await asyncio.to_thread(fn, *args, **kwargs)
-                if inspect.isawaitable(result):
-                    result = await result
-            cb.record_success()
-            return result
-        except Exception as e:
-            if not is_retriable(e) or attempt >= max_retries:
-                cb.record_failure()
-                if cb.state == "open":
-                    _alert_circuit_open(cb)
-                raise
-            delay = backoff_delay(attempt, base_delay)
-            print(f"⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
-                  f"({attempt + 1}/{max_retries})")
-            await asyncio.sleep(delay)
+            for attempt in range(max_retries + 1):
+                try:
+                    if inspect.iscoroutinefunction(fn):
+                        result = await fn(*args, **kwargs)
+                    else:
+                        # 同步 SDK（如 anthropic.Anthropic.messages.create）会阻塞事件循环，
+                        # 导致 Web SSE 流冻结（事件积压到查询结束才 flush，前端看不到实时进度）。
+                        # 放线程池执行，保持事件循环可运行。
+                        result = await asyncio.to_thread(fn, *args, **kwargs)
+                        if inspect.isawaitable(result):
+                            result = await result
+                    cb.record_success()
+                    if gen is not None:
+                        ud = usage_details(result)
+                        gen.update(output=extract_output(result),
+                                   usage_details=ud if ud else None)
+                    return result
+                except Exception as e:
+                    if not is_retriable(e) or attempt >= max_retries:
+                        cb.record_failure()
+                        if cb.state == "open":
+                            _alert_circuit_open(cb)
+                        if gen is not None:
+                            gen.update(level="ERROR", status_message=str(e)[:500])
+                        raise
+                    delay = backoff_delay(attempt, base_delay)
+                    print(f"⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
+                          f"({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
+        finally:
+            rl.release()

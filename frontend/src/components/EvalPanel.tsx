@@ -73,6 +73,18 @@ interface AblationData {
   configs: AblationConfig[];
 }
 
+interface ConfidenceData {
+  generated_at: string | null;
+  threshold: number;
+  total: number;
+  scored: number;
+  high_count: number;
+  low_count: number;
+  high_pass_rate: number | null;
+  low_pass_rate: number | null;
+  gap: number | null;
+}
+
 const REFRESH_MS = 10000;
 const MODE_COLORS = ["#4a6cf7", "#50b050", "#f0a030", "#e05050", "#9b59b6", "#1abc9c"];
 
@@ -121,6 +133,17 @@ export default function EvalPanel() {
   const [jobBusy, setJobBusy] = useState(false);
   const [jobMsg, setJobMsg] = useState("");
   const [ablation, setAblation] = useState<AblationData | null>(null);
+  const [confidence, setConfidence] = useState<ConfidenceData | null>(null);
+
+  const loadConfidence = useCallback(async () => {
+    try {
+      const res = await fetch("/api/eval/confidence");
+      if (!res.ok) return;
+      setConfidence((await res.json()) as ConfidenceData);
+    } catch {
+      setConfidence(null);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -145,7 +168,8 @@ export default function EvalPanel() {
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => setAblation(j as AblationData | null))
       .catch(() => setAblation(null));
-  }, []);
+    void loadConfidence();
+  }, [loadConfidence]);
 
   useEffect(() => {
     const j = data?.job;
@@ -156,22 +180,22 @@ export default function EvalPanel() {
     else if (j.status === "error") setJobMsg(j.message || "Failed");
   }, [data?.job]);
 
-  const runEval = async (mode: "fast" | "full") => {
+  const runJob = async (url: string, body: Record<string, unknown>, label: string) => {
     setJobBusy(true);
-    setJobMsg(`Starting --${mode}…`);
+    setJobMsg(`Starting ${label}…`);
     try {
-      const res = await fetch("/api/eval/run", {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify(body),
       });
-      const body = await res.json().catch(() => ({}));
+      const resBody = await res.json().catch(() => ({}));
       if (res.status === 409) {
-        setJobMsg(body.detail?.message || "Already running");
+        setJobMsg((resBody as { detail?: { message?: string } }).detail?.message || "Already running");
         return;
       }
-      if (!res.ok) throw new Error(body.detail?.message || `HTTP ${res.status}`);
-      setJobMsg(`Running --${mode}…`);
+      if (!res.ok) throw new Error((resBody as { detail?: { message?: string } }).detail?.message || `HTTP ${res.status}`);
+      setJobMsg(`Running ${label}…`);
       // 轮询稍密一点直到结束
       for (let i = 0; i < 120; i++) {
         await new Promise((r) => setTimeout(r, 1500));
@@ -185,6 +209,7 @@ export default function EvalPanel() {
               : (st.message || "Failed"),
           );
           await load();
+          void loadConfidence();
           return;
         }
       }
@@ -254,11 +279,17 @@ export default function EvalPanel() {
   return (
     <div className="ops-panel">
       <div className="ops-actions">
-        <button className="ops-run-btn" disabled={jobBusy} onClick={() => void runEval("fast")}>
+        <button className="ops-run-btn" disabled={jobBusy} onClick={() => void runJob("/api/eval/run", { mode: "fast" }, "--fast")}>
           Run eval --fast
         </button>
-        <button className="ops-run-btn" disabled={jobBusy} onClick={() => void runEval("full")} title="Calls LLM; slower">
+        <button className="ops-run-btn" disabled={jobBusy} onClick={() => void runJob("/api/eval/run", { mode: "full" }, "--full")} title="Calls LLM; slower">
           Run eval --full
+        </button>
+        <button className="ops-run-btn" disabled={jobBusy} onClick={() => void runJob("/api/eval/selflearn", {}, "selflearn (control gear)")} title="3-pass learn + rollback">
+          Run selflearn
+        </button>
+        <button className="ops-run-btn" disabled={jobBusy} onClick={() => void runJob("/api/eval/confidence", {}, "confidence calibration")} title="Verify confidence gate scoring">
+          Run confidence calibration
         </button>
         <span className={`ops-run-status ${tone}`}>{jobMsg || "Idle · click to generate eval history"}</span>
       </div>
@@ -303,6 +334,33 @@ export default function EvalPanel() {
                   <td>{c.elapsed}s</td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {confidence && confidence.scored > 0 && (
+        <div className="ops-chart" style={{ marginBottom: 16 }}>
+          <div className="ops-chart-title">置信度校准 · confidence gate 自评分准不准</div>
+          <div className="ops-meta" style={{ marginBottom: 8 }}>
+            {confidence.generated_at ? `更新 ${fmtTs(confidence.generated_at)}` : ""} · 阈值 {confidence.threshold} · 成功打分 {confidence.scored}/{confidence.total} 条
+          </div>
+          <table className="eval-table">
+            <thead><tr><th>分组</th><th>条数</th><th>通过率</th><th>判定</th></tr></thead>
+            <tbody>
+              <tr>
+                <td>高置信（≥{confidence.threshold}）</td>
+                <td>{confidence.high_count}</td>
+                <td style={{ color: "#50b050" }}>{confidence.high_pass_rate != null ? pct(confidence.high_pass_rate) : "—"}</td>
+                <td rowSpan={2} style={{ color: (confidence.gap ?? 0) >= 0.2 ? "#50b050" : (confidence.gap ?? 0) > 0 ? "#f0a030" : "#e05050" }}>
+                  {confidence.gap == null ? "—" : confidence.gap >= 0.2 ? "区分度良好，置信度门有效" : confidence.gap > 0 ? "区分度一般" : "无区分度，需调阈值或 6 项标准"}
+                </td>
+              </tr>
+              <tr>
+                <td>低置信（&lt;{confidence.threshold}）</td>
+                <td>{confidence.low_count}</td>
+                <td style={{ color: "#e05050" }}>{confidence.low_pass_rate != null ? pct(confidence.low_pass_rate) : "—"}</td>
+              </tr>
             </tbody>
           </table>
         </div>

@@ -11,13 +11,14 @@ import {
   IconClock,
   IconCpu,
   IconDatabase,
+  IconGitBranch,
   IconLayers,
   IconLineChart,
   IconMoon,
   IconSun,
 } from "./NavIcons";
 
-export type MainTabId = "arch" | "nodes" | "queries" | "dashboard" | "database" | "memory" | "ops" | "eval";
+export type MainTabId = "arch" | "nodes" | "queries" | "dashboard" | "database" | "lineage" | "memory" | "ops" | "eval";
 
 const NAV: { id: MainTabId; label: string; icon: typeof IconLayers }[] = [
   { id: "arch", label: "Architecture", icon: IconLayers },
@@ -26,6 +27,7 @@ const NAV: { id: MainTabId; label: string; icon: typeof IconLayers }[] = [
   { id: "dashboard", label: "Dashboard", icon: IconLineChart },
   { id: "memory", label: "Memory", icon: IconCpu },
   { id: "database", label: "Database", icon: IconDatabase },
+  { id: "lineage", label: "Lineage", icon: IconGitBranch },
   { id: "ops", label: "Ops metrics", icon: IconLineChart },
   { id: "eval", label: "Eval results", icon: IconBarChart },
 ];
@@ -97,7 +99,7 @@ export default function Sidebar({
 
   // 保险：权限关掉后若仍停在受限页，强制离开
   useEffect(() => {
-    if (!canAccessDatabase && activeTab === "database") {
+    if (!canAccessDatabase && (activeTab === "database" || activeTab === "lineage")) {
       onTabChange("arch");
     }
     if (!canAccessDashboard && activeTab === "dashboard") {
@@ -106,7 +108,7 @@ export default function Sidebar({
   }, [canAccessDatabase, canAccessDashboard, activeTab, onTabChange]);
 
   const navItems = NAV.filter((item) => {
-    if (item.id === "database") return canAccessDatabase;
+    if (item.id === "database" || item.id === "lineage") return canAccessDatabase;
     if (item.id === "dashboard") return canAccessDashboard;
     return true;
   });

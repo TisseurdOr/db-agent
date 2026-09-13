@@ -123,6 +123,18 @@ export function IconChevronRight({ className }: IconProps) {
   );
 }
 
+export function IconGitBranch({ className }: IconProps) {
+  return (
+    <Svg className={className}>
+      <circle cx="6" cy="6" r="2.5" />
+      <circle cx="6" cy="18" r="2.5" />
+      <circle cx="18" cy="8" r="2.5" />
+      <path d="M6 8.5v7" />
+      <path d="M18 10.5c0 3-2 4-6 4" />
+    </Svg>
+  );
+}
+
 export function IconBot({ className }: IconProps) {
   return (
     <Svg className={className}>

@@ -85,7 +85,7 @@ def test_execution_info_extracts_sql_from_result():
     })
     info = runner.get_execution_info()
     assert info["sql"].startswith("SELECT")
-    assert info["sql"].endswith(";")
+    assert info["sql"].endswith("'华东'")  # extract_sql 会 rstrip 掉尾部分号
     assert info["plan"][0]["agent"] == "sql"
     assert info["reflection"]["attempts"] == 1
     assert info["stats"]["nodes"] == ["router"]

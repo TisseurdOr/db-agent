@@ -1,0 +1,96 @@
+"""GET /api/lineage — 表级血缘（真实外键）+ 元数据分组。
+
+数据源全部来自 db-agent 已有的本地演示数据，零新依赖：
+  - demo.db 的 SQL 表外键（PRAGMA foreign_key_list）→ 真实血缘边（child → parent）
+  - Hive 分层表（ods_/dwd_/dim_ 前缀）→ 按层分组，demo 无真实 ETL 边，不造假
+  - HBase 内存模拟表 → 无血缘边
+
+节点按 engine 分组（sql/hive/hbase）。前端 LineagePanel 据此画 echarts 关系图。
+"""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+ROOT = Path(__file__).resolve().parents[2]
+DEMO_DB = ROOT / "db" / "demo.db"
+
+# 系统/内部表：不出现在血缘图里
+_SYSTEM_TABLES = {
+    "agent_roles",
+    "agent_users",
+    "user_memory",
+    "user_feedback",
+    "sqlite_sequence",
+}
+
+# HBase 内存模拟表（不在 demo.db，启动时 seed）
+HBASE_TABLES = ["orders", "user_profile", "product_catalog"]
+
+
+def _table_count(conn: sqlite3.Connection, table: str) -> int:
+    try:
+        return int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+    except sqlite3.Error:
+        return 0
+
+
+def build_lineage() -> dict:
+    nodes: list[dict] = []
+    edges: list[dict] = []
+
+    if DEMO_DB.exists():
+        conn = sqlite3.connect(f"file:{DEMO_DB}?mode=ro", uri=True)
+        try:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                )
+            ]
+            for t in tables:
+                if t in _SYSTEM_TABLES:
+                    continue
+                if t.startswith(("ods_", "dwd_", "dim_")):
+                    group, layer = "hive", t.split("_", 1)[0]
+                else:
+                    group, layer = "sql", "rel"
+                nodes.append({
+                    "id": t,
+                    "label": t,
+                    "group": group,
+                    "layer": layer,
+                    "count": _table_count(conn, t),
+                })
+                for fk in conn.execute(f'PRAGMA foreign_key_list("{t}")'):
+                    parent = fk[2]
+                    if parent and parent != t:
+                        edges.append({
+                            "source": t,
+                            "target": parent,
+                            "type": "fk",
+                            "from": fk[3],
+                            "to": fk[4],
+                        })
+        finally:
+            conn.close()
+
+    for t in HBASE_TABLES:
+        nodes.append({
+            "id": f"hbase:{t}",
+            "label": t,
+            "group": "hbase",
+            "layer": "kv",
+            "count": 0,
+        })
+
+    return {"nodes": nodes, "edges": edges}
+
+
+@router.get("/lineage")
+async def lineage():
+    return build_lineage()

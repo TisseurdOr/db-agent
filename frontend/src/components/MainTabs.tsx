@@ -8,6 +8,7 @@ import {
 } from "./Overview";
 import Dashboard from "./Dashboard";
 import DatabaseBrowser from "./DatabaseBrowser";
+import LineagePanel from "./LineagePanel";
 import MemoryBrowser from "./MemoryBrowser";
 import OpsPanel from "./OpsPanel";
 import EvalPanel from "./EvalPanel";
@@ -30,6 +31,7 @@ const TAB_TITLE: Record<MainTabId, string> = {
   dashboard: "Dashboard",
   memory: "Memory",
   database: "Database",
+  lineage: "Data lineage",
   ops: "Ops metrics",
   eval: "Eval results",
 };
@@ -106,6 +108,9 @@ export default function MainTabs({ tab, liveActivity, queryPulse, theme = "dark"
       )}
       {tab === "database" && (
         <div className="main-tab-panel"><DatabaseBrowser userId={userId} /></div>
+      )}
+      {tab === "lineage" && (
+        <div className="main-tab-panel"><LineagePanel /></div>
       )}
       {tab === "dashboard" && (
         <div className="main-tab-panel"><Dashboard userId={userId} /></div>

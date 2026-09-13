@@ -91,3 +91,7 @@ docs/anki-评测.tsv
 
 # 个人简历文件（含真实信息，勿入库）
 sidecar/resume.html
+
+# local dev restart helper
+.dev-logs/
+.dev-pids/

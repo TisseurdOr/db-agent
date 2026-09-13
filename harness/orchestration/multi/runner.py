@@ -4,7 +4,6 @@
 """
 
 import os
-import re
 import time
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from harness.constraints.guardrails import guard_input
+from harness.memory.feedback import extract_sql
 from harness.observation.cost import estimate_tokens_cost
 from harness.observation.opik_tracing import (
     annotate_opik,
@@ -162,20 +162,38 @@ class MultiAgentRunner:
         self._dq_time = time.time()
         return True
 
-    async def run(self, query: str, recalled_memories: str = "", conversation_summary: str = "") -> str:
-        """执行一次查询（带运维指标记录：耗时 / 成败）。"""
+    async def run(
+        self,
+        query: str,
+        recalled_memories: str = "",
+        conversation_summary: str = "",
+        *,
+        thread_id: str | None = None,
+    ) -> str:
+        """执行一次查询（带运维指标记录：耗时 / 成败）。
+
+        thread_id 缺省用 self.thread_id；eval 传每 case 独立 id 可隔离
+        checkpointer 的 messages 累积，避免跨 case 串扰（见 node_router 读 [-6:]）。
+        """
         import time as _t
         _t0 = _t.monotonic()
         _ok = False
         try:
-            _result = await self._run_impl(query, recalled_memories, conversation_summary)
+            _result = await self._run_impl(query, recalled_memories, conversation_summary, thread_id=thread_id)
             _ok = True
             return _result
         finally:
             record_query(succeeded=_ok)
             record_elapsed(_t.monotonic() - _t0)
 
-    async def _run_impl(self, query: str, recalled_memories: str = "", conversation_summary: str = "") -> str:
+    async def _run_impl(
+        self,
+        query: str,
+        recalled_memories: str = "",
+        conversation_summary: str = "",
+        *,
+        thread_id: str | None = None,
+    ) -> str:
         """执行一次多 Agent 查询，返回 final_answer 文本。
 
         如果遇到 HITL 审批中断，返回 {"__interrupt__": True, "data": {...}}。
@@ -185,9 +203,11 @@ class MultiAgentRunner:
             query: 用户输入的自然语言问题
             recalled_memories: pre-turn 向量召回的记忆文本（main.py 预处理后传入）
             conversation_summary: ConversationManager 压缩的早期对话摘要（注入 node_analysis）
+            thread_id: 缺省用 self.thread_id；显式传入可隔离 checkpointer（eval 逐 case 用）
         """
+        tid = thread_id or self.thread_id
         # 每个请求创建一个 TraceContext——跟着 configurable 在节点间流转
-        trace = TraceContext(query, thread_id=self.thread_id)
+        trace = TraceContext(query, thread_id=tid)
         annotate_opik(metadata={
             "recalled_memories_present": bool(recalled_memories),
             "conversation_summary_present": bool(conversation_summary),
@@ -205,7 +225,7 @@ class MultiAgentRunner:
 
         self._current_config = {
             "configurable": {
-                "thread_id": self.thread_id,
+                "thread_id": tid,
                 "_client": self.client,
                 "_model": self.model,
                 "_trace": trace,
@@ -332,12 +352,10 @@ class MultiAgentRunner:
         state = self._last_state or {}
         results = state.get("results", {})
 
-        # 提取 SQL（从 sql agent 的结果中）
-        sql_text = ""
+        # 提取 SQL（从 sql agent 的结果中）。用 extract_sql 而非裸正则——
+        # 它能剥掉 markdown 围栏和尾部中文叙述，产出可直接 sql_executes 的干净 SQL。
         sql_result = results.get(AGENT_SQL, "")
-        if sql_result:
-            sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
-            sql_text = sql_match.group(0).strip() if sql_match else ""
+        sql_text = extract_sql(sql_result) or ""
 
         # plan 里的 agent 名列表（eval 的 agent_in_plan / agent_not_in_plan 断言用）
         plan = state.get("plan", []) or []
