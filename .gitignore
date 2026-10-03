@@ -95,3 +95,21 @@ sidecar/resume.html
 # local dev restart helper
 .dev-logs/
 .dev-pids/
+
+# Public Olist raw data (download locally; do not commit)
+data/raw/olist/
+
+# ── 本地运行产物 / 编辑器状态（不入库）──
+.cursor/
+db/conversation_*.json
+db/turns/
+db/knowledge_inbox/
+Codex 图像*.png
+
+# ── 非 db-agent 的个人 / 其他项目材料（不入库）──
+Asu/
+learn/
+skills/
+templates/
+blog-draft/
+docs/其他项目/

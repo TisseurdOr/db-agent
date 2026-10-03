@@ -1,15 +1,15 @@
 name: test
 
+# 所有分支的 push / PR 都跑：开发分支（chore/*、feat/*）也要被 CI 守住，
+# 否则红测试只会在 merge 到 master 时才暴露。
 on:
   push:
-    branches: [master, main]
   pull_request:
-    branches: [master, main]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
