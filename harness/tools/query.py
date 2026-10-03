@@ -7,6 +7,7 @@ from harness.constraints.entitlement import (
     guard,
     resolve_user_id,
 )
+from harness.constraints.guardrails import guard_sql
 
 # 自学习回流用：记录最近一次成功执行的 SELECT。
 # Agent 最终回答经常不带完整 SQL，从工具层捕获比从自然语言抽更可靠。
@@ -96,6 +97,13 @@ def run_query(sql: str, max_rows: int = 50, user_id: str | None = None, params: 
             }
 
     sql = ent.sql or sql
+
+    # 三层护栏第 2 层（SQL 护栏）：危险关键字 / 多语句 / 系统表。
+    # 此前这一层漏接在 run_query 上，agent 生成的 SQL 实际没走它。
+    passed, reason = guard_sql(sql)
+    if not passed:
+        return {"error": reason, "sql": sql, "hint": "请改写为单条只读 SELECT 后重试。"}
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:

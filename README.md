@@ -399,10 +399,9 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 |------|------------|--------|------|------|
 | dba | yes（含 HBase） | 全部 | 无 | 无 |
 | manager | yes | 全部 | employees.dept_id | salary/cost/budget |
-| analyst | no（仅知识库） | 无 | 无 | — |
-| viewer | no（仅知识库） | 无 | 无 | — |
-| support | no（仅知识库） | 无 | 无 | — |
-| support | yes | 3 张 | 无 | 无 |
+| analyst | yes | 11 张白名单（8 业务表 + 3 Hive 表） | 无 | salary/cost/budget |
+| viewer | no（仅知识库） | — | — | — |
+| support | no（仅知识库） | — | — | — |
 
 权限在 `agent_roles` / `agent_users` 表里，改表即生效。
 

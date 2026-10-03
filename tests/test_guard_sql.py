@@ -27,7 +27,6 @@ from harness.constraints.guardrails import guard_sql
     "ALTER TABLE orders ADD COLUMN x TEXT",
     "TRUNCATE TABLE orders",
     "CREATE TABLE hack (id INT)",
-    "SELECT * FROM sqlite_master",                  # 系统表枚举
     "SELECT * FROM pg_catalog.pg_tables",
 ])
 def test_guard_sql_blocks_dangerous(sql: str):
@@ -52,6 +51,9 @@ def test_guard_sql_blocks_dangerous(sql: str):
     "SELECT * FROM orders WHERE reason = 'drop table'",
     'SELECT "update" FROM orders',                   # 双引号标识符
     "SELECT * FROM orders; /* DROP TABLE orders */",  # 分号后仅注释，非第二条语句
+    # sqlite_master 是只读列举表名的正当途径（"数据概览"模板要用）；
+    # 谁能看哪些表由表级 RBAC 决定，SQL 护栏只管写操作/多语句。
+    "SELECT name FROM sqlite_master WHERE type='table'",
 ])
 def test_guard_sql_allows_safe(sql: str):
     passed, reason = guard_sql(sql)

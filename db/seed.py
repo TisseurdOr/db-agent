@@ -5,6 +5,7 @@
 # departments/employees 保持不变，避免牵连依赖它们的评测用例与权限演示。
 # Hive/HBase 保持原样，本次不动。
 
+import json
 import os
 import random
 import sqlite3
@@ -188,24 +189,7 @@ def init_db(reset: bool = False):
         DELETE FROM shipments;
         DELETE FROM inventory;
 
-        -- agent_roles: dba/manager/analyst 可访问数据库；viewer/support 不可
-        INSERT INTO agent_roles VALUES ('dba',     '研发DBA',  '["run_query","list_tables","describe_table","discover_relevant_schema","search_knowledge_base","read_document","write_query","run_hbase","generate_hbase_query"]', null, null, null, 0);
-        INSERT INTO agent_roles VALUES ('manager', '部门经理',  '["run_query","list_tables","describe_table","discover_relevant_schema","search_knowledge_base","read_document"]', null, '{"employees":"dept_id"}', null, 1);
-        INSERT INTO agent_roles VALUES ('analyst', '数据分析师','["run_query","list_tables","describe_table","discover_relevant_schema","search_knowledge_base","read_document"]', '["departments","employees","products","customers","channels","orders","payments","shipments","inventory","ods_orders_hive","dwd_user_events","dim_products_hive"]', null, null, 1);
-        INSERT INTO agent_roles VALUES ('viewer',  '访客',      '["search_knowledge_base","read_document"]', '[]', null, '["产品手册","部门介绍","销售制度"]', 0);
-        INSERT INTO agent_roles VALUES ('support', '技术支持',  '["search_knowledge_base","read_document"]', '[]', null, '["技术文档","产品手册"]', 0);
-
-        -- agent_users: 10 个用户
-        INSERT INTO agent_users VALUES ('dba',        '研发DBA',  'dba',     3);
-        INSERT INTO agent_users VALUES ('zhoufang',   '周芳',     'manager', 1);
-        INSERT INTO agent_users VALUES ('xiaoyiming', '萧一鸣',   'manager', 2);
-        INSERT INTO agent_users VALUES ('gaoyong',    '高勇',     'manager', 3);
-        INSERT INTO agent_users VALUES ('linyi',      '林怡',     'manager', 4);
-        INSERT INTO agent_users VALUES ('liangming',  '梁明',     'manager', 5);
-        INSERT INTO agent_users VALUES ('lujie',      '卢杰',     'manager', 6);
-        INSERT INTO agent_users VALUES ('analyst',    '数据分析师','analyst', null);
-        INSERT INTO agent_users VALUES ('viewer',     '访客',     'viewer',  null);
-        INSERT INTO agent_users VALUES ('support',    '技术支持', 'support',  null);
+        -- agent_roles / agent_users 由 Python 侧按 _DEFAULT_ROLES 写入（见本函数末）
 
         -- departments: 6 个（保持不变）
         INSERT INTO departments VALUES (1, '销售部', 1000000, 8);
@@ -549,6 +533,32 @@ def init_db(reset: bool = False):
         conn.execute(
             "INSERT INTO dim_products_hive VALUES (?, ?, ?, ?, ?, ?, ?)",
             (pid, name, cat, price, supplier, tags, "PARQUET"),
+        )
+
+    # 角色 / 用户：唯一真值来源是 harness.constraints.entitlement._DEFAULT_ROLES，
+    # 这里据此写库（不再手抄一份，杜绝 DB 与代码漂移）。
+    from harness.constraints.entitlement import _DEFAULT_ROLES, _DEFAULT_USERS
+
+    def _json_or_null(value):
+        return None if value is None else json.dumps(value, ensure_ascii=False)
+
+    for role, meta in _DEFAULT_ROLES.items():
+        conn.execute(
+            "INSERT INTO agent_roles VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                role,
+                meta["name"],
+                json.dumps(meta["allowed_tools"], ensure_ascii=False),
+                _json_or_null(meta["db_tables"]),
+                _json_or_null(meta["db_row_filter"]),
+                _json_or_null(meta["docs_filter"]),
+                1 if meta["sensitive_check"] else 0,
+            ),
+        )
+    for uid, user in _DEFAULT_USERS.items():
+        conn.execute(
+            "INSERT INTO agent_users VALUES (?, ?, ?, ?)",
+            (uid, user["name"], user["role"], user["dept_id"]),
         )
 
     conn.commit()

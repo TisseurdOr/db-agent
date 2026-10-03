@@ -392,11 +392,11 @@ Multi:   user → Router → [DQ?] → sql|hbase|hive|strategy
 
 | Role | run_query | Tables | Row filter | HITL |
 |------|-----------|--------|------|------|
-| dba | yes | all | none | none |
-| analyst | yes | 5 business tables | none | salary/cost/budget |
-| manager | yes | all | employees WHERE dept_id=X | salary/cost/budget |
-| viewer | no | 4 (no employees) | none | none |
-| support | yes | 3 | none | none |
+| dba | yes (incl. HBase) | all | none | none |
+| manager | yes | all | employees.dept_id | salary/cost/budget |
+| analyst | yes | 11-table allowlist (8 business + 3 Hive) | none | salary/cost/budget |
+| viewer | no (docs only) | — | — | — |
+| support | no (docs only) | — | — | — |
 
 Permissions live in `agent_roles` / `agent_users` — edit tables to change behavior.
 

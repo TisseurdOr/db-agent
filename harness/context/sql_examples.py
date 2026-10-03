@@ -14,6 +14,7 @@
 #   SQL Agent 退回纯 schema 模式，绝不因为 few-shot 挂掉主流程。
 
 import hashlib
+import logging
 import os
 import time
 from pathlib import Path
@@ -21,6 +22,8 @@ from typing import Any
 
 import chromadb
 from openai import OpenAI
+
+logger = logging.getLogger(__name__)
 
 _COLLECTION = "sql_examples"
 
@@ -283,7 +286,9 @@ def record_sql_example(question: str, sql: str, source: str = "user") -> bool:
             _store = SQLExampleStore()
         _store.add_example(question, sql, source)
         return True
-    except Exception:
+    except Exception as e:
+        # 不再静默：没配 EMBEDDING_API_KEY 等情况会在日志里留痕，便于排查
+        logger.warning("自学习回流失败（样例未入库）: %s: %s", type(e).__name__, e)
         return False
 
 

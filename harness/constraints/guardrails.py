@@ -197,8 +197,13 @@ def guard_sql(sql: str) -> tuple[bool, str]:
                 return False, "不允许执行多条 SQL 语句。"
 
     # 4. 系统表检测（同样只看代码，避免字符串里出现 sqlite_ 被误拦）
+    #    sqlite_master / sqlite_schema 是"列举表"的正当途径，且受表级 RBAC 管辖，放行；
+    #    其余 sqlite_* 内部表（sequence/stat 等）仍拦。
+    lowered = code.lower()
+    for allowed in ("sqlite_master", "sqlite_schema"):
+        lowered = lowered.replace(allowed, "")
     for prefix in SYSTEM_TABLE_PREFIXES:
-        if prefix in code.lower():
+        if prefix in lowered:
             return False, f"不允许查询系统表（{prefix}...）。"
 
     return True, ""

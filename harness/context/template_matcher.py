@@ -270,10 +270,9 @@ def init_metric_registry():
         )
     """)
 
-    # 种子模板
-    existing = conn.execute("SELECT COUNT(*) FROM metric_registry").fetchone()[0]
-    if existing == 0:
-        _seed_templates(conn)
+    # 种子模板：每次都按代码 upsert（新增模板入库、修好的 SQL 覆盖旧值），
+    # 这样改 seed 后老库也能生效，不会像以前"空库才种"导致老库永远停在旧版
+    _seed_templates(conn)
 
     conn.commit()
     return conn
@@ -307,11 +306,11 @@ def _seed_templates(conn: sqlite3.Connection):
          "hr",
          ""),
         ("某部门员工", "部门员工列表,某部门有哪些人",
-         "SELECT e.name, e.position, e.salary FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.name = '{dept_name}' ORDER BY e.name",
+         "SELECT e.name, e.title, e.salary FROM employees e JOIN departments d ON e.dept_id = d.id WHERE d.name = '{dept_name}' ORDER BY e.name",
          "hr",
          ""),
         ("产品销售排名", "产品销量,哪个产品卖得好",
-         "SELECT p.name, SUM(oi.quantity) AS sold, SUM(oi.quantity * oi.unit_price) AS revenue FROM order_items oi JOIN products p ON oi.product_id = p.id JOIN orders o ON oi.order_id = o.id WHERE o.created_at BETWEEN '{start_date}' AND '{end_date}' GROUP BY p.name ORDER BY sold DESC LIMIT {limit}",
+         "SELECT p.name, SUM(o.quantity) AS sold, SUM(o.total) AS revenue FROM orders o JOIN products p ON o.product_id = p.id WHERE o.created_at BETWEEN '{start_date}' AND '{end_date}' GROUP BY p.name ORDER BY sold DESC LIMIT {limit}",
          "sales",
          ""),
         ("客户订单排行", "客户排名,哪个客户买得多",
@@ -319,11 +318,11 @@ def _seed_templates(conn: sqlite3.Connection):
          "sales",
          ""),
         ("数据概览", "数据库概览,有哪些表,整体结构",
-         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_%' ORDER BY name",
+         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND substr(name,1,1) <> '_' ORDER BY name",
          "meta",
          "返回所有非系统表名"),
         ("表结构查询", "表有哪些字段,表结构,describe,字段列表",
-         "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position",
+         "SELECT name AS column_name, type AS data_type FROM pragma_table_info('{table_name}')",
          "meta",
          "注意：SQLite 用 PRAGMA table_info({table_name}) 代替"),
         ("订单量对比", "对比订单量,订单量变化,本月和上月订单",
@@ -338,7 +337,13 @@ def _seed_templates(conn: sqlite3.Connection):
 
     for name, aliases, sql, domain, caveats in templates:
         conn.execute(
-            "INSERT INTO metric_registry (metric_name, aliases, sql_template, domain, caveats) VALUES (?, ?, ?, ?, ?)",
+            """INSERT INTO metric_registry (metric_name, aliases, sql_template, domain, caveats)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(metric_name) DO UPDATE SET
+                 aliases=excluded.aliases,
+                 sql_template=excluded.sql_template,
+                 domain=excluded.domain,
+                 caveats=excluded.caveats""",
             (name, aliases, sql, domain, caveats),
         )
 
