@@ -205,29 +205,35 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
             if mem_block:
                 router_system = f"{ROUTER_PROMPT}\n\n{mem_block}"
 
-            t_llm = time.time()
-            resp = await acall_with_retry(
-                client.messages.create,
-                model=model,
-                max_tokens=300,
-                system=router_system,
-                messages=router_msgs,
-            )
-            llm_latency = time.time() - t_llm
-            router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1, "elapsed": llm_latency}
-            _usage = getattr(resp, "usage", None)
-            if _usage is not None:
-                router_usage["input_tokens"] = _usage.input_tokens or 0
-                router_usage["output_tokens"] = _usage.output_tokens or 0
+            # 优先 Jev 做 Agent 选择（校准概率、快/便宜两个量级）
+            plan_data = await _route_via_jev(state["query"], mem_block)
+            router_usage: dict[str, float] = {"input_tokens": 0, "output_tokens": 0, "turns": 0, "elapsed": 0.0}
 
-            text = extract_text(resp, context="router")
-            try:
-                plan_data = json.loads(text) if text else {}
-            except json.JSONDecodeError:
-                # 解析失败：不盲派 SQL——留空走下面的安全兜底链
-                # （闲聊→结束 / 不完整→澄清 / 判不了才最后兜底 sql），
-                # 避免把"不该查库"的问题（制度/回忆/闲聊）误派给 SQL Agent。
-                plan_data = {}
+            if not plan_data:
+                # 未配置 Jev / 取不到决策 → 原 LLM 规划路径
+                t_llm = time.time()
+                resp = await acall_with_retry(
+                    client.messages.create,
+                    model=model,
+                    max_tokens=300,
+                    system=router_system,
+                    messages=router_msgs,
+                )
+                llm_latency = time.time() - t_llm
+                router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1, "elapsed": llm_latency}
+                _usage = getattr(resp, "usage", None)
+                if _usage is not None:
+                    router_usage["input_tokens"] = _usage.input_tokens or 0
+                    router_usage["output_tokens"] = _usage.output_tokens or 0
+
+                text = extract_text(resp, context="router")
+                try:
+                    plan_data = json.loads(text) if text else {}
+                except json.JSONDecodeError:
+                    # 解析失败：不盲派 SQL——留空走下面的安全兜底链
+                    # （闲聊→结束 / 不完整→澄清 / 判不了才最后兜底 sql），
+                    # 避免把"不该查库"的问题（制度/回忆/闲聊）误派给 SQL Agent。
+                    plan_data = {}
 
         plan = plan_data.get("plan", [])
         if not plan:
@@ -453,6 +459,105 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
         return replan
     # SQL 生成后先过置信度门，再决定下一步
     return _next_step_after_sql(state, results)
+async def _route_via_jev(query: str, mem_block: str = "") -> dict:
+    """用 Jev 做 Agent 选择（限定选项分类）。未启用/失败 → 返回 {} 走 LLM 回退。
+
+    Jev 只负责"选哪个 Agent + 把握多大"；plan 里的 task 描述用原始 query
+    （SQL/其它 Agent 本就按 query 工作），因此不依赖生成能力。
+    """
+    from harness.jev_client import decide as jev_decide
+    from harness.jev_client import extract_choice, extract_probability
+    from harness.jev_client import is_enabled as jev_enabled
+
+    if not jev_enabled():
+        return {}
+
+    state_text = f"用户问题：{query}"
+    if mem_block:
+        state_text = f"{state_text}\n\n{mem_block}"
+    result = await jev_decide(state_text, [
+        {
+            "id": "next_agent",
+            "type": "choice",
+            "options": ["sql", "hbase", "hive", "strategy", "clarify", "none"],
+            "prompt": "这条问题该交给哪个专职 Agent？none = 闲聊/无需查数据。",
+        },
+        {
+            "id": "route_confidence",
+            "type": "scale",
+            "min": 0,
+            "max": 1,
+            "prompt": "你对这个分派的把握有多大？",
+        },
+    ])
+    choice = extract_choice(result, "next_agent")
+    if not choice:
+        return {}
+
+    prob = extract_probability(result, "route_confidence")
+    low = prob is not None and prob < 0.5
+    if choice == "none":
+        return {"plan": [], "confidence": "low" if low else "high"}
+    return {
+        "plan": [{"agent": choice, "task": query}],
+        "combine": True,
+        "confidence": "low" if low else "high",
+    }
+
+
+async def _assess_sql_confidence(query: str, sql: str, sql_result: str, client, model: str):
+    """评估 SQL 置信度。
+
+    优先用 Jev（System One 决策模型，返回**校准概率**、快/便宜两个量级）；
+    未配置 JEV_API_KEY 或调用失败时，回退到原来的 LLM 自评路径。
+
+    返回 (result_data, usage)。
+    """
+    from harness.jev_client import decide as jev_decide
+    from harness.jev_client import extract_probability
+    from harness.jev_client import is_enabled as jev_enabled
+
+    if jev_enabled():
+        state_text = (
+            f"用户问题：{query}\n\n"
+            f"生成的 SQL：\n{sql}\n\n"
+            f"SQL Agent 的上下文/结果（截断）：\n{sql_result[:2000]}"
+        )
+        result = await jev_decide(state_text, [{
+            "id": "sql_confidence",
+            "type": "scale",
+            "min": 0,
+            "max": 1,
+            "prompt": "这条 SQL 有多大把握正确回答用户问题？（0=完全没把握，1=非常有把握）",
+        }])
+        prob = extract_probability(result, "sql_confidence")
+        if prob is not None:
+            return (
+                {"confidence": prob, "explanation": "Jev 校准概率", "scores": {}},
+                {"input_tokens": 0, "output_tokens": 0, "turns": 0},
+            )
+        # 取不到概率 → 落回 LLM
+
+    prompt = CONFIDENCE_PROMPT.format(
+        query=query,
+        schema_context=sql_result[:2000],  # sql agent 结果中包含表结构信息
+        sql=sql,
+    )
+    resp = await acall_with_retry(
+        client.messages.create,
+        model=model,
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = extract_text(resp, context="confidence")
+    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+    resp_usage = getattr(resp, "usage", None)
+    if resp_usage:
+        usage["input_tokens"] = resp_usage.input_tokens or 0
+        usage["output_tokens"] = resp_usage.output_tokens or 0
+    return parse_confidence_result(text), usage
+
+
 async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -> dict:
     """置信度门：LLM 自评 SQL 质量，低分触发 HITL 审批。
 
@@ -475,25 +580,10 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
 
-    prompt = CONFIDENCE_PROMPT.format(
-        query=state["query"],
-        schema_context=sql_result[:2000],  # sql agent 结果中包含表结构信息
-        sql=sql,
+    # 置信度评估：优先 Jev（校准概率），否则 LLM 自评
+    result_data, usage = await _assess_sql_confidence(
+        state["query"], sql, sql_result, client, model
     )
-
-    resp = await acall_with_retry(
-        client.messages.create,
-        model=model,
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = extract_text(resp, context="confidence")
-    result_data = parse_confidence_result(text)
-    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
-    resp_usage = getattr(resp, "usage", None)
-    if resp_usage:
-        usage["input_tokens"] = resp_usage.input_tokens or 0
-        usage["output_tokens"] = resp_usage.output_tokens or 0
 
     trace.finish_span(span, usage)
 
