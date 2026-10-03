@@ -149,10 +149,14 @@ class RAGPipeline:
         self.vector_db = vector_db
         self.llm = llm_client
         # self.embed_client = OpenAI()  # 或本地 BGE 模型
-        self.embed_client = OpenAI(
-            api_key=os.environ["EMBEDDING_API_KEY"],
-            base_url=os.environ["EMBEDDING_BASE_URL"],
-        )
+        api_key = os.environ.get("EMBEDDING_API_KEY")
+        base_url = os.environ.get("EMBEDDING_BASE_URL")
+        if not api_key or not base_url:
+            raise RuntimeError(
+                "RAGPipeline 需要 EMBEDDING_API_KEY / EMBEDDING_BASE_URL；"
+                "未配置时长期向量记忆不可用（短期记忆 / user_memory 不受影响）"
+            )
+        self.embed_client = OpenAI(api_key=api_key, base_url=base_url)
         self.embed_model = embed_model or os.getenv("EMBEDDING_MODEL", "qwen3.7-text-embedding")
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

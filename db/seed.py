@@ -178,8 +178,8 @@ def init_db(reset: bool = False):
         DELETE FROM customers;
         DELETE FROM channels;
         DELETE FROM departments;
-        DELETE FROM user_memory;
-        DELETE FROM user_feedback;
+        -- user_memory / user_feedback 是用户产生数据，不能在启动时清空
+        -- （此前每次 bootstrap 都 DELETE，导致记忆/反馈一重启就丢）
         DELETE FROM agent_users;
         DELETE FROM agent_roles;
         DELETE FROM ods_orders_hive;

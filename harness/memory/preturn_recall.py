@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,6 +31,7 @@ _ROUTER_MAX_CHARS = 1600
 _vm = None
 _rag = None
 _ready = False
+_warned_memory_disabled = False
 
 
 @dataclass
@@ -43,12 +45,28 @@ class RecallBundle:
     source: str = ""  # self_query | rag | recent | empty
 
 
+def _warn_memory_disabled() -> None:
+    """长期向量记忆不可用时提示一次（避免每轮刷屏）。"""
+    global _warned_memory_disabled
+    if not _warned_memory_disabled:
+        _warned_memory_disabled = True
+        logger.warning(
+            "长期向量记忆未启用：缺少 EMBEDDING_API_KEY / EMBEDDING_BASE_URL。"
+            "配置后重启即可启用；短期记忆与 user_memory 不受影响。"
+        )
+
+
 def ensure_memory_stack(client=None) -> tuple[Any, Any]:
     """惰性初始化 VectorMemory + RAGPipeline，并注入 search_memory Tool 依赖。
 
     CLI main.py / Web server 都可调用；重复调用是幂等的。
+    未配置 embedding 时返回 (None, None) 并提示一次——不抛异常、不影响主流程。
     """
     global _vm, _rag, _ready
+
+    if not (os.getenv("EMBEDDING_API_KEY") and os.getenv("EMBEDDING_BASE_URL")):
+        _warn_memory_disabled()
+        return None, None
     from harness.tools.knowledge import (
         set_llm_client,
         set_rag_pipeline,
@@ -291,7 +309,11 @@ async def remember_turn(
         return
     try:
         vm, _ = ensure_memory_stack(client)
-    except Exception:
+    except Exception as e:
+        logger.warning("preturn_recall: remember_turn 初始化失败，本条未记入长期记忆: %s", e)
+        return
+    if vm is None:
+        _warn_memory_disabled()
         return
     try:
         from harness.memory.episode_memory import record_and_maybe_flush
