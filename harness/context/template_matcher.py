@@ -13,9 +13,11 @@
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from harness.tools import tool
 
@@ -50,9 +52,9 @@ def _parse_date_range(query: str) -> tuple[str, str]:
         m = re.search(pattern, query)
         if m:
             if callable(handler):
-                start, end = handler(m)
+                start, end = cast(Any, handler)(m)
             else:
-                start, end = handler
+                start, end = cast(Any, handler)
             return (start.isoformat(), end.isoformat())
 
     # 默认最近 30 天
@@ -64,7 +66,7 @@ def _parse_date_range(query: str) -> tuple[str, str]:
 
 # ── 实体槽位解析（关键词匹配，不调 LLM）──
 
-_ENTITY_EXTRACTORS: dict[str, callable] = {}
+_ENTITY_EXTRACTORS: dict[str, Callable] = {}
 
 
 def _extract_dept(query: str) -> str | None:

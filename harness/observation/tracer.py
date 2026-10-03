@@ -141,7 +141,7 @@ class Span:
         self.input_tokens = 0
         self.output_tokens = 0
         self.turns = 0
-        self.error = None
+        self.error: str | None = None
 
     @property
     def elapsed(self) -> float:
@@ -208,7 +208,7 @@ class TraceContext:
         self.spans.append(span)
         return span
 
-    def finish_span(self, span: Span, usage: dict, error: str = None) -> None:
+    def finish_span(self, span: Span, usage: dict, error: str | None = None) -> None:
         """结束一个 span。节点执行后调用。
 
         usage: {"input_tokens": N, "output_tokens": N, "turns": N}

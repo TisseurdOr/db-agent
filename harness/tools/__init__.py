@@ -116,7 +116,7 @@ def tool(description: str):
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
-        wrapper.tool_schema = schema
+        setattr(wrapper, "tool_schema", schema)
         return wrapper
 
     return decorator

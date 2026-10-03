@@ -187,7 +187,7 @@ async def self_query_retrieve(
     llm_client,
     top_k: int = 5,
     user_id: str = "default",
-    memory_type: str = None,
+    memory_type: str | None = None,
     reranker=None,
 ) -> tuple[list[dict], dict]:
     """Self-Query 检索：拆解 → 向量检索 + 元数据过滤 → 必要时降级。

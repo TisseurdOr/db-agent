@@ -108,6 +108,58 @@ MULTI_STATEMENT_MARKERS = [";--", ";\n", "/*"]
 SYSTEM_TABLE_PREFIXES = ["sqlite_", "pg_", "information_schema", "sys."]
 
 
+def _strip_sql_noise(sql: str) -> str:
+    """去掉字符串字面量与注释，仅保留"会被引擎执行的代码"。
+
+    危险关键字 / 多语句 / 系统表的检测只看代码，不看数据。
+    否则 `WHERE status = 'update'`、`WHERE note LIKE '%delete%'`
+    这类合法只读查询会被误拦（假阳性）。剥掉的片段用空格占位，避免拼接出新词。
+    支持：'单引号'(\'\' 转义) / "双引号"(\"\" 转义) / `反引号` / -- 行注释 / /* 块注释 */。
+    """
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        ch = sql[i]
+        if ch == "'" or ch == '"':          # 字符串字面量 / 引号标识符
+            quote = ch
+            out.append(" ")
+            i += 1
+            while i < n:
+                if sql[i] == quote:
+                    if i + 1 < n and sql[i + 1] == quote:  # '' / "" 转义
+                        i += 2
+                        continue
+                    i += 1
+                    break
+                i += 1
+            out.append(" ")
+            continue
+        if ch == "`":                        # 反引号标识符
+            out.append(" ")
+            i += 1
+            while i < n and sql[i] != "`":
+                i += 1
+            i += 1
+            out.append(" ")
+            continue
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":   # -- 行注释
+            i += 2
+            while i < n and sql[i] != "\n":
+                i += 1
+            out.append(" ")
+            continue
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":   # /* 块注释 */
+            i += 2
+            while i < n and not (sql[i] == "*" and i + 1 < n and sql[i + 1] == "/"):
+                i += 1
+            i += 2
+            out.append(" ")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def guard_sql(sql: str) -> tuple[bool, str]:
     """SQL 护栏：检查 SQL 语句是否安全。
 
@@ -124,7 +176,10 @@ def guard_sql(sql: str) -> tuple[bool, str]:
         (True, "")  → 安全
         (False, "拦截原因") → 危险
     """
-    sql_upper = sql.strip().upper()
+    # 只对"会被执行的代码"做检测：字符串/注释/引号标识符先剥掉，
+    # 避免 WHERE status = 'update'、LIKE '%delete%' 这类合法查询被误拦。
+    code = _strip_sql_noise(sql).strip()
+    sql_upper = code.upper()
 
     # 1. 必须以 SELECT 开头
     if not sql_upper.startswith("SELECT"):
@@ -135,16 +190,15 @@ def guard_sql(sql: str) -> tuple[bool, str]:
         if re.search(rf"\b{keyword}\b", sql_upper):
             return False, f"SQL 包含危险操作 {keyword}，已被拦截。只允许只读查询。"
 
-    # 3. 多语句检测——分号后跟非空白字符
-    semicolons = [i for i, c in enumerate(sql) if c == ";"]
-    for pos in semicolons:
-        remaining = sql[pos + 1:].strip()
-        if remaining and not remaining.startswith("--"):
-            return False, "不允许执行多条 SQL 语句。"
+    # 3. 多语句检测——分号后还有可执行代码（注释/字符串已被剥掉）
+    for pos, c in enumerate(code):
+        if c == ";":
+            if code[pos + 1:].strip():
+                return False, "不允许执行多条 SQL 语句。"
 
-    # 4. 系统表检测
+    # 4. 系统表检测（同样只看代码，避免字符串里出现 sqlite_ 被误拦）
     for prefix in SYSTEM_TABLE_PREFIXES:
-        if prefix in sql.lower():
+        if prefix in code.lower():
             return False, f"不允许查询系统表（{prefix}...）。"
 
     return True, ""

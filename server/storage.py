@@ -56,4 +56,4 @@ def save_feedback(
     fid = cursor.lastrowid
     conn.commit()
     conn.close()
-    return fid
+    return fid or 0

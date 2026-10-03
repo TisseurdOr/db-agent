@@ -6,6 +6,7 @@
 
 import json
 import os
+from typing import Any
 
 from fastapi import APIRouter
 
@@ -17,10 +18,10 @@ _REDIS_TTL_SECONDS = 60 * 60 * 24  # 会话保留 24h
 # 内存兜底（未配置 REDIS_URL 时使用）
 _memory: dict[str, list[dict]] = {}
 
-_redis_client = None
+_redis_client: Any = None
 
 
-def _get_redis_client():
+def _get_redis_client() -> Any:
     """惰性创建 Redis 异步客户端；未配置 REDIS_URL 返回 None。"""
     global _redis_client
     if _redis_client is None:

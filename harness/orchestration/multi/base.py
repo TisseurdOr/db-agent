@@ -4,6 +4,7 @@
 """
 
 import time
+from typing import Any
 
 from anthropic import Anthropic
 from langgraph.errors import GraphInterrupt
@@ -53,7 +54,7 @@ async def _simple_agent_run(
     Returns:
         (最终文本回复, {"input_tokens": N, "output_tokens": N, "turns": N})
     """
-    messages = [{"role": "user", "content": user_msg}]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user_msg}]
     usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
 
     for _ in range(max_turns):
@@ -66,10 +67,14 @@ async def _simple_agent_run(
             messages=messages,
             tools=tools,
         )
+        if response is None:
+            return "(LLM 未返回响应)", usage
+
         # 累计 token
-        if hasattr(response, "usage") and response.usage:
-            usage["input_tokens"] += response.usage.input_tokens or 0
-            usage["output_tokens"] += response.usage.output_tokens or 0
+        resp_usage = getattr(response, "usage", None)
+        if resp_usage:
+            usage["input_tokens"] += resp_usage.input_tokens or 0
+            usage["output_tokens"] += resp_usage.output_tokens or 0
 
         # 检查是否调用了 Tool
         tool_uses = [

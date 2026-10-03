@@ -2,6 +2,7 @@
 import json
 import os
 from datetime import datetime
+from typing import Any
 
 from openai import OpenAI
 
@@ -94,7 +95,7 @@ class ChromaBackend:
         n = min(top_k, self.collection.count())
         if n == 0:
             return []
-        res = self.collection.query(
+        res: Any = self.collection.query(
             query_embeddings=[query_vec],
             n_results=n,
             where=self._chroma_where(where),
@@ -122,7 +123,7 @@ class ChromaBackend:
             kwargs["where"] = self._chroma_where(where)
             if limit is not None:
                 kwargs["limit"] = int(limit)
-        res = self.collection.get(**kwargs)
+        res: Any = self.collection.get(**kwargs)
         out = []
         if res["ids"]:
             for i, mem_id in enumerate(res["ids"]):
@@ -191,10 +192,10 @@ class MilvusBackend:
         self._created = True
         self._dim = dim
 
-    def _expr(self, where: dict | None) -> str | None:
+    def _expr(self, where: dict | None) -> str:
         flat = normalize_where(where)
         if not flat:
-            return None
+            return ""
         parts = []
         for k, v in flat.items():
             if isinstance(v, str):
@@ -302,7 +303,7 @@ class MilvusBackend:
             self._dim = None
 
 
-def make_backend(kind: str, persist_dir: str, collection_name: str):
+def make_backend(kind: str | None, persist_dir: str, collection_name: str):
     """后端工厂：kind = chroma | milvus（读 VECTOR_DB 环境变量可覆盖）。"""
     kind = (kind or os.getenv("VECTOR_DB", "chroma")).strip().lower()
     if kind == "milvus":
@@ -322,9 +323,13 @@ class VectorMemory:
       2. RAGPipeline 后端：add(...) / search(...) —— 接收已算好的向量
     """
 
-    def __init__(self, persist_dir="harness/memory/chroma_db", embed_model=None,
+    def __init__(self, persist_dir=None, embed_model=None,
                  collection_name="conversations", embed_fn=None, embed_client=None,
                  backend=None):
+        # 默认落盘位置可用 VECTOR_PERSIST_DIR 覆盖：测试指向临时目录即可隔离，
+        # 避免写共享的 365MB 生产 chroma（原先多组测试都在污染它）。
+        if persist_dir is None:
+            persist_dir = os.getenv("VECTOR_PERSIST_DIR", "harness/memory/chroma_db")
         self.backend = (
             backend
             if isinstance(backend, (ChromaBackend, MilvusBackend))
@@ -360,7 +365,7 @@ class VectorMemory:
         self._embed_client = OpenAI(api_key=api_key, base_url=base_url)
         return self._embed_client
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, texts: list[str] | str) -> list[list[float]]:
         """文本 → embedding vectors"""
         if isinstance(texts, str):
             texts = [texts]
@@ -384,7 +389,7 @@ class VectorMemory:
     # ── 作业 / 高层 API ──────────────────────────────────────────────
 
     def remember(self, content: str, memory_type: str = "conversation",
-                 user_id: str = "default", metadata: dict = None):
+                 user_id: str = "default", metadata: dict | None = None):
         vec = self.embed(content)
         ts = datetime.now().isoformat()
         memory_id = f"{user_id}_{memory_type}_{ts}"
@@ -403,7 +408,7 @@ class VectorMemory:
         try:
             from harness.memory.recent_index import append_recent
             append_recent(
-                self.collection_name,
+                self.backend.collection_name,
                 memory_id,
                 user_id=user_id,
                 timestamp=ts,
@@ -414,7 +419,7 @@ class VectorMemory:
         return memory_id
 
     def recall(self, query: str, top_k: int = 5,
-               memory_type: str = None, user_id: str = "default") -> list[dict]:
+               memory_type: str | None = None, user_id: str = "default") -> list[dict]:
         """语义检索相关记忆。
 
         Args:
@@ -466,7 +471,7 @@ class VectorMemory:
         """删除一条记忆。"""
         self.backend.delete([memory_id])
 
-    def count(self, user_id: str = None) -> int:
+    def count(self, user_id: str | None = None) -> int:
         """统计记忆数量。"""
         if user_id:
             return self.backend.count(where={"user_id": user_id})
@@ -483,7 +488,7 @@ class VectorMemory:
         try:
             from harness.memory.recent_index import list_recent_ids
             ids = list_recent_ids(
-                self.collection_name,
+                self.backend.collection_name,
                 user_id=user_id or "default",
                 limit=limit,
                 memory_type=memory_type,
@@ -521,7 +526,7 @@ class VectorMemory:
         self.backend.drop()
         try:
             from harness.memory.recent_index import drop_index
-            drop_index(self.collection_name)
+            drop_index(self.backend.collection_name)
         except Exception:
             pass
 

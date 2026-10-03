@@ -30,7 +30,7 @@
 
 > **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端），已上线。
 > SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）——接真实集群只需换连接器。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **527** 条）。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **531** 条）。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
@@ -232,7 +232,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
 | **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
-| **五 · 工程化** | demo → 产品 | `db-agent` CLI；527 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；531 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
 
 ### 设计取舍（为什么这样）
@@ -409,7 +409,9 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 ### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例（527）
+pytest tests/ -v                               # 全量离线用例（531，默认不跑 live）
+pytest tests/ -m live                          # 真实 LLM 端到端 smoke（需 API key，默认排除）
+pytest tests/ --cov --cov-fail-under=60        # 带覆盖率门禁（CI 已接入）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）
 python tests/eval_runner.py --full             # 全量评测（需 API key）
 ```
@@ -419,10 +421,12 @@ python tests/eval_runner.py --full             # 全量评测（需 API key）
 ### 代码质量
 
 ```bash
-ruff check harness server db main.py app.py scripts tests
+ruff check harness server db main.py app.py scripts tests   # 全绿
+pyright                                                      # 0 errors（basic 模式）
 pre-commit run --all-files
-pyright
 ```
+
+> `tests/test_e2e_live.py` 是唯一会真调模型/真查库的用例，标记 `live`，默认被 `addopts = -m 'not live'` 排除，CI 不跑、不烧 token。
 
 ---
 

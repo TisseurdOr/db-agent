@@ -111,7 +111,7 @@ async def demo_replan():
         print(f"   ✅ [注入] SQL Agent 第 {calls['n']} 次执行（重规划后）→ 恢复真实执行")
         return await orig_run(client, task, **kwargs)
 
-    sql_agent.run = flaky_run
+    setattr(sql_agent, "run", flaky_run)
     try:
         runner = await MultiAgentRunner.create(
             client,

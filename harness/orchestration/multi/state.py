@@ -17,10 +17,10 @@ CHECKPOINT_MESSAGE_LIMIT = int(os.getenv("CHECKPOINT_MESSAGE_LIMIT", "20"))
 
 def add_messages_trim(left: list, right: list) -> list:
     """add_messages 后裁剪到最近 K 条。"""
-    merged = add_messages(left, right)
+    merged = list(add_messages(left, right))
     limit = CHECKPOINT_MESSAGE_LIMIT
     if limit > 0 and len(merged) > limit:
-        return list(merged)[-limit:]
+        return merged[-limit:]
     return merged
 
 
@@ -65,7 +65,15 @@ class ConfigurablePayload(TypedDict, total=False):
 
 def agent_config(config: RunnableConfig) -> ConfigurablePayload:
     """把 LangGraph RunnableConfig 的 configurable 转成有类型的自定义负载。"""
-    return cast(ConfigurablePayload, config["configurable"])
+    return cast(ConfigurablePayload, config.get("configurable") or {})
+
+
+def require_client(config: RunnableConfig) -> Any:
+    """取必填的 _client；缺失即配置错误（避免 TypedDict 可选键访问告警）。"""
+    client = agent_config(config).get("_client")
+    if client is None:
+        raise RuntimeError("RunnableConfig.configurable 缺少 _client")
+    return client
 
 
 class MultiAgentState(TypedDict):

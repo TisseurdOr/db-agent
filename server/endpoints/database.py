@@ -342,7 +342,7 @@ def _hbase_table(table_name: str, limit: int) -> dict[str, Any]:
         row = {"row_key": rk}
         cells = store.get(rk, {})
         for c in columns[1:]:
-            row[c] = cells.get(c)
+            row[c] = cells.get(c) or ""
         sample.append(row)
     types = {c: "TEXT" for c in columns}
     return {

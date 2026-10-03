@@ -73,7 +73,7 @@ def run_ocr(image_bytes: bytes, ocr_fn: Callable[[bytes], str] | None = None) ->
 
 def _tesseract_ocr(image_bytes: bytes) -> OcrResult:
     try:
-        import pytesseract
+        import pytesseract  # pyright: ignore[reportMissingImports]
         from PIL import Image
     except ImportError:
         return OcrResult(text="", skipped=True, reason="ocr_unavailable", engine="tesseract")
@@ -264,7 +264,7 @@ def _chunk_prose(text: str, max_chars: int, overlap: int) -> list[str]:
 
 def _read_pdf_text(data: bytes) -> str:
     try:
-        from pypdf import PdfReader
+        from pypdf import PdfReader  # pyright: ignore[reportMissingImports]
     except ImportError:
         return ""
     try:

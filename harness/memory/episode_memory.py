@@ -15,6 +15,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -203,10 +204,10 @@ async def compact_session(
         for mid in ids:
             # Only delete legacy "问:/答:" conversation rows without episode kind
             try:
-                rows = []
+                rows: list[dict] = []
                 get = getattr(vector_memory.backend, "get_by_ids", None)
                 if callable(get):
-                    rows = get([mid])
+                    rows = cast(list[dict], get([mid]) or [])
                 else:
                     continue
                 if not rows:

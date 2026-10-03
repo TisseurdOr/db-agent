@@ -60,7 +60,7 @@ def _set_run(run, text, size, color, bold=False, font=FONT):
     ea.set("typeface", font)
 
 
-def add_text(slide, x, y, w, h, lines, size=14, color=DARK, bold=False,
+def add_text(slide, x, y, w, h, lines, size: float = 14.0, color=DARK, bold=False,
              align=PP_ALIGN.LEFT, anchor=MSO_ANCHOR.TOP, spacing=1.12):
     box = slide.shapes.add_textbox(x, y, w, h)
     tf = box.text_frame
@@ -130,7 +130,7 @@ def add_rect(slide, x, y, w, h, fill=None, line=None, line_w=1.0,
     return sp
 
 
-def fill_shape_text(sp, text, size=13, color=WHITE, bold=True,
+def fill_shape_text(sp, text, size: float = 13.0, color=WHITE, bold=True,
                     align=PP_ALIGN.CENTER, font=FONT):
     tf = sp.text_frame
     tf.word_wrap = True

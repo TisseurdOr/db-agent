@@ -4,6 +4,8 @@
 """
 
 
+from collections.abc import Hashable
+
 from langgraph.graph import END, StateGraph
 
 from harness.orchestration.multi.agent_names import (
@@ -70,7 +72,7 @@ def build_multi_agent_graph(checkpointer=None):
     builder.set_entry_point("router")
 
     # targets: edge_router 返回值 → LangGraph 节点名的映射
-    targets = {
+    targets: dict[Hashable, str] = {
         "router": "router",  # 失败重规划：Agent 节点失败后回 Router 重排计划
         "clarify": "clarify",
         AGENT_DATA_QUALITY: AGENT_DATA_QUALITY,

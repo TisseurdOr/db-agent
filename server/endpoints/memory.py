@@ -12,6 +12,7 @@ Read-only. Soft-fails if Chroma / sessions unavailable.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ router = APIRouter()
 ROOT = Path(__file__).resolve().parents[2]
 DEMO_DB = ROOT / "db" / "demo.db"
 METRIC_DB = ROOT / "db" / "metric_registry.db"
-CHROMA_DIR = ROOT / "harness" / "memory" / "chroma_db"
+CHROMA_DIR = Path(os.getenv("VECTOR_PERSIST_DIR", str(ROOT / "harness" / "memory" / "chroma_db")))
 AGENT_STATE_DB = ROOT / "db" / "agent_state.db"
 
 

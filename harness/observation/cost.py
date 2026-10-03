@@ -16,11 +16,18 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TypedDict
 
 TRACE_DIR = Path(__file__).resolve().parents[2] / "logs" / "traces"
 
 # 价格表: ¥/M tokens (DeepSeek) 或 $/M tokens (Claude)
-MODEL_PRICES: dict[str, dict[str, float]] = {
+class _ModelPrice(TypedDict):
+    input: float
+    output: float
+    currency: str
+
+
+MODEL_PRICES: dict[str, _ModelPrice] = {
     "deepseek-chat":      {"input": 1.0,  "output": 4.0,   "currency": "¥"},
     "deepseek-v4-flash":  {"input": 1.0,  "output": 4.0,   "currency": "¥"},
     "deepseek-v4-pro":    {"input": 4.0,  "output": 16.0,  "currency": "¥"},

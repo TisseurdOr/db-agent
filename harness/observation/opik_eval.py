@@ -14,7 +14,7 @@ import logging
 import os
 import re
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ def upload_eval_experiment(
                 ExperimentItemBulkRecord(
                     dataset_item_id=dataset_item_id,
                     evaluate_task_result=task_result,
-                    feedback_scores=feedback,
+                    feedback_scores=cast(Any, feedback),
                 )
             )
 

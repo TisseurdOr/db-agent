@@ -623,7 +623,7 @@ def generate_hbase_query(
     table_name: str,
     row_key: str = "",
     filter_description: str = "",
-    columns: list[str] = None,
+    columns: list[str] | None = None,
     value: str = "",
     column_families: str = "",
     limit: int = 0,

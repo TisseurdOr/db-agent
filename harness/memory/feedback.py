@@ -231,7 +231,7 @@ def learn_from_success(
     验证过，跳过 AUTO_LEARN_SQL 环境门直接写入（质量门仍生效）。
     """
     sql = sql or extract_sql(result_text)
-    if not should_learn(question, result_text, sql, force=force):
+    if not sql or not should_learn(question, result_text, sql, force=force):
         return False
     ok = record_sql_example(question.strip(), sql, source=source)
     if ok:

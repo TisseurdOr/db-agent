@@ -13,6 +13,7 @@ sales、orders、regions 三张表的相关字段，而不是把全部表丢给 
 import os
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import chromadb
 from openai import OpenAI
@@ -130,8 +131,9 @@ class SchemaDiscovery:
     def __init__(self, db_path: str | Path = DB_PATH):
         self.db_path = str(db_path)
         self._embed_client: OpenAI | None = None
-        self._chroma_client: chromadb.PersistentClient | None = None
-        self._collection = None
+        # chromadb 的类型桩与实际用法不一致，用 Any 承接
+        self._chroma_client: Any = None
+        self._collection: Any = None
 
     def _ensure_clients(self):
         if self._embed_client is not None:
@@ -140,7 +142,10 @@ class SchemaDiscovery:
             api_key=os.environ["EMBEDDING_API_KEY"],
             base_url=os.environ["EMBEDDING_BASE_URL"],
         )
-        chroma_dir = Path(__file__).resolve().parent.parent / "memory" / "chroma_db"
+        chroma_dir = Path(os.getenv(
+            "VECTOR_PERSIST_DIR",
+            str(Path(__file__).resolve().parent.parent / "memory" / "chroma_db"),
+        ))
         self._chroma_client = chromadb.PersistentClient(path=str(chroma_dir))
         self._collection = self._chroma_client.get_or_create_collection(
             name=_COLLECTION,
@@ -216,7 +221,10 @@ class SchemaDiscovery:
             )
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        resp = self._embed_client.embeddings.create(
+        client = self._embed_client
+        if client is None:
+            raise RuntimeError("embed client 未初始化（先调用 _ensure_clients）")
+        resp = client.embeddings.create(
             model=os.getenv("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
             input=texts,
         )

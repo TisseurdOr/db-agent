@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +143,7 @@ def flush_opik() -> None:
     try:
         import opik
 
-        opik.flush()
+        getattr(opik, "flush", lambda: None)()
     except Exception:
         pass
 
@@ -263,7 +263,7 @@ def log_user_feedback(
             scores[0]["reason"] = comment
             scores[1]["reason"] = comment
 
-        client.log_traces_feedback_scores(scores=scores)
+        client.log_traces_feedback_scores(scores=cast(Any, scores))
         flush_opik()
         return {"ok": True, "opik_trace_id": oid, "scores": scores}
     except Exception as exc:

@@ -10,9 +10,11 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_env(monkeypatch):
+def _hermetic_env(monkeypatch, tmp_path):
     """固定测试会话角色为 dba，消除对 .env 的隐式依赖。"""
     monkeypatch.setenv("AGENT_USER", "dba")
+    # 向量库落盘到用例临时目录：不写共享的生产 chroma_db
+    monkeypatch.setenv("VECTOR_PERSIST_DIR", str(tmp_path / "vector_store"))
     # 测试默认不走 Redis（保持离线可跑）；Redis 专项测试自己 setenv
     monkeypatch.delenv("REDIS_URL", raising=False)
     # 别在测试里触发启动建索引：会写共享持久化向量库（无 key 留空集合，

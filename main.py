@@ -231,6 +231,8 @@ async def main():
                 recalled_for_multi = (
                     f"{meta_hint}{memories_text}".strip() if meta_hint else memories_text
                 )
+                if multi_runner is None:
+                    raise RuntimeError("multi 模式未初始化 runner")
                 result = await multi_runner.run(
                     user_input,
                     recalled_memories=recalled_for_multi,
@@ -297,7 +299,7 @@ async def main():
             # Token 日志：两种模式共用 ConversationManager 的估算
             est = conversation.token_estimate()
             checkpoint_info = ""
-            if args.mode == "multi":
+            if args.mode == "multi" and multi_runner is not None:
                 checkpoint_info = f", checkpoint={multi_runner.checkpoint_db.name}"
                 from harness.observation.opik_tracing import opik_tag_memory
                 opik_tag_memory(est)

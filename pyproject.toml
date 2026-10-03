@@ -46,6 +46,8 @@ dev = [
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=6.0.0",
+    "python-pptx>=1.0.2",
     "ruff>=0.16.4",
 ]
 
@@ -53,6 +55,19 @@ dev = [
 pythonpath = ["."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# 默认排除 live：它真调 LLM、耗 token、需联网。显式跑：uv run pytest -m live
+addopts = "-m 'not live'"
+markers = [
+    "live: 需要真实 LLM API key 的端到端集成测试（默认不跑，见 addopts）",
+]
+
+[tool.coverage.run]
+source = ["harness", "server", "db"]
+omit = ["*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 # ── CLI 入口：安装后可直接用 `db-agent` 命令 ──
 [project.scripts]

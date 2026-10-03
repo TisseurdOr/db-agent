@@ -101,7 +101,7 @@ def _find_join_path(edges, start: str, target: str) -> list[tuple[str, str, str,
         return []
 
     q = deque([start])
-    parent = {start: None}
+    parent: dict[str, tuple[str, tuple] | None] = {start: None}
     while q:
         cur = q.popleft()
         if cur == target:
@@ -115,8 +115,11 @@ def _find_join_path(edges, start: str, target: str) -> list[tuple[str, str, str,
 
     path = []
     node = target
-    while parent[node] is not None:
-        prev, edge = parent[node]
+    while True:
+        entry = parent.get(node)
+        if entry is None:
+            break
+        prev, edge = entry
         path.append(edge)
         node = prev
     path.reverse()

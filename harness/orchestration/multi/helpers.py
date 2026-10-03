@@ -24,7 +24,11 @@ from harness.orchestration.multi.agent_names import (
     AGENT_STRATEGY,
 )
 from harness.orchestration.multi.base import is_agent_timeout
-from harness.orchestration.multi.state import MultiAgentState, agent_config
+from harness.orchestration.multi.state import (
+    MultiAgentState,
+    agent_config,
+    require_client,
+)
 
 # Checkpointer 数据库路径。
 # 图每执行完一个节点，自动把 state 写进这个 SQLite 文件。
@@ -163,7 +167,7 @@ def _next_step_after_sql(state: MultiAgentState, results: dict) -> dict:
     return _next_step(state, results, AGENT_SQL)
 async def _run_agent_node(state, config, agent, agent_name, result_key):
     """通用 Agent 节点：取 task → 执行 → 写 results。"""
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     model = agent_config(config).get("_model", DEFAULT_MODEL)
     task = next(s["task"] for s in state["plan"] if s["agent"] == agent_name)

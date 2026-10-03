@@ -143,10 +143,11 @@ class TaskManager:
         if task.status != "pending":
             return f"Task {task_id} is {task.status}, cannot claim"
         if not self.can_start(task_id):
-            blocked = [
-                d for d in task.blockedBy
-                if (self.get(d) is None or self.get(d).status != "completed")
-            ]
+            blocked = []
+            for d in task.blockedBy:
+                dep = self.get(d)
+                if dep is None or dep.status != "completed":
+                    blocked.append(d)
             return f"Blocked by: {blocked}"
         task.owner = owner
         task.status = "in_progress"
@@ -205,7 +206,7 @@ class TaskManager:
             self.claim(created[0].id, owner=created[0].agent or "agent")
         self.print_board(title="Task board (from Router plan)")
         # 返回磁盘上的最新状态（claim 后 status 已变）
-        return [self.get(t.id) for t in created]
+        return [t for t in (self.get(x.id) for x in created) if t is not None]
 
     def on_agent_failed(self, agent: str) -> None:
         """Agent 失败：将对应 in_progress 任务标为 failed，不解锁下游。"""

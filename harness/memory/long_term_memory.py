@@ -167,7 +167,7 @@ class RAGPipeline:
         )
         return vecs
     async def retrieve(self, query: str, top_k: int = 5,
-                       filters: dict = None,
+                       filters: dict | None = None,
                        use_hyde: bool = True,
                        use_rerank: bool = True,
                        use_hybrid: bool = False) -> list[dict]:
@@ -207,7 +207,7 @@ class RAGPipeline:
         logger.info("retrieve 完成: 返回 %d 条", len(results[:top_k]))
         return results[:top_k]
 
-    def _bm25_search(self, query: str, filters: dict = None, top_k: int = 10) -> list[dict]:
+    def _bm25_search(self, query: str, filters: dict | None = None, top_k: int = 10) -> list[dict]:
         """BM25 关键词检索。# ponytail: O(N) 全量扫描语料，库上百万条再换倒排索引。"""
         corpus = self.vector_db.backend.get(where=filters)
         return _bm25_score_corpus(corpus, query, top_k)
@@ -250,7 +250,7 @@ class RAGPipeline:
         text = extract_text(resp, context="rerank")
         return _parse_rerank_output(text, candidates, top_k)
 
-    async def add_conversation(self, question: str, answer: str, metadata: dict = None):
+    async def add_conversation(self, question: str, answer: str, metadata: dict | None = None):
         """把一轮问答存进长期记忆：拼文字 → embedding → 存向量库。"""
         logger.info("写入长期记忆: 问=%r", question[:40])
         text = f"问: {question}\n答: {answer}"          # 问答拼一条，上下文完整

@@ -30,7 +30,7 @@ async def upload_csv(file: UploadFile = File(...)):
     columns = reader.fieldnames or []
 
     # Create table in uploads DB
-    table_name = f"uploaded_{file.filename.replace('.csv', '').replace('.', '_')}"
+    table_name = f"uploaded_{(file.filename or 'upload.csv').replace('.csv', '').replace('.', '_')}"
     db_path = _UPLOAD_DIR / "uploads.db"
     conn = sqlite3.connect(str(db_path))
 

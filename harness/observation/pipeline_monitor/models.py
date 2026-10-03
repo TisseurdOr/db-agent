@@ -86,7 +86,7 @@ def register_job(name: str, schedule: str = "daily", sla_minutes: int = 60,
     conn.commit()
     job_id = cur.lastrowid
     conn.close()
-    return job_id
+    return job_id or 0
 
 
 def get_all_jobs() -> list[dict]:
@@ -108,7 +108,7 @@ def start_run(job_id: int, triggered_by: str = "scheduler") -> int:
     conn.commit()
     run_id = cur.lastrowid
     conn.close()
-    return run_id
+    return run_id or 0
 
 
 def finish_run(run_id: int, status: str, row_count: int = 0,
@@ -126,7 +126,7 @@ def finish_run(run_id: int, status: str, row_count: int = 0,
 # 监控查询
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def get_recent_runs(job_id: int = None, limit: int = 20) -> list[dict]:
+def get_recent_runs(job_id: int | None = None, limit: int = 20) -> list[dict]:
     conn = get_db()
     if job_id:
         rows = conn.execute(
@@ -217,7 +217,7 @@ def create_alert(run_id: int, job_id: int, alert_type: str, severity: str,
     conn.commit()
     alert_id = cur.lastrowid
     conn.close()
-    return alert_id
+    return alert_id or 0
 
 
 def get_active_alerts(limit: int = 50) -> list[dict]:

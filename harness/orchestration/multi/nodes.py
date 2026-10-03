@@ -62,7 +62,7 @@ from harness.orchestration.multi.router import (
     is_chitchat_query,
     route_override,
 )
-from harness.orchestration.multi.state import MultiAgentState, agent_config
+from harness.orchestration.multi.state import MultiAgentState, agent_config, require_client
 
 # Checkpointer 数据库路径。
 # 图每执行完一个节点，自动把 state 写进这个 SQLite 文件。
@@ -126,7 +126,7 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("router", "分析意图")
 
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
     router_cache = agent_config(config).get("_router_cache")
 
@@ -139,7 +139,7 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     t0 = time.time()
     override = None if replan_feedback else route_override(state["query"], prev_agents=prev_agents)
     route_latency = time.time() - t0
-    router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
+    router_usage: dict[str, float] = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
     cached_plan = None
     plan_data = {}  # 硬规则路径不经 LLM，后续读 confidence 前必须有默认值
 
@@ -331,7 +331,7 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span("clarify", "澄清模糊问题")
 
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
 
     prompt = CLARIFY_PROMPT.format(query=state["query"])
@@ -343,9 +343,10 @@ async def node_clarify(state: MultiAgentState, config: RunnableConfig) -> dict:
     )
     text = extract_text(resp, context="clarify")
     usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
-    if hasattr(resp, "usage") and resp.usage:
-        usage["input_tokens"] = resp.usage.input_tokens or 0
-        usage["output_tokens"] = resp.usage.output_tokens or 0
+    resp_usage = getattr(resp, "usage", None)
+    if resp_usage:
+        usage["input_tokens"] = resp_usage.input_tokens or 0
+        usage["output_tokens"] = resp_usage.output_tokens or 0
 
     trace.finish_span(span, usage)
     print(f"❓ Clarify: 需要澄清「{state['query'][:40]}」")
@@ -393,7 +394,7 @@ async def node_data_quality(state: MultiAgentState, config: RunnableConfig) -> d
 async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
     """SQL Agent: 查数据库（list_tables / describe_table / run_query）。"""
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
     task = next(s["task"] for s in state["plan"] if s["agent"] == AGENT_SQL)
     span = trace.start_span(AGENT_SQL, task[:60])
@@ -471,7 +472,7 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     sql_match = re.search(r'(SELECT|WITH)\s.+?(?:;|$)', sql_result, re.IGNORECASE | re.DOTALL)
     sql = sql_match.group(0).strip() if sql_match else sql_result[:500]
 
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
 
     prompt = CONFIDENCE_PROMPT.format(
@@ -489,9 +490,10 @@ async def node_confidence_gate(state: MultiAgentState, config: RunnableConfig) -
     text = extract_text(resp, context="confidence")
     result_data = parse_confidence_result(text)
     usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
-    if hasattr(resp, "usage") and resp.usage:
-        usage["input_tokens"] = resp.usage.input_tokens or 0
-        usage["output_tokens"] = resp.usage.output_tokens or 0
+    resp_usage = getattr(resp, "usage", None)
+    if resp_usage:
+        usage["input_tokens"] = resp_usage.input_tokens or 0
+        usage["output_tokens"] = resp_usage.output_tokens or 0
 
     trace.finish_span(span, usage)
 
@@ -548,7 +550,7 @@ async def node_analysis(state: MultiAgentState, config: RunnableConfig) -> dict:
     trace = agent_config(config).get("_trace") or TraceContext(state.get("query", ""))
     span = trace.start_span(AGENT_ANALYSIS, "综合分析")
 
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
     context_parts = []
     # Layer 1: 早期对话摘要——ConversationManager 将超窗口消息压缩为摘要
@@ -661,7 +663,7 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
 
     attempts = state.get("_reflection_attempts", 0)
 
-    client = agent_config(config)["_client"]
+    client = require_client(config)
     model = agent_config(config).get("_model", DEFAULT_MODEL)
 
     # 拼接上游数据作为审查依据
@@ -681,9 +683,10 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
     )
     text = extract_text(resp, context="reflection")
     usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
-    if hasattr(resp, "usage") and resp.usage:
-        usage["input_tokens"] = resp.usage.input_tokens or 0
-        usage["output_tokens"] = resp.usage.output_tokens or 0
+    resp_usage = getattr(resp, "usage", None)
+    if resp_usage:
+        usage["input_tokens"] = resp_usage.input_tokens or 0
+        usage["output_tokens"] = resp_usage.output_tokens or 0
 
     # 解析审查结果
     import json as _json

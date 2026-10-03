@@ -56,7 +56,7 @@ def main() -> int:
         client = Opik()
         traces = client.search_traces(project_name=project, max_results=1)
         if traces:
-            tid = traces[0].id
+            tid = traces[0].id or ""
             result = log_user_feedback(tid, "up", comment="setup smoke test")
             print(f"      scored {tid}: {result}")
         else:

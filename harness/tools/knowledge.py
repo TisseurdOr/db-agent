@@ -464,6 +464,8 @@ def _keyword_search(query: str, top_k: int) -> list[dict]:
 
 def _vector_search(query: str, top_k: int) -> list[dict]:
     """向量语义检索——从知识库索引召回。"""
+    if _kb_memory is None:
+        return []
     results = _kb_memory.recall(query, top_k=top_k, memory_type="knowledge")
     return [
         {
@@ -578,7 +580,7 @@ def read_memory(memory_type: str = "all", limit: int = 10) -> dict:
     "返回 {results: [{text, score, metadata}], count, parsed}；库为空时返回空列表。"
 ))
 async def search_memory(query: str, top_k: int = 5,
-                        memory_type: str = None) -> dict:
+                        memory_type: str | None = None) -> dict:
     """query: 自然语言查询，如 '上次那个销售分析'、'之前讨论过的地区数据'
     top_k: 返回条数，默认 5
     memory_type: conversation(对话) / preference(偏好) / None(不过滤，由 Self-Query 抽取)"""

@@ -29,7 +29,6 @@ from harness.constraints.guardrails import guard_sql
     "CREATE TABLE hack (id INT)",
     "SELECT * FROM sqlite_master",                  # 系统表枚举
     "SELECT * FROM pg_catalog.pg_tables",
-    "SELECT * FROM orders; /* DROP TABLE orders */",  # 分号后跟注释块：多语句
 ])
 def test_guard_sql_blocks_dangerous(sql: str):
     passed, reason = guard_sql(sql)
@@ -47,6 +46,12 @@ def test_guard_sql_blocks_dangerous(sql: str):
     "SELECT 1; -- 只读注释不算多语句",
     "SELECT * FROM orders /* 单条 SELECT 里的注释块是安全的 */",
     "SELECT dropped_count FROM orders",  # 词边界：dropped ≠ DROP
+    # 假阳性回归：危险词只出现在字符串字面量 / 引号标识符 / 注释里，不应拦截
+    "SELECT * FROM orders WHERE status = 'update'",
+    "SELECT * FROM orders WHERE note LIKE '%delete%'",
+    "SELECT * FROM orders WHERE reason = 'drop table'",
+    'SELECT "update" FROM orders',                   # 双引号标识符
+    "SELECT * FROM orders; /* DROP TABLE orders */",  # 分号后仅注释，非第二条语句
 ])
 def test_guard_sql_allows_safe(sql: str):
     passed, reason = guard_sql(sql)

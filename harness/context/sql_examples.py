@@ -17,6 +17,7 @@ import hashlib
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import chromadb
 from openai import OpenAI
@@ -122,7 +123,10 @@ def format_examples(examples: list[dict]) -> str:
 
 def _open_collection():
     """直接开 Chroma collection（不碰 embedding 客户端——回滚不能依赖 embedding 服务）。"""
-    chroma_dir = Path(__file__).resolve().parent.parent / "memory" / "chroma_db"
+    chroma_dir = Path(os.getenv(
+        "VECTOR_PERSIST_DIR",
+        str(Path(__file__).resolve().parent.parent / "memory" / "chroma_db"),
+    ))
     client = chromadb.PersistentClient(path=str(chroma_dir))
     return client.get_or_create_collection(
         name=_COLLECTION,
@@ -135,7 +139,8 @@ class SQLExampleStore:
 
     def __init__(self):
         self._embed_client: OpenAI | None = None
-        self._collection = None
+        # chromadb 的 Collection 类型桩与实际用法不一致，这里用 Any 承接
+        self._collection: Any = None
 
     def _ensure_clients(self):
         if self._collection is not None:
@@ -147,7 +152,10 @@ class SQLExampleStore:
         self._collection = _open_collection()
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
-        resp = self._embed_client.embeddings.create(
+        client = self._embed_client
+        if client is None:
+            raise RuntimeError("embed client 未初始化（先调用 _ensure_clients）")
+        resp = client.embeddings.create(
             model=os.getenv("EMBEDDING_MODEL", "qwen3.7-text-embedding"),
             input=texts,
         )

@@ -343,21 +343,23 @@ def _infer_field_properties(rows: list[dict]) -> dict[str, dict]:
             continue
         nunique = len(set(map(str, values)))
         nums = [_to_number(v) for v in values]
-        if all(n is not None for n in nums):
+        nums_ok = [n for n in nums if n is not None]
+        if nums and len(nums_ok) == len(nums):
             props[col] = {
                 "dtype": "number",
-                "min": min(nums),
-                "max": max(nums),
-                "sum": sum(nums),
+                "min": min(nums_ok),
+                "max": max(nums_ok),
+                "sum": sum(nums_ok),
                 "nunique": nunique,
             }
             continue
         parsed_dates = [_parse_date(v) for v in values]
-        if all(d is not None for d in parsed_dates):
+        dates_ok = [d for d in parsed_dates if d is not None]
+        if parsed_dates and len(dates_ok) == len(parsed_dates):
             props[col] = {
                 "dtype": "date",
-                "min": min(parsed_dates).isoformat(),
-                "max": max(parsed_dates).isoformat(),
+                "min": min(dates_ok).isoformat(),
+                "max": max(dates_ok).isoformat(),
                 "nunique": nunique,
             }
             continue

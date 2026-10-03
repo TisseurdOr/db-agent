@@ -123,3 +123,12 @@ docs/操作与排障/意图识别.md
 docs/操作与排障/模型 Fallback 链.md
 docs/项目介绍/项目详细拆解.md
 docs/项目介绍/curriculum-mapping.md
+
+# 覆盖率产物
+.coverage
+.coverage.*
+htmlcov/
+
+# 运行时索引 / SQLite 回滚日志
+db/memory_index/
+db/*.db-journal

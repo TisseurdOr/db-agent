@@ -6,6 +6,7 @@
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 from anthropic import Anthropic
@@ -52,21 +53,27 @@ class MultiAgentRunner:
     """
 
     # ── 实例属性声明（create() 用 object.__new__ 构造，pyright 需要类级注解）──
-    client: object
-    graph: object
+    # 这些持有第三方对象（Anthropic client / LangGraph / checkpointer），用 Any 承接
+    client: Any
+    graph: Any
     model: str
     enable_data_quality: bool
-    router_cache: object
-    task_manager: object
+    router_cache: Any
+    task_manager: Any
     thread_id: str
-    checkpointer: object
-    checkpoint_db: object
-    _redis_cm: object
-    _conn: object
-    _current_config: dict | None
+    checkpointer: Any
+    checkpoint_db: Any
+    _redis_cm: Any
+    _conn: Any
+    _current_config: Any
     _last_state: dict | None
     _dq_done: bool
     _dq_time: float
+    # Web 层（server/runner_wrapper）附加的会话字段
+    _session_id: Any
+    _conversation: Any
+    _web_user_id: Any
+    _last_query: Any
 
 
     def __init__(self, *args, **kwargs):
@@ -169,7 +176,7 @@ class MultiAgentRunner:
         conversation_summary: str = "",
         *,
         thread_id: str | None = None,
-    ) -> str:
+    ) -> str | dict[str, Any]:
         """执行一次查询（带运维指标记录：耗时 / 成败）。
 
         thread_id 缺省用 self.thread_id；eval 传每 case 独立 id 可隔离
@@ -193,8 +200,8 @@ class MultiAgentRunner:
         conversation_summary: str = "",
         *,
         thread_id: str | None = None,
-    ) -> str:
-        """执行一次多 Agent 查询，返回 final_answer 文本。
+    ) -> str | dict[str, Any]:
+        """执行一次多 Agent 查询，返回 final_answer 文本（HITL 暂停时返回状态 dict）。
 
         如果遇到 HITL 审批中断，返回 {"__interrupt__": True, "data": {...}}。
         调用方检测到此标记后展示 SQL 给用户，确认后调 resume() 恢复执行。
@@ -325,7 +332,7 @@ class MultiAgentRunner:
             clarified_query: 用户对澄清问题的回复（clarify 场景）
         """
         opik_tag_hitl("resume", approved=bool(approved))
-        resume_value = {"approved": approved}
+        resume_value: dict[str, Any] = {"approved": approved}
         if clarified_query:
             resume_value["clarified_query"] = clarified_query
 

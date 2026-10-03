@@ -59,8 +59,8 @@ def ensure_memory_stack(client=None) -> tuple[Any, Any]:
         set_llm_client(client)
 
     if _ready and _vm is not None:
-        if client is not None and _rag is not None and getattr(_rag, "llm_client", None) is None:
-            _rag.llm_client = client
+        if client is not None and _rag is not None and getattr(_rag, "llm", None) is not client:
+            _rag.llm = client
         return _vm, _rag
 
     from harness.memory.long_term_memory import RAGPipeline
@@ -73,7 +73,7 @@ def ensure_memory_stack(client=None) -> tuple[Any, Any]:
     if _rag is None:
         _rag = RAGPipeline(vector_db=_vm, llm_client=client)
     elif client is not None:
-        _rag.llm_client = client
+        _rag.llm = client
     set_rag_pipeline(_rag)
     _ready = True
     return _vm, _rag
@@ -201,7 +201,7 @@ async def recall_for_turn(
                 source = "rag"
             else:
                 memories = [
-                    m for m in vm.recall(q, top_k=top_k)
+                    m for m in (vm.recall(q, top_k=top_k) if vm is not None else [])
                     if float(m.get("score", 0)) >= score_min
                 ]
                 source = "vector"
@@ -209,7 +209,7 @@ async def recall_for_turn(
             logger.warning("preturn_recall: self_query/rag failed, plain recall: %s", e)
             try:
                 memories = [
-                    m for m in vm.recall(q, top_k=top_k)
+                    m for m in (vm.recall(q, top_k=top_k) if vm is not None else [])
                     if float(m.get("score", 0)) >= score_min
                 ]
                 source = "vector"

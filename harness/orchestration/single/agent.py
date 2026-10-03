@@ -16,6 +16,7 @@
 import asyncio
 import json
 import os
+from typing import Any, cast
 
 from anthropic import Anthropic
 
@@ -95,15 +96,15 @@ async def streaming_agent(
     system_prompt: str,
     tools: list[dict],
     handlers: dict,
-    model: str = None,
+    model: str | None = None,
     max_turns: int = MAX_TURNS,
     temperature: float = 0.0,
     show_tool_results: bool = True,
     conversation=None,
-    history: list = None,
-    vector_memory: VectorMemory = None,
-    budget : TokenBudget = None,
-    window_manager: HybridWindowManager = None,
+    history: list | None = None,
+    vector_memory: VectorMemory | None = None,
+    budget: TokenBudget | None = None,
+    window_manager: HybridWindowManager | None = None,
 ) -> str:
     """统一的 Agent Loop——streaming + cache_control + 工具调用可视化。
 
@@ -141,7 +142,7 @@ async def streaming_agent(
         )
 
     # 历史消息（最近几轮原文）+ 当前消息。history 为空时行为和以前一致。
-    messages = list(history or []) + [{"role": "user", "content": user_msg}]
+    messages: list[dict[str, Any]] = list(history or []) + [{"role": "user", "content": user_msg}]
 
     #agent调用开始
     context_block = ""  # token 预算未触发时为空——避免 UnboundLocalError
@@ -185,9 +186,9 @@ async def streaming_agent(
                     model=model,
                     max_tokens=4096,
                     temperature=temperature,
-                    system=cached_system,
-                    messages=messages,
-                    tools=tools,
+                    system=cast(Any, cached_system),
+                    messages=cast(Any, messages),
+                    tools=cast(Any, tools),
                 ) as stream:
                     for event in stream:
                         if event.type == "content_block_start":
@@ -233,6 +234,9 @@ async def streaming_agent(
                 print(f"\n⚠️ LLM API 错误 ({type(e).__name__})，{delay:.1f}s 后重试 "
                       f"({attempt + 1}/{max_retries_from_env()})")
                 await asyncio.sleep(delay)
+
+        if final_msg is None:
+            return text_content
 
         # final_msg.content 里每个 block 的 .input 已经是完整的 Python dict，
         # 不需要再手动解析 JSON（SDK 在 stream 结束后帮我们 parse 了）
@@ -295,7 +299,7 @@ async def agent_loop(
     system_prompt: str,
     tools: list[dict],
     handlers: dict,
-    model: str = None,
+    model: str | None = None,
     max_turns: int = MAX_TURNS,
     temperature: float = 0.0,
 ) -> str:
@@ -303,7 +307,7 @@ async def agent_loop(
     if model is None:
         model = DEFAULT_MODEL
 
-    messages = [{"role": "user", "content": user_message}]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
     cacheable_system_blocks = _build_cacheable_system(system_prompt)
 
     for turn in range(max_turns):
@@ -319,6 +323,9 @@ async def agent_loop(
             )
         except CircuitOpenError:
             # 熔断降级：不再重试，直接返回可读文案
+            return DEGRADED_MESSAGE
+
+        if response is None:
             return DEGRADED_MESSAGE
 
         text_parts = []

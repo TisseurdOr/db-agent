@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from anthropic import Anthropic
+from anthropic.types import TextBlock
 
 from harness.config import DEFAULT_MODEL
 
@@ -36,7 +37,7 @@ async def compress_history(client: Anthropic, old_messages: list, model=None):
     # content 里可能混有 ThinkingBlock（带思考的模型）——只取第一个文字块，
     # 不能死取 content[0]，否则遇到 ThinkingBlock 会 AttributeError。
     for block in resp.content:
-        if getattr(block, "type", None) == "text":
+        if isinstance(block, TextBlock):
             return block.text
     # 兜底：没有文字块（极少见）时返回空摘要，不让整个 agent 崩
     return ""
@@ -56,7 +57,7 @@ async def reduce_summaries(client: Anthropic, summary_text: str, model=None) -> 
         messages=[{"role": "user", "content": summary_text[:6000]}],
     )
     for block in resp.content:
-        if getattr(block, "type", None) == "text":
+        if isinstance(block, TextBlock):
             return block.text or summary_text
     return summary_text
 
@@ -186,7 +187,7 @@ class ConversationManager:
             "compressed_msgs": self._total_compressed,
         }
 
-    def token_count_exact(self, system: str = "", tools: list = None) -> dict:
+    def token_count_exact(self, system: str = "", tools: list | None = None) -> dict:
         """精确版：调 Anthropic count_tokens 接口，拿真实 input_tokens。
 
         和 token_estimate 的区别：
