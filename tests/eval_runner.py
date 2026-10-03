@@ -652,8 +652,6 @@ async def main():
         except Exception as exc:
             print(f"{RED}  Opik upload error: {exc}{RESET}")
 
-    print_summary(results)
-
     # 返回码：有失败返回 1
     if any(not r.passed for r in results):
         sys.exit(1)

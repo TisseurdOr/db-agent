@@ -22,11 +22,23 @@ from harness.tools.knowledge import (
 from harness.tools.query import RUN_QUERY_TOOL, run_query
 from harness.tools.schema import (
     DESCRIBE_TABLE_TOOL,
+    DISCOVER_SCHEMA_TOOL,
     GET_SCHEMA_SUMMARY_TOOL,
     LIST_TABLES_TOOL,
     describe_table,
+    discover_relevant_schema,
     get_schema_summary,
     list_tables,
+)
+from harness.tools.warehouse import (
+    DESCRIBE_WAREHOUSE_TABLE_TOOL,
+    LIST_WAREHOUSE_TABLES_TOOL,
+    QUERY_PERIOD_COMPARISON_TOOL,
+    QUERY_WAREHOUSE_TOOL,
+    describe_warehouse_table,
+    list_warehouse_tables,
+    query_period_comparison,
+    query_warehouse,
 )
 
 TOOLS = [
@@ -45,6 +57,11 @@ TOOLS = [
     search_hive_syntax.tool_schema,
     run_hbase.tool_schema,
     match_sql_template.tool_schema,
+    DISCOVER_SCHEMA_TOOL,
+    LIST_WAREHOUSE_TABLES_TOOL,
+    DESCRIBE_WAREHOUSE_TABLE_TOOL,
+    QUERY_WAREHOUSE_TOOL,
+    QUERY_PERIOD_COMPARISON_TOOL,
 ]
 
 TOOL_HANDLERS = {
@@ -63,4 +80,9 @@ TOOL_HANDLERS = {
     "search_hive_syntax": search_hive_syntax,
     "run_hbase": run_hbase,
     "match_sql_template": match_sql_template,
+    "discover_relevant_schema": discover_relevant_schema,
+    "list_warehouse_tables": list_warehouse_tables,
+    "describe_warehouse_table": describe_warehouse_table,
+    "query_warehouse": query_warehouse,
+    "query_period_comparison": query_period_comparison,
 }

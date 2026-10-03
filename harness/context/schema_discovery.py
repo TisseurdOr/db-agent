@@ -138,10 +138,14 @@ class SchemaDiscovery:
     def _ensure_clients(self):
         if self._embed_client is not None:
             return
-        self._embed_client = OpenAI(
-            api_key=os.environ["EMBEDDING_API_KEY"],
-            base_url=os.environ["EMBEDDING_BASE_URL"],
-        )
+        api_key = os.environ.get("EMBEDDING_API_KEY")
+        base_url = os.environ.get("EMBEDDING_BASE_URL")
+        if not api_key or not base_url:
+            raise RuntimeError(
+                "Schema Discovery 需要 EMBEDDING_API_KEY / EMBEDDING_BASE_URL；"
+                "未配置时请改用 list_tables + describe_table"
+            )
+        self._embed_client = OpenAI(api_key=api_key, base_url=base_url)
         chroma_dir = Path(os.getenv(
             "VECTOR_PERSIST_DIR",
             str(Path(__file__).resolve().parent.parent / "memory" / "chroma_db"),
@@ -320,6 +324,13 @@ def get_schema_discovery() -> SchemaDiscovery:
 
 
 def discover_schema_for_query(query: str, top_k: int = 15) -> str:
-    """工具函数：给 sql_agent 用的 schema 检索入口。"""
-    sd = get_schema_discovery()
-    return sd.build_schema_context(query, top_k)
+    """工具函数：给 sql_agent 用的 schema 检索入口。
+
+    embedding 未配置 / 索引不可用时返回 ""（调用方降级到 list_tables + describe_table），
+    不再把 KeyError 抛给 agent。
+    """
+    try:
+        sd = get_schema_discovery()
+        return sd.build_schema_context(query, top_k)
+    except Exception:
+        return ""
