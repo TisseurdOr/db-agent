@@ -30,5 +30,5 @@ obsidian vault="<Vault名>" tags sort=count counts
 
 ## 4. 本 Vault 专属约定
 
-- 规则见 [AGENTS.md](AGENTS.md)；主题索引模板见 [ai/主题Index模板.md](ai/主题Index模板.md)。
+- 规则见 [AGENTS.md](../AGENTS.md)。
 - 工作流：知识维护 / 深度调研 见 `ai/` 目录。

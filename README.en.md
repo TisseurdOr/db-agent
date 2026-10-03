@@ -145,7 +145,7 @@ Entrypoints
 | Hive | Warehouse dialect (local sim) | `run_query` + grammar templates |
 | DataQuality | Optional quality scan | row count / NULL / date continuity |
 
-Learning notes, resume materials, and old experiments live under `sidecar/` and are not on the runtime path. Deeper notes: [`HARNESS.md`](HARNESS.md) · [`docs/engineering-mechanisms.md`](docs/engineering-mechanisms.md).
+Learning notes, resume materials, and old experiments live under `sidecar/` and are not on the runtime path. Deeper notes: [`HARNESS.md`](HARNESS.md) · [`docs/项目介绍/engineering-mechanisms.md`](docs/项目介绍/engineering-mechanisms.md).
 
 ---
 
@@ -442,9 +442,9 @@ Full tests run offline (LLM / Embedding faked). Redis / Milvus-specific cases sk
 <sub>
 Diagrams: <a href="docs/diagrams/">docs/diagrams/</a> ·
 Harness: <a href="HARNESS.md">HARNESS.md</a> ·
-Case study: <a href="docs/项目案例.md">项目案例</a> ·
-Mechanisms: <a href="docs/engineering-mechanisms.md">engineering-mechanisms</a> ·
-Retrospective: <a href="docs/项目复盘-可复用模块库.md">reusable module library</a>
+Case study: <a href="docs/项目介绍/项目案例.md">项目案例</a> ·
+Mechanisms: <a href="docs/项目介绍/engineering-mechanisms.md">engineering-mechanisms</a> ·
+Retrospective: <a href="docs/项目介绍/项目复盘-可复用模块库.md">reusable module library</a>
 </sub>
 
 </div>

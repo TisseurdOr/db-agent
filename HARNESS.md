@@ -23,7 +23,7 @@
 | 评估观测 | `harness/observation/` | Trace、Opik、cost、pipeline_monitor |
 | 约束与修复 | `harness/constraints/` | RBAC、三层护栏、confidence/HITL、API retry |
 
-学习材料 / 简历 / 旧实验在 `sidecar/`，不参与运行。详见 [`docs/面试-六维详解.md`](docs/面试-六维详解.md)。
+学习材料 / 简历 / 旧实验在 `sidecar/`，不参与运行。
 
 ---
 
@@ -340,7 +340,7 @@ db-agent/
   harness/                    ★ 六维运行时（见上表）
   db/                         demo.db / agent_state.db / seed.py / user_memory.sql
   tests/                      smoke + 单元 + eval_runner
-  docs/                       产品/面试文档（含 面试-六维详解.md）
+  docs/                       产品/项目文档（新手手册 / 操作与排障 / 项目介绍 / adr）
   scripts/                    demo / opik 脚本
   opik-platform/              本地 Opik Compose
   sidecar/                    learning / resume / archive / xmind / 旧笔记
