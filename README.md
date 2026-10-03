@@ -29,7 +29,8 @@
 这不是一个「让模型写 SQL」的玩具，而是一套 **让模型写 SQL 不出事** 的工程系统：工具真执行、权限硬拦截、失败可自愈、结果可评测。换 DeepSeek / Claude 只改 API，不改这套骨架。对照见 [`HARNESS.md`](HARNESS.md)。
 
 > **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端），已上线。
-> SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）——接真实集群只需换连接器。
+> SQLite 为真实本地库；**HBase 是本地内存模拟器**（API 对齐，无真实集群）。
+> **Hive/数仓 agent 查的是真实的 Olist 五层数仓**（`db/warehouse.db`，由 `scripts/build_olist_warehouse.py` 从公开数据集构建），另提供 HiveQL 语法模板；接真实 Hive 集群只需换连接器。
 > 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **531** 条）。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
@@ -142,7 +143,7 @@ db-agent  ❯ Entitlement：仅 dba/经理可查库
 | Analysis | 只分析、不写 SQL | `analyze_results` / `render_chart` |
 | Strategy | 制度 / 指标口径 | `search_knowledge_base` / `lookup_metric` |
 | HBase | KV 操作（写操作 HITL） | `run_hbase` |
-| Hive | 数仓方言（本地模拟） | `run_query` + 语法模板 |
+| Hive（数仓） | 查 Olist 数仓 warehouse.db + HiveQL 语法 | `query_warehouse` / `list_warehouse_tables` / `search_hive_syntax` |
 | DataQuality | 质量扫描（可选） | 行数 / NULL / 日期连续性 |
 
 学习材料、简历、旧实验在 `sidecar/`，不参与运行。更细的机制说明见 [`HARNESS.md`](HARNESS.md) · [`docs/项目介绍/engineering-mechanisms.md`](docs/项目介绍/engineering-mechanisms.md)。

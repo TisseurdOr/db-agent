@@ -22,6 +22,7 @@ from anthropic import Anthropic
 
 from harness.config import DEFAULT_MODEL
 from harness.constraints.circuit_breaker import DEGRADED_MESSAGE, CircuitOpenError
+from harness.constraints.guardrails import guard_input, guard_output
 from harness.constraints.idempotency import run_tool_with_guard
 from harness.constraints.retry import (
     acall_with_retry,
@@ -36,6 +37,7 @@ from harness.constraints.retry import (
 from harness.context.hybrid_window_manager import HybridWindowManager
 from harness.context.token_budget import TokenBudget
 from harness.memory.vector_store import VectorMemory
+from harness.observation.tracer import TraceContext
 
 # 不从模块级拿 TOOLS / TOOL_HANDLERS——tools 和 handlers 一律由调用方显式传入。
 # 好处：
@@ -68,6 +70,23 @@ async def _execute_tool(name: str, tool_input: dict, handlers: dict) -> tuple[st
             "suggestion": "检查 Tool 参数是否正确，或尝试其他 Tool",
         }
         return json.dumps(error_payload, ensure_ascii=False), True
+
+
+def _report_cost(input_tokens: int, output_tokens: int, model: str) -> None:
+    """本轮 token 计费（对齐 multi 的 _annotate_turn_cost）。"""
+    if not (input_tokens or output_tokens):
+        return
+    from harness.observation.cost import estimate_tokens_cost
+
+    c = estimate_tokens_cost(input_tokens, output_tokens, model)
+    print(f"   💰 本回合 {input_tokens}+{output_tokens} tokens ≈ "
+          f"{c['subtotal']:.4f} {c['currency']}（≈{c['cost_cny_equivalent']:.4f} CNY）")
+
+
+def _finalize_output(text: str) -> str:
+    """三层护栏第 3 层：输出拦截（system prompt 泄露等）。single 模式此前缺失。"""
+    passed, reason = guard_output(text)
+    return text if passed else reason
 
 
 def _build_cacheable_system(system_text: str) -> list[dict]:
@@ -125,6 +144,16 @@ async def streaming_agent(
             传入后会拼在当前 user_msg 之前，让模型看到最近对话——
             这样第二轮问"其中..."时无需重新探索表结构。
     """
+    # 观测：与 multi 一致，每个请求落一条 trace（供成本报表 / 排障）
+    trace = TraceContext(user_msg)
+    span = trace.start_span("single", user_msg[:60])
+
+    passed, reason = guard_input(user_msg)
+    if not passed:
+        trace.set_blocked("input", reason)
+        trace.save()
+        return reason
+
     if model is None:
         model = DEFAULT_MODEL
     #----TOKEN BUDGET--初始化
@@ -134,6 +163,8 @@ async def streaming_agent(
             warn_threshold=float(os.getenv("TOKEN_BUDGET_WARN", "0.7")),
         )
     budget.set_fixed_costs(system_prompt, tools)
+    total_in = 0
+    total_out = 0
 
     if window_manager is None:
         window_manager = HybridWindowManager(
@@ -235,8 +266,14 @@ async def streaming_agent(
                       f"({attempt + 1}/{max_retries_from_env()})")
                 await asyncio.sleep(delay)
 
+        if final_msg is not None:
+            _u = getattr(final_msg, "usage", None)
+            if _u:
+                total_in += _u.input_tokens or 0
+                total_out += _u.output_tokens or 0
+
         if final_msg is None:
-            return text_content
+            return _finalize_output(text_content)
 
         # final_msg.content 里每个 block 的 .input 已经是完整的 Python dict，
         # 不需要再手动解析 JSON（SDK 在 stream 结束后帮我们 parse 了）
@@ -245,7 +282,10 @@ async def streaming_agent(
         if not tool_uses:
             print()  # 换行——streaming 输出后收尾
             # vector_memory.remember(f"用户: {user_msg}\n助手: {text_content}") if vector_memory else None
-            return text_content
+            trace.finish_span(span, {"input_tokens": total_in, "output_tokens": total_out, "turns": turn + 1})
+            trace.save()
+            _report_cost(total_in, total_out, model)
+            return _finalize_output(text_content)
 
         # 显示 Tool 完整参数（JSON 格式，一行，中文不转义）
         for tc in tool_uses:
@@ -287,7 +327,10 @@ async def streaming_agent(
         # 以 user 角色发送。顺序不对会报 400。
         messages.append({"role": "user", "content": tool_results})
 
-    return "已达到最大轮次"
+    trace.finish_span(span, {"input_tokens": total_in, "output_tokens": total_out, "turns": max_turns})
+    trace.save()
+    _report_cost(total_in, total_out, model)
+    return _finalize_output("已达到最大轮次")
 
 
 # 保留非 streaming 版本——给不想看 streaming 输出的集成测试用。
@@ -304,11 +347,17 @@ async def agent_loop(
     temperature: float = 0.0,
 ) -> str:
     """非 streaming 版本——供测试和 batch 场景使用。"""
+    passed, reason = guard_input(user_message)
+    if not passed:
+        return reason
+
     if model is None:
         model = DEFAULT_MODEL
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
     cacheable_system_blocks = _build_cacheable_system(system_prompt)
+    total_in = 0
+    total_out = 0
 
     for turn in range(max_turns):
         try:
@@ -328,6 +377,11 @@ async def agent_loop(
         if response is None:
             return DEGRADED_MESSAGE
 
+        _u = getattr(response, "usage", None)
+        if _u:
+            total_in += _u.input_tokens or 0
+            total_out += _u.output_tokens or 0
+
         text_parts = []
         tool_calls = []
 
@@ -338,7 +392,8 @@ async def agent_loop(
                 tool_calls.append(block)
 
         if not tool_calls:
-            return "\n".join(text_parts)
+            _report_cost(total_in, total_out, model)
+            return _finalize_output("\n".join(text_parts))
 
         messages.append({
             "role": "assistant",

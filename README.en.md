@@ -29,7 +29,8 @@ Ask in plain language, query SQLite / HBase / Hive — with permissions, self-he
 This is not a toy that “lets a model write SQL.” It is an engineering system that **lets a model write SQL without going wrong**: real tool execution, hard permission checks, recoverable failures, and evaluable results. Swap DeepSeek / Claude by changing the API — the harness stays. See [`HARNESS.md`](HARNESS.md).
 
 > **Scope**: Engineering mechanisms follow a production mindset (permissions / HITL / self-healing / observability / swappable backends), and the project is deployed live.
-> SQLite is a real local DB; **HBase / Hive are in-memory simulators** (API-aligned, no real cluster) — swap in a real connector when needed.
+> SQLite is a real local DB; **HBase is an in-memory simulator** (API-aligned, no real cluster).
+> The **Hive/warehouse agent queries a real Olist 5-layer warehouse** (`db/warehouse.db`, built from the public dataset by `scripts/build_olist_warehouse.py`) plus HiveQL grammar templates; swap in a real Hive cluster when needed.
 > All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **531** cases).
 > Web can demo the full path: optional `WEB_API_TOKEN` auth; sessions default to memory, or Redis when `REDIS_URL` is set.
 > Vector store supports ChromaDB / Milvus (`VECTOR_DB` switch); Redis / Milvus are “optional backends + auto fallback.”
@@ -142,7 +143,7 @@ Entrypoints
 | Analysis | Analyze only, no SQL | `analyze_results` / `render_chart` |
 | Strategy | Policy / metric definitions | `search_knowledge_base` / `lookup_metric` |
 | HBase | KV ops (writes need HITL) | `run_hbase` |
-| Hive | Warehouse dialect (local sim) | `run_query` + grammar templates |
+| Hive (warehouse) | Queries Olist warehouse.db + HiveQL grammar | `query_warehouse` / `list_warehouse_tables` / `search_hive_syntax` |
 | DataQuality | Optional quality scan | row count / NULL / date continuity |
 
 Learning notes, resume materials, and old experiments live under `sidecar/` and are not on the runtime path. Deeper notes: [`HARNESS.md`](HARNESS.md) · [`docs/项目介绍/engineering-mechanisms.md`](docs/项目介绍/engineering-mechanisms.md).
