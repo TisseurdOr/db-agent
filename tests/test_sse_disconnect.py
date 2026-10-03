@@ -107,7 +107,7 @@ async def test_stream_query_cancels_bg_task_on_disconnect(monkeypatch):
 
     req = QueryRequest(query="查一下销售额", session_id="s1")
     # delay 确保后台任务先启动，再断连——模拟"长任务进行中客户端断开"
-    chunks = await _collect(_stream_query(_FakeRequest(disconnected=True, delay=0.05), req, "qid1", registry, MagicMock()))
+    chunks = await _collect(_stream_query(_FakeRequest(disconnected=True, delay=0.05), req, "qid1", registry, MagicMock(), "viewer"))
 
     assert any("connected" in c for c in chunks)
     assert cancelled.is_set(), "断连后后台任务应被取消"
@@ -130,7 +130,7 @@ async def test_stream_query_normal_completion(monkeypatch):
     monkeypatch.setattr("server.runner_wrapper.MultiAgentRunner.create", fake_create)
 
     req = QueryRequest(query="q", session_id="s1")
-    chunks = await _collect(_stream_query(_FakeRequest(disconnected=False), req, "qid1", registry, MagicMock()))
+    chunks = await _collect(_stream_query(_FakeRequest(disconnected=False), req, "qid1", registry, MagicMock(), "viewer"))
 
     assert any("connected" in c for c in chunks)
     assert any("text_delta" in c and "答案" in c for c in chunks)

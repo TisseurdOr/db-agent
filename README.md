@@ -374,7 +374,7 @@ cd frontend && npm install && npm run dev -- --port 3000
 
 `docker compose run --rm db-agent` 跑的是 **CLI**，不是 Web。
 
-Web 鉴权：配置 `WEB_API_TOKEN` 后，除 `/api/health`、`/api/metrics` 外所有接口要求 `Authorization: Bearer <token>`（或 `X-API-Key: <token>`）；未配置时默认放行。
+Web 鉴权三档：**每用户 token**（`WEB_API_TOKENS="dba:tokA,zhoufang:tokB"`，身份由 token 推导，客户端传入的 `user_id` 一律忽略——RBAC 是真边界）；**单 token**（`WEB_API_TOKEN`，身份取服务端配置）；**都不配 = 演示模式**（不鉴权，前端可切角色，RBAC 仅演示、不保护真实数据）。除 `/api/health`、`/api/metrics` 外所有接口要求 `Authorization: Bearer <token>` 或 `X-API-Key: <token>`。
 
 Web Runner：按 `session_id` 管理并带空闲 TTL 回收（默认 30 分钟）；HITL resume 按 session 精确定位，不再依赖全局 active。
 

@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from harness.constraints.entitlement import reset_request_user, set_request_user
+from server.auth import resolve_identity
 from server.main import DEFAULT_MODEL, get_client
 from server.runner_wrapper import StreamingRunner, runner_registry
 from server.sse import SSEEvent, format_sse
@@ -92,17 +93,17 @@ async def _run_and_collect(coro_factory, queue: asyncio.Queue):
 
 
 async def _stream_query(request: Request, req: QueryRequest, query_id: str,
-                      registry, client) -> AsyncIterator[str]:
+                      registry, client, user_id: str) -> AsyncIterator[str]:
     """单次查询的完整 SSE 事件流：先推 connected → 创建 runner → 后台执行 → 断连感知转发。"""
     queue: asyncio.Queue = asyncio.Queue()
     model = req.model or DEFAULT_MODEL
-    user_token = set_request_user(req.user_id)
+    user_token = set_request_user(user_id)
 
     # 先推首包，避免冷启动 create runner 堵住 TTFF
     yield format_sse("connected", {
         "query_id": query_id,
         "session_id": req.session_id,
-        "user_id": req.user_id,
+        "user_id": user_id,
         "enable_dq": req.enable_dq,
     })
     t_init = time.time()
@@ -114,7 +115,7 @@ async def _stream_query(request: Request, req: QueryRequest, query_id: str,
             client=client,
             model=model,
             enable_data_quality=req.enable_dq,
-            user_id=req.user_id,
+            user_id=user_id,
         )
 
         yield format_sse(
@@ -178,9 +179,11 @@ async def _stream_resume(request: Request, req: ResumeRequest, registry) -> Asyn
 async def run_query(request: Request, req: QueryRequest):
     """SSE streaming endpoint. Returns text/event-stream."""
     query_id = uuid.uuid4().hex[:8]
+    # 在请求上下文里解析身份：配置了 token 时以服务端映射为准，忽略客户端传入的 user_id
+    user_id = resolve_identity(req.user_id)
 
     async def event_stream():
-        async for chunk in _stream_query(request, req, query_id, runner_registry, get_client()):
+        async for chunk in _stream_query(request, req, query_id, runner_registry, get_client(), user_id):
             yield chunk
 
     return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)

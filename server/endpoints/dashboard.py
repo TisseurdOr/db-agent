@@ -42,7 +42,8 @@ def _fallback_from_disk() -> dict | None:
 
 
 def _require_dashboard(user_id: str | None, x_agent_user: str | None = None) -> dict:
-    uid = (user_id or x_agent_user or "").strip() or "viewer"
+    from server.auth import resolve_identity
+    uid = resolve_identity(user_id or x_agent_user)
     user = get_user(uid)
     if not can_access_dashboard(user):
         raise HTTPException(

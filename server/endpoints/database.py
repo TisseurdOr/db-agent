@@ -441,7 +441,8 @@ def _require_db_browser(user_id: str | None, x_agent_user: str | None = None) ->
 
     身份来源：query user_id → 头 X-Agent-User → viewer（缺省不放行）。
     """
-    uid = (user_id or x_agent_user or "").strip() or "viewer"
+    from server.auth import resolve_identity
+    uid = resolve_identity(user_id or x_agent_user)
     user = get_user(uid)
     if not can_access_database(user):
         raise HTTPException(

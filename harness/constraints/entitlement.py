@@ -465,9 +465,26 @@ def rewrite_sql(user: dict, sql: str) -> str:
     return sql
 
 
+# 单个标识符：裸词 / "双引号" / `反引号` / [方括号]
+_SQL_IDENT = r'(?:\w+|[`"\[][^`"\]]+[`"\]])'
+# 表引用：一段或多段（schema.table）用点连接
+_SQL_TABLE_REF = rf'{_SQL_IDENT}(?:\s*\.\s*{_SQL_IDENT})*'
+
+
 def _extract_table_names(sql: str) -> list[str]:
-    """从 SQL 提取表名——只处理 FROM/JOIN，不做完整解析。"""
-    return re.findall(r"(?:FROM|JOIN)\s+(\w+)", sql, re.IGNORECASE)
+    """从 SQL 提取表名——只处理 FROM/JOIN，不做完整解析。
+
+    会归一化：剥掉引号/反引号/方括号，schema 限定名取最后一段，统一小写。
+    否则 `FROM "employees"`、`FROM main.employees` 这类写法会绕过行级过滤（RLS）
+    和表级权限判断。
+    """
+    names: list[str] = []
+    for raw in re.findall(rf"(?:FROM|JOIN)\s+({_SQL_TABLE_REF})", sql, re.IGNORECASE):
+        parts = [p.strip().strip('`"[]') for p in raw.split(".")]
+        name = parts[-1].strip().lower() if parts else ""
+        if name:
+            names.append(name)
+    return names
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
