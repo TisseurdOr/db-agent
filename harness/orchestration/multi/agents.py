@@ -29,26 +29,44 @@ from harness.tools.query_dsl import QUERY_TABLE_TOOL, query_table
 from harness.tools.schema import (
     DESCRIBE_TABLE_TOOL,
     DISCOVER_SCHEMA_TOOL,
-    LIST_HIVE_TABLES_TOOL,
     LIST_TABLES_TOOL,
     describe_table,
     discover_relevant_schema,
-    list_hive_tables,
     list_tables,
+)
+from harness.tools.semantic_layer import QUERY_METRIC_TOOL, query_metric
+from harness.tools.warehouse import (
+    DESCRIBE_WAREHOUSE_TABLE_TOOL,
+    LIST_WAREHOUSE_TABLES_TOOL,
+    QUERY_PERIOD_COMPARISON_TOOL,
+    QUERY_WAREHOUSE_TOOL,
+    describe_warehouse_table,
+    list_warehouse_tables,
+    query_period_comparison,
+    query_warehouse,
 )
 
 # ── SQL Agent: 只查数据 ──
 
-SQL_AGENT_PROMPT = """你是 SQL Agent。你主要做五件事：
+SQL_AGENT_PROMPT = """你是 SQL Agent。你主要做七件事：
 1. discover_relevant_schema — 根据查询意图智能检索相关表和字段（优先调用）
 2. list_tables — 列出所有表名
 3. describe_table — 查看表结构（列名、类型）
-4. query_table — 受控取数：填结构化取数单查单表（过滤/聚合/排序/取前 N），不写 SQL，更安全
-5. run_query — 在 SQLite 上执行 SELECT（只读），多表 JOIN 或 query_table 覆盖不了时用
-6. search_memory — 检索长期对话记忆（Self-Query）；当任务含「上次/之前/刚才」或上下文口径不足时调用
+4. query_metric — 受控指标查询：指定指标 + 分组维度，代码沿外键自动拼多表 JOIN，不写 SQL
+5. query_table — 受控取数：填结构化取数单查单表（过滤/聚合/排序/取前 N），不写 SQL，更安全
+6. run_query — 在 SQLite 上执行 SELECT（只读），多表 JOIN 或 query_table 覆盖不了时用
+7. list_warehouse_tables / describe_warehouse_table / query_warehouse — 查看并查询独立 Olist 数仓
+8. query_period_comparison — 直接查询 Olist ADS 两期对比；用户给出明确 period_key 时优先使用
+9. search_memory — 检索长期对话记忆（Self-Query）；当任务含「上次/之前/刚才」或上下文口径不足时调用
 
-取数优先级：单表查询优先用 query_table（表名/列名/操作符白名单 + 参数化，无法注入）；
-只有需要多表 JOIN、子查询、CASE WHEN 等 query_table 不支持的场景才退回 run_query 写自由 SQL。
+取数优先级：
+1. 指标聚合（「XX 按 YY 分组」，如「每个区域的销售额」「各品类订单量」）→ 用 query_metric，代码沿外键拼多表 JOIN，不会写错
+2. 单表查询 → 用 query_table（表名/列名/操作符白名单 + 参数化，无法注入）
+3. 多表 JOIN/子查询/CASE WHEN 等上面覆盖不了的 → 退回 run_query 写自由 SQL
+
+query_metric 可用指标：销售额/GMV/净GMV/订单量/客单价/毛利率。维度列名（如 region/category）用 describe_table 查。
+
+Olist 数仓在独立 warehouse.db 中，包含 ODS/DIM/DWD/DWS/ADS 五层。遇到 Olist、电商、数仓分层或两期对比问题，先用 list_warehouse_tables 查看表，再用 query_warehouse；明确的双期指标优先调用 query_period_comparison。业务查询优先 ADS，下钻 DWS，再查 DWD，不直接查 ODS。指标名使用 gross_sales / net_sales / order_count / item_count，period_key 示例为 2018-H1、2018-Q2、2018-07、2018。
 
 你不会做数据分析、不会解释趋势、不会给业务建议。
 你的唯一职责：准确理解查询意图，写出正确的 SQL，返回查询结果。
@@ -78,15 +96,21 @@ sql_agent = ConfiguredAgent(
     name=AGENT_SQL,
     system_prompt=SQL_AGENT_PROMPT,
     tools=[
-        DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, QUERY_TABLE_TOOL, RUN_QUERY_TOOL,
-        search_memory.tool_schema,
+        DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, QUERY_METRIC_TOOL, QUERY_TABLE_TOOL, RUN_QUERY_TOOL,
+        LIST_WAREHOUSE_TABLES_TOOL, DESCRIBE_WAREHOUSE_TABLE_TOOL, QUERY_WAREHOUSE_TOOL,
+        QUERY_PERIOD_COMPARISON_TOOL, search_memory.tool_schema,
     ],
     handlers={
         "discover_relevant_schema": discover_relevant_schema,
         "list_tables": list_tables,
         "describe_table": describe_table,
+        "query_metric": query_metric,
         "query_table": query_table,
         "run_query": run_query,
+        "list_warehouse_tables": list_warehouse_tables,
+        "describe_warehouse_table": describe_warehouse_table,
+        "query_warehouse": query_warehouse,
+        "query_period_comparison": query_period_comparison,
         "search_memory": search_memory,
     },
 )
@@ -183,51 +207,57 @@ hbase_agent = ConfiguredAgent(
 )
 
 
-# ── Hive Agent: 生成 Hive/Impala (Hue) 查询 ──
+# ── Hive Agent: 查询 Olist 数仓 / Hive 语法助手 ──
 
-HIVE_AGENT_PROMPT = """你是 Hive/Impala 查询 Agent。你能生成 HiveQL/Impala SQL，也能在本地模拟 Hive 数仓上直接执行查询。
+HIVE_AGENT_PROMPT = """你是 Hive/数仓查询 Agent。你的默认业务数据源是独立 warehouse.db 中的 Olist 公共电商五层数仓，不是 demo.db 的旧模拟表。
 
-本地模拟 Hive 数仓有 3 张表（SQLite 模拟，表名和结构保持 Hive 风格）：
-- ods_orders_hive (分区列 dt, region): 订单贴源层数据
-- dwd_user_events (分区列 dt): 用户行为埋点明细，event_props 为 JSON (模拟 MAP 类型)
-- dim_products_hive: 产品维度表，tags 为 JSON 数组 (模拟 ARRAY 类型)
+Olist warehouse 分层：
+- ODS: ods_olist_*，原始贴源数据
+- DIM: dim_olist_*，日期、客户、商品、卖家和地域维度
+- DWD: dwd_olist_*，订单明细、支付、评价和履约事实
+- DWS: dws_olist_*，日、月、季、半年和年度销售汇总
+- ADS: ads_olist_*，指标目录、期间指标和相邻期对比
 
 你的能力：
-- 调用 list_tables / describe_table 了解 **Hive 模拟表**结构和分区信息（list_tables 只返回 Hive 风格表）
-- 调用 run_query 在本地模拟 Hive 上执行查询，获取真实数据
-- 调用 search_hive_syntax 获取语法模板（select、create_table、窗口函数、LATERAL VIEW 等）
-- 调用 search_knowledge_base 查"Hive/Hue表结构参考"
-- 优先直接执行查询（run_query），当用户明确要语法模板时才用 search_hive_syntax
+- 调用 list_warehouse_tables / describe_warehouse_table 查看 Olist 数仓表结构
+- 调用 query_warehouse 在 warehouse.db 上执行只读 SELECT
+- 调用 query_period_comparison 做明确期间的指标对比
+- 调用 search_hive_syntax 获取 HiveQL/Impala 语法模板
+- 调用 search_knowledge_base 查询配套文档
+
+查询优先级：
+1. 标准指标和期间对比优先查 ADS。
+2. 需要下钻维度时查 DWS。
+3. 需要最细明细时查 DWD。
+4. DIM 用于实体属性，ODS 只用于必要追溯，不直接面向业务回答。
+5. 用户明确要求 HiveQL/Impala 语法时，再输出对应方言；本地执行仍使用 query_warehouse。
 
 禁止：
-- 不要把 departments / employees / products / customers / orders 当成 Hive 表
-  （那些是业务 SQL 库；Hive 模拟表只有上面 3 张）
-
-你的价值：
-- 确保生成的查询符合 HiveQL 方言（不是标准 SQL——有 PARTITIONED BY、LATERAL VIEW 等特有语法）
-- 标注 Hive vs Impala 差异（COMPUTE STATS、LEFT ANTI JOIN、OFFSET 等）
-- 给出性能建议（分区裁剪、MAPJOIN 提示、STORED AS 选择）
-- 不确定某个语法是否支持时标注"请验证"而不是断言
+- 不要把 demo.db 的 ods_orders_hive / dwd_user_events / dim_products_hive 当作当前业务数据源。
+- 不要把 departments / employees / products / customers / orders 业务库表混入 Olist 数仓查询。
+- 不要编造 warehouse.db 中不存在的表或字段。
 
 查询报错时的自愈协议（最多自动重试 2 次）：
-1. 读 error 和 hint，调 describe_table 核对正确的表名/字段名
-2. 根据错误信息重写查询后再次执行
-3. 重写 2 次后仍失败：停止重试，如实报告错误，不要编造数据"""
+1. 读 error 和 hint，调用 describe_warehouse_table 核对表名和字段。
+2. 根据错误信息重写 SELECT 后再次执行。
+3. 重试 2 次仍失败：停止重试并如实报告错误，不要编造数据。"""
 
 hive_agent = ConfiguredAgent(
     name=AGENT_HIVE,
     system_prompt=HIVE_AGENT_PROMPT,
     tools=[
-        LIST_HIVE_TABLES_TOOL,
-        DESCRIBE_TABLE_TOOL,
-        RUN_QUERY_TOOL,
+        LIST_WAREHOUSE_TABLES_TOOL,
+        DESCRIBE_WAREHOUSE_TABLE_TOOL,
+        QUERY_WAREHOUSE_TOOL,
+        QUERY_PERIOD_COMPARISON_TOOL,
         search_hive_syntax.tool_schema,
         search_knowledge_base.tool_schema,
     ],
     handlers={
-        "list_tables": list_hive_tables,
-        "describe_table": describe_table,
-        "run_query": run_query,
+        "list_warehouse_tables": list_warehouse_tables,
+        "describe_warehouse_table": describe_warehouse_table,
+        "query_warehouse": query_warehouse,
+        "query_period_comparison": query_period_comparison,
         "search_hive_syntax": search_hive_syntax,
         "search_knowledge_base": search_knowledge_base,
     },

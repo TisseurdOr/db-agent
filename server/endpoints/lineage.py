@@ -14,6 +14,13 @@ from pathlib import Path
 
 from fastapi import APIRouter
 
+from db.olist_warehouse import (
+    OLIST_LINEAGE_DESCRIPTIONS,
+    OLIST_LINEAGE_EDGES,
+    OLIST_WAREHOUSE_TABLES,
+    WAREHOUSE_DB_PATH,
+)
+
 router = APIRouter()
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,6 +44,53 @@ def _table_count(conn: sqlite3.Connection, table: str) -> int:
         return int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
     except sqlite3.Error:
         return 0
+
+
+def _warehouse_layer(table: str) -> str:
+    for layer in ("ods", "dim", "dwd", "dws", "ads"):
+        if table.startswith(f"{layer}_"):
+            return layer
+    return "warehouse"
+
+
+def _add_warehouse_lineage(nodes: list[dict], edges: list[dict]) -> None:
+    if not WAREHOUSE_DB_PATH.exists():
+        return
+    conn = sqlite3.connect(f"file:{WAREHOUSE_DB_PATH}?mode=ro", uri=True)
+    try:
+        existing = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        for table in OLIST_WAREHOUSE_TABLES:
+            if table not in existing:
+                continue
+            layer = _warehouse_layer(table)
+            nodes.append({
+                "id": table,
+                "label": table,
+                "group": layer,
+                "layer": layer,
+                "source": "warehouse",
+                "count": _table_count(conn, table),
+            })
+        for edge in OLIST_LINEAGE_EDGES:
+            if edge["source"] in existing and edge["target"] in existing:
+                # 模型定义使用 child → dependency；输出统一为 upstream → downstream
+                edge_type = edge.get("type", "etl")
+                edges.append({
+                    "source": edge["target"],
+                    "target": edge["source"],
+                    "type": edge_type,
+                    "kind": edge_type,
+                    "description": OLIST_LINEAGE_DESCRIPTIONS.get(
+                        (edge["source"], edge["target"]), ""
+                    ),
+                })
+    finally:
+        conn.close()
 
 
 def build_lineage() -> dict:
@@ -64,20 +118,24 @@ def build_lineage() -> dict:
                     "label": t,
                     "group": group,
                     "layer": layer,
+                    "source": "demo",
                     "count": _table_count(conn, t),
                 })
                 for fk in conn.execute(f'PRAGMA foreign_key_list("{t}")'):
                     parent = fk[2]
                     if parent and parent != t:
                         edges.append({
-                            "source": t,
-                            "target": parent,
+                            "source": parent,
+                            "target": t,
                             "type": "fk",
-                            "from": fk[3],
-                            "to": fk[4],
+                            "kind": "fk",
+                            "from": fk[4],
+                            "to": fk[3],
                         })
         finally:
             conn.close()
+
+    _add_warehouse_lineage(nodes, edges)
 
     for t in HBASE_TABLES:
         nodes.append({
@@ -85,10 +143,20 @@ def build_lineage() -> dict:
             "label": t,
             "group": "hbase",
             "layer": "kv",
+            "source": "demo",
             "count": 0,
         })
 
-    return {"nodes": nodes, "edges": edges}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "summary": {
+            "nodes": len(nodes),
+            "edges": len(edges),
+            "sources": sorted({n["source"] for n in nodes}),
+            "layers": sorted({n["group"] for n in nodes}),
+        },
+    }
 
 
 @router.get("/lineage")

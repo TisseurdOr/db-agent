@@ -154,36 +154,46 @@ def test_search_knowledge_base_longform_docs():
     assert all(r["category"] == "部门介绍" for r in dept["results"] if r["title"] == "业务部门职责手册")
 
 
-def test_search_knowledge_base_vector_semantic():
-    """向量索引就绪时走向量语义检索（analyst 无 docs_filter，看全部）。"""
+def test_search_knowledge_base_vector_semantic(tmp_path):
+    """向量索引就绪时走向量语义检索（analyst 无 docs_filter，看全部）。
+
+    索引进 tmp 目录隔离，避免复用磁盘上可能由别的 embedding 建成的生产索引
+    （向量空间不一致会召回垃圾），也避免测试 drop 掉生产 collection。
+    """
     import harness.tools.knowledge as kb
     from harness.tools.knowledge import build_knowledge_base_index
     from tests.fake_embedding import fake_embedding
 
-    build_knowledge_base_index(embed_fn=fake_embedding)
+    build_knowledge_base_index(
+        embed_fn=fake_embedding,
+        persist_dir=str(tmp_path / "chroma"),
+        collection_name="kb_vector_semantic",
+    )
     try:
         result = search_knowledge_base("提成比例", top_k=3)
         assert result["count"] > 0
         assert any("提成" in r["title"] for r in result["results"])
     finally:
-        kb._kb_memory.drop()
         kb._kb_memory = None
 
 
-def test_search_knowledge_base_filter_docs(monkeypatch):
+def test_search_knowledge_base_filter_docs(monkeypatch, tmp_path):
     """viewer 的 docs_filter 过滤掉技术文档类，只留产品手册/销售制度/部门介绍。"""
     import harness.tools.knowledge as kb
     from harness.tools.knowledge import build_knowledge_base_index
     from tests.fake_embedding import fake_embedding
 
     monkeypatch.setenv("AGENT_USER", "viewer")
-    build_knowledge_base_index(embed_fn=fake_embedding)
+    build_knowledge_base_index(
+        embed_fn=fake_embedding,
+        persist_dir=str(tmp_path / "chroma"),
+        collection_name="kb_filter_docs",
+    )
     try:
         result = search_knowledge_base("HBase scan 命令", top_k=10)
         assert result["count"] > 0
         assert all(r["category"] in ("产品手册", "销售制度", "部门介绍") for r in result["results"])
     finally:
-        kb._kb_memory.drop()
         kb._kb_memory = None
 
 

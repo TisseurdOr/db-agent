@@ -101,3 +101,49 @@ def test_database_ok_for_analyst():
 def test_database_ok_for_manager():
     r = client.get("/api/database?store=demo&user_id=zhoufang")
     assert r.status_code == 200
+
+
+def test_database_warehouse_five_layers():
+    import pytest
+
+    from db.olist_warehouse import WAREHOUSE_DB_PATH
+
+    if not WAREHOUSE_DB_PATH.exists():
+        pytest.skip("warehouse.db not built")
+
+    r = client.get("/api/database?store=warehouse&user_id=dba")
+    assert r.status_code == 200
+    data = r.json()
+    assert any(s["id"] == "warehouse" for s in data["stores"])
+    active = data["active"]
+    assert set(active["groups"]) == {"ods", "dim", "dwd", "dws", "ads"}
+    assert any(t["name"] == "ods_olist_orders" for t in active["groups"]["ods"])
+    assert any(t["name"] == "dim_olist_date" for t in active["groups"]["dim"])
+    assert any(t["name"] == "dwd_olist_order_items" for t in active["groups"]["dwd"])
+    assert any(t["name"] == "dws_olist_sales_period" for t in active["groups"]["dws"])
+    assert any(t["name"] == "ads_olist_period_comparison" for t in active["groups"]["ads"])
+
+
+def test_database_warehouse_table_and_query():
+    import pytest
+
+    from db.olist_warehouse import WAREHOUSE_DB_PATH
+
+    if not WAREHOUSE_DB_PATH.exists():
+        pytest.skip("warehouse.db not built")
+
+    r = client.get("/api/database/table/ads_olist_period_metrics?store=warehouse&limit=5&user_id=dba")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["group"] == "ads"
+    assert "metric_name" in data["columns"]
+
+    r2 = client.post("/api/database/query", json={
+        "user_id": "dba",
+        "store": "warehouse",
+        "sql": "SELECT period_key, metric_value FROM ads_olist_period_metrics LIMIT 5",
+    })
+    assert r2.status_code == 200
+    result = r2.json()
+    assert result["ok"] is True
+    assert "period_key" in result["columns"]

@@ -28,9 +28,9 @@ Ask in plain language, query SQLite / HBase / Hive — with permissions, self-he
 
 This is not a toy that “lets a model write SQL.” It is an engineering system that **lets a model write SQL without going wrong**: real tool execution, hard permission checks, recoverable failures, and evaluable results. Swap DeepSeek / Claude by changing the API — the harness stays. See [`HARNESS.md`](HARNESS.md).
 
-> **Scope**: Engineering mechanisms follow a production mindset (permissions / HITL / self-healing / observability / swappable backends). Current data sources and deployment are a **local demo**, not a live business environment.
+> **Scope**: Engineering mechanisms follow a production mindset (permissions / HITL / self-healing / observability / swappable backends), and the project is deployed live.
 > SQLite is a real local DB; **HBase / Hive are in-memory simulators** (API-aligned, no real cluster) — swap in a real connector when needed.
-> All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **435** cases).
+> All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **527** cases).
 > Web can demo the full path: optional `WEB_API_TOKEN` auth; sessions default to memory, or Redis when `REDIS_URL` is set.
 > Vector store supports ChromaDB / Milvus (`VECTOR_DB` switch); Redis / Milvus are “optional backends + auto fallback.”
 
@@ -232,7 +232,7 @@ Single-mode differences: no Router / DQ / Confidence Gate / Analysis / Reflectio
 | **2 · Multi Agent** | Multi-engine coordination | LangGraph 10 nodes / 6 agents; Router 4-layer short-circuit; failure replan | Multi-engine orchestration |
 | **3 · Security** | Prompts cannot stop privilege abuse | 5-role RBAC; row-level WHERE rewrite; three guardrails; HITL `interrupt()` | Permissions at the tool layer |
 | **4 · Reliability** | Survive hangs without burning money | Retry → SQL heal → replan → **circuit / idempotency / alerts**; SSE disconnect handling | Reliability loop |
-| **5 · Productization** | Demo → product | `db-agent` CLI; 435 offline tests; 47 evals + Golden Set; Redis / Milvus switch; quality gates | Demoable, CI-ready shape |
+| **5 · Productization** | Demo → product | `db-agent` CLI; 527 offline tests; 47 evals + Golden Set; Redis / Milvus switch; quality gates | Demoable, CI-ready shape |
 
 
 ### Design choices (why)
@@ -403,7 +403,7 @@ Permissions live in `agent_roles` / `agent_users` — edit tables to change beha
 ### Eval
 
 ```bash
-pytest tests/ -v                               # full offline suite (435)
+pytest tests/ -v                               # full offline suite (527)
 python tests/eval_runner.py --fast             # guardrail cases (zero API, in CI)
 python tests/eval_runner.py --full             # full eval (needs API keys)
 ```

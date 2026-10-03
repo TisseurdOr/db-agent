@@ -64,7 +64,14 @@ const GROUP_LABEL: Record<string, string> = {
   hive: "Hive",
   hbase: "HBase",
   meta: "Meta",
+  ods: "ODS",
+  dim: "DIM",
+  dwd: "DWD",
+  dws: "DWS",
+  ads: "ADS",
 };
+
+const WAREHOUSE_LAYER_IDS = new Set(["ods", "dim", "dwd", "dws", "ads"]);
 
 const QUERY_EXAMPLES: Record<string, string[]> = {
   demo: [
@@ -78,6 +85,11 @@ const QUERY_EXAMPLES: Record<string, string[]> = {
   ],
   metric_registry: [
     "SELECT metric_name, domain, usage_count FROM metric_registry ORDER BY usage_count DESC LIMIT 20",
+  ],
+  warehouse: [
+    "SELECT period_key, metric_value, growth_rate, warning_code FROM ads_olist_period_comparison WHERE metric_name = 'gross_sales' AND dimension_type = 'overall' AND dimension_value = 'ALL' ORDER BY period_start DESC LIMIT 20",
+    "SELECT * FROM ads_olist_period_metrics WHERE metric_name = 'gross_sales' ORDER BY period_start DESC LIMIT 20",
+    "SELECT * FROM dim_olist_date ORDER BY date DESC LIMIT 20",
   ],
 };
 
@@ -96,7 +108,7 @@ function cellStr(v: unknown): string {
 
 export default function DatabaseBrowser({ userId }: { userId: string }) {
   const effectiveUserId = userId || loadPersistedUserId();
-  const [storeId, setStoreId] = useState("demo");
+  const [storeId, setStoreId] = useState("warehouse");
   const [stores, setStores] = useState<StoreSummary[]>([]);
   const [active, setActive] = useState<ActiveStore | null>(null);
   const [engine, setEngine] = useState<EngineTab>("overview");
@@ -106,7 +118,7 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true);
   const [forbidden, setForbidden] = useState<string | null>(null);
 
-  const [sql, setSql] = useState(QUERY_EXAMPLES.demo[0]);
+  const [sql, setSql] = useState(QUERY_EXAMPLES.warehouse[0]);
   const [qResult, setQResult] = useState<QueryResult | null>(null);
   const [qRunning, setQRunning] = useState(false);
 
@@ -136,6 +148,10 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json() as { stores: StoreSummary[]; active: ActiveStore };
+      if (sid === "warehouse" && !json.active.exists) {
+        setStoreId("demo");
+        return;
+      }
       setStores(json.stores);
       setActive(json.active);
     } catch (e) {
@@ -205,6 +221,7 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
       }
       return active.tables ?? [];
     }
+    if (storeId === "warehouse") return active.groups?.[engine] ?? [];
     if (storeId === "hbase") return active.tables ?? [];
     return active.tables ?? [];
   }, [active, storeId, engine]);
@@ -218,6 +235,17 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
         { id: "hbase", label: "HBase", n: active?.hbase_tables?.length },
         { id: "meta", label: "Meta", n: active?.groups?.meta?.length },
         { id: "query", label: "SQL console" },
+      ];
+    }
+    if (storeId === "warehouse") {
+      return [
+        { id: "overview" as EngineTab, label: "Overview" },
+        ...(["ods", "dim", "dwd", "dws", "ads"] as const).map((g) => ({
+          id: g as EngineTab,
+          label: GROUP_LABEL[g],
+          n: active?.groups?.[g]?.length,
+        })),
+        { id: "query" as EngineTab, label: "SQL console" },
       ];
     }
     if (storeId === "hbase") {
@@ -238,8 +266,12 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
     setEngine(id);
     setTableName(null);
     setTable(null);
-    // 非分组 store：点表名直接打开
-    if (storeId !== "demo" && id !== "overview" && id !== "query") {
+    // warehouse 的 ODS/DIM/DWD/DWS/ADS 是层标签，不是表名
+    if (storeId === "warehouse" && WAREHOUSE_LAYER_IDS.has(String(id))) {
+      return;
+    }
+    // 其他非分组 store：点表名直接打开
+    if (storeId !== "demo" && storeId !== "warehouse" && id !== "overview" && id !== "query") {
       setTableName(id);
     }
   };
@@ -272,7 +304,8 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
     }
   };
 
-  const showGroupedTables = storeId === "demo" && (engine === "sql" || engine === "hive" || engine === "hbase" || engine === "meta");
+  const groupedStore = storeId === "demo" || storeId === "warehouse";
+  const showGroupedTables = groupedStore && (engine === "sql" || engine === "hive" || engine === "hbase" || engine === "meta" || engine === "ods" || engine === "dim" || engine === "dwd" || engine === "dws" || engine === "ads");
 
   if (forbidden) {
     return (
@@ -343,9 +376,11 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
       {!loading && active && engine === "overview" && (
         <div className="db-panel">
           <div className="db-card db-card-accent">
-            <b>Three-engine demo data.</b>
+            <b>{storeId === "warehouse" ? "Olist five-layer warehouse." : "Three-engine demo data."}</b>
             <p>
-              <code>demo.db</code> holds <b>SQL</b> relational tables and <b>Hive</b> layered tables; <b>HBase</b> is an in-process KV simulator (not a SQLite file). Meta covers RBAC / memory / feedback.
+              {storeId === "warehouse"
+                ? "warehouse.db contains ODS / DIM / DWD / DWS / ADS, including sales period metrics and adjacent-period comparisons."
+                : "demo.db holds SQL relational tables and Hive layered tables; HBase is an in-process KV simulator (not a SQLite file). Meta covers RBAC / memory / feedback."}
             </p>
           </div>
           <div className="db-card">
@@ -356,11 +391,11 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
             </div>
           </div>
 
-          {storeId === "demo" && active.groups && (
+          {groupedStore && active.groups && (
             <>
-              <h3 className="db-h">Engines</h3>
+              <h3 className="db-h">Layers</h3>
               <div className="db-engine-grid">
-                {(["sql", "hive", "hbase", "meta"] as const).map((g) => {
+                {(storeId === "warehouse" ? (["ods", "dim", "dwd", "dws", "ads"] as const) : (["sql", "hive", "hbase", "meta"] as const)).map((g) => {
                   const items = g === "hbase" ? (active.hbase_tables ?? []) : (active.groups?.[g] ?? []);
                   const rows = items.reduce((s, t) => s + (t.count || 0), 0);
                   return (
@@ -375,7 +410,7 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
             </>
           )}
 
-          {storeId !== "demo" && (
+          {storeId !== "demo" && storeId !== "warehouse" && (
             <>
               <h3 className="db-h">Tables</h3>
               <div className="db-scrolly">
@@ -482,7 +517,7 @@ export default function DatabaseBrowser({ userId }: { userId: string }) {
       {engine === "query" && (
         <div className="db-panel">
           <div className="db-meta" style={{ marginBottom: 10 }}>
-            Read-only SQL (mode=ro). Hive tables live in <code>demo.db</code> — SELECT them directly.
+            Read-only SQL (mode=ro). The active store is selected above; warehouse layers are queryable directly.
           </div>
           <textarea className="db-sqlbox" value={sql} onChange={(e) => setSql(e.target.value)} spellCheck={false} rows={5} />
           <div className="db-sql-actions">

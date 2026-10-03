@@ -15,6 +15,9 @@ def _hermetic_env(monkeypatch):
     monkeypatch.setenv("AGENT_USER", "dba")
     # 测试默认不走 Redis（保持离线可跑）；Redis 专项测试自己 setenv
     monkeypatch.delenv("REDIS_URL", raising=False)
+    # 别在测试里触发启动建索引：会写共享持久化向量库（无 key 留空集合，
+    # 有 key 会在测试中真调 embedding）。
+    monkeypatch.setenv("KB_INDEX_AUTOBUILD", "0")
 
 
 @pytest.fixture(autouse=True)
@@ -31,3 +34,8 @@ def _reset_global_guards():
     sessions_mod.clear_sessions()
     from harness.observation.ops_metrics import reset_metrics
     reset_metrics()
+    # 知识库向量索引是模块级单例：清掉 Python 侧引用，避免上个用例的
+    # 索引（可能指向生产 collection）泄漏到下一个用例。
+    from harness.tools import knowledge as knowledge_mod
+    knowledge_mod._kb_memory = None
+    knowledge_mod.reset_runtime_docs()

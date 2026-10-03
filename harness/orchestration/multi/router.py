@@ -22,7 +22,7 @@ ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划
 - sql: 查数据库（订单、员工、部门、产品、客户等结构化数据）
 - strategy: 查公司制度/政策文档（提成、年假、考勤、定价政策、公司战略等）
 - hbase: 生成 HBase Shell 命令（scan/get/count/put 等）。只生成，不执行
-- hive: 生成 Hive/Impala (Hue) SQL 查询。只生成，不执行
+- hive: 查询 Olist warehouse.db 数仓，并可按需生成 Hive/Impala 方言
 - analysis: 综合分析与建议，或回答对话历史相关问题（不会自己查库）
 
 【优先级从高到低，必须严格遵守】
@@ -32,7 +32,7 @@ ROUTER_PROMPT = """你是路由 Agent。分析用户 query 并输出执行计划
 3. 制度/政策（"提成比例"、"年假多少天"、"考勤规则"）→ 只用 strategy，禁止 sql
 4. HBase 查询（"HBase scan"、"帮我写个HBase命令"、"scan orders表"）→ 只用 hbase
    注意："scanner"/"scanning" 不是 HBase scan，禁止路由到 hbase
-5. Hive/Impala/Hue 查询（"生成Hive建表语句"、"Impala分区查询"、"hue上写查询"）→ 只用 hive
+5. Hive/Impala/Hue/Olist数仓查询（"生成Hive建表语句"、"Impala分区查询"、"hue上写查询"、"Olist有哪些表"）→ 只用 hive
    用户直接粘贴 Hive 方言语句（INSERT OVERWRITE、PARTITION (dt=...)、STORED AS 等）→ 只用 hive，禁止当 SQLite sql
 6. 同时点名多个引擎（"SQL和hive有什么表"、"hbase和hive"）→ 每个引擎各派一个 Agent，禁止只派其中一个
 7. 纯数据查询（"销售额多少"、"有多少员工"、拼音错别字如"销shou额"）→ 只用 sql
@@ -79,7 +79,34 @@ _META_QUESTION_RE = re.compile(
     r"这[次轮场]对话|"
     r"上一个问题"
 )
-_STRATEGY_MARKERS = ("提成", "年假", "考勤", "定价政策", "公司战略", "休假", "制度", "政策")
+_STRATEGY_MARKERS = ("提成", "年假", "考勤", "定价政策", "公司战略", "休假", "制度", "政策", "报销")
+
+# 从知识库文档标题自动派生制度/流程主题词（剥掉 制度/流程/政策/说明/标准 等后缀），
+# 避免在 router 里手维护一份会随知识库漂移的 marker 清单。
+_KB_TITLE_SUFFIXES = ("制度", "流程", "政策", "说明", "标准", "规定", "指南", "手册")
+# 「怎么/如何/流程」等流程信号——KB 主题词必须搭配它才判 strategy，
+# 防止「采购」这类词把「采购金额是多少」误派去查制度。
+_PROCESS_VERBS = ("怎么做", "怎么办", "如何", "怎么", "流程", "制度", "政策", "标准", "规定", "条件", "要求", "申请", "指南", "手册", "审批", "补贴")
+
+
+def _kb_topics() -> tuple[str, ...]:
+    """从知识库标题派生制度/流程主题词；技术参考文档（HBase/Hive/SQL 语法）不参与。"""
+    from harness.tools.knowledge import _DOC_CATEGORIES, _KNOWLEDGE_BASE
+    topics = set()
+    for title in _KNOWLEDGE_BASE:
+        if _DOC_CATEGORIES.get(title, "") == "技术文档":
+            continue
+        t = title
+        for suf in _KB_TITLE_SUFFIXES:
+            if t.endswith(suf):
+                t = t[: -len(suf)].strip()
+                break
+        if len(t) >= 2:
+            topics.add(t)
+    return tuple(sorted(topics))
+
+
+_STRATEGY_TOPICS = _kb_topics()
 # 指标口径查询：「GMV怎么算」「销售额包含什么」「转化率口径」
 _METRIC_LOOKUP_RE = re.compile(
     r"(怎么算|口径|定义|包含|含不含|是什么|什么意思|啥意思|指什么|算不算|包括)",
@@ -241,7 +268,10 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
         return [{"agent": AGENT_STRATEGY, "task": q}]
 
     has_strategy = any(m in q for m in _STRATEGY_MARKERS)
-    if has_strategy and not has_sql_kw:
+    has_topic = any(t in q for t in _STRATEGY_TOPICS)
+    has_process = any(v in q for v in _PROCESS_VERBS)
+    # 显式制度词直接命中；KB 主题词须带「怎么/流程」等信号，防「采购金额」误派制度
+    if (has_strategy or (has_topic and has_process)) and not has_sql_kw:
         return [{"agent": AGENT_STRATEGY, "task": q}]
 
     if any(m in q for m in _COMPARE_MARKERS) and any(m in q for m in _COMPARE_DATA_MARKERS):

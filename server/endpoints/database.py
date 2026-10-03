@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from db.olist_warehouse import OLIST_WAREHOUSE_TABLES, WAREHOUSE_DB_PATH
 from harness.constraints.entitlement import can_access_database, get_user
 from harness.constraints.guardrails import DANGEROUS_SQL_KEYWORDS, guard_sql
 from harness.observation.tracer import TRACE_DIR, _read_traces
@@ -28,6 +29,13 @@ ROOT = Path(__file__).resolve().parents[2]
 DEMO_SQL_TABLES = {"departments", "employees", "products", "customers", "orders", "payments", "shipments", "inventory"}
 DEMO_HIVE_TABLES = {"ods_orders_hive", "dwd_user_events", "dim_products_hive"}
 DEMO_META_TABLES = {"agent_roles", "agent_users", "user_memory", "user_feedback"}
+WAREHOUSE_LAYER_TABLES = {
+    "ods": {t for t in OLIST_WAREHOUSE_TABLES if t.startswith("ods_")},
+    "dim": {t for t in OLIST_WAREHOUSE_TABLES if t.startswith("dim_")},
+    "dwd": {t for t in OLIST_WAREHOUSE_TABLES if t.startswith("dwd_")},
+    "dws": {t for t in OLIST_WAREHOUSE_TABLES if t.startswith("dws_")},
+    "ads": {t for t in OLIST_WAREHOUSE_TABLES if t.startswith("ads_")},
+}
 
 TABLE_DESC: dict[str, dict[str, str]] = {
     "demo": {
@@ -46,6 +54,31 @@ TABLE_DESC: dict[str, dict[str, str]] = {
         "ods_orders_hive": "Hive：ods 订单层",
         "dwd_user_events": "Hive：dwd 用户事件",
         "dim_products_hive": "Hive：产品维",
+    },
+    "warehouse": {
+        "ods_olist_customers": "ODS：Olist 原始客户",
+        "ods_olist_geolocation": "ODS：Olist 原始地域与经纬度",
+        "ods_olist_order_items": "ODS：Olist 原始订单明细",
+        "ods_olist_payments": "ODS：Olist 原始支付",
+        "ods_olist_reviews": "ODS：Olist 原始评价",
+        "ods_olist_orders": "ODS：Olist 原始订单",
+        "ods_olist_products": "ODS：Olist 原始商品",
+        "ods_olist_sellers": "ODS：Olist 原始卖家",
+        "ods_olist_category_translation": "ODS：商品品类翻译",
+        "dim_olist_date": "DIM：日期维度与月/季/半年标签",
+        "dim_olist_customer": "DIM：客户维度",
+        "dim_olist_product": "DIM：商品维度",
+        "dim_olist_seller": "DIM：卖家维度",
+        "dim_olist_geography": "DIM：邮编地域维度",
+        "dwd_olist_order_items": "DWD：订单明细事实",
+        "dwd_olist_payments": "DWD：支付事实",
+        "dwd_olist_reviews": "DWD：评价事实",
+        "dwd_olist_order_fulfillment": "DWD：订单履约事实",
+        "dws_olist_sales_daily": "DWS：销售日汇总",
+        "dws_olist_sales_period": "DWS：月/季/半年/年度销售汇总",
+        "ads_olist_metric_catalog": "ADS：指标目录",
+        "ads_olist_period_metrics": "ADS：期间指标，供双期对比",
+        "ads_olist_period_comparison": "ADS：相邻期变化率与质量告警",
     },
     "agent_state": {
         "checkpoints": "LangGraph Checkpointer — HITL resume 用的图状态",
@@ -69,6 +102,14 @@ STORES: dict[str, dict[str, Any]] = {
         "kind": "sqlite",
         "primary": True,
         "summary": "演示主库：SQL 业务表 + Hive 分层表（同文件）· HBase 为内存引擎",
+    },
+    "warehouse": {
+        "id": "warehouse",
+        "label": "warehouse.db",
+        "path": WAREHOUSE_DB_PATH,
+        "kind": "sqlite",
+        "primary": False,
+        "summary": "Olist 公共电商数仓：ODS / DIM / DWD / DWS / ADS 五层",
     },
     "hbase": {
         "id": "hbase",
@@ -173,13 +214,20 @@ def _sample_rows(conn: sqlite3.Connection, table: str, limit: int) -> tuple[list
     return cols, sample
 
 
-def _demo_group(name: str) -> str:
-    if name in DEMO_SQL_TABLES:
-        return "sql"
-    if name in DEMO_HIVE_TABLES:
-        return "hive"
-    if name in DEMO_META_TABLES:
-        return "meta"
+def _table_group(store_id: str, name: str) -> str:
+    if store_id == "demo":
+        if name in DEMO_SQL_TABLES:
+            return "sql"
+        if name in DEMO_HIVE_TABLES:
+            return "hive"
+        if name in DEMO_META_TABLES:
+            return "meta"
+        return "other"
+    if store_id == "warehouse":
+        for layer, names in WAREHOUSE_LAYER_TABLES.items():
+            if name in names:
+                return layer
+        return "other"
     return "other"
 
 
@@ -210,11 +258,16 @@ def _sqlite_overview(store_id: str) -> dict[str, Any]:
                 "name": name,
                 "count": count,
                 "description": desc_map.get(name, ""),
-                "group": _demo_group(name) if store_id == "demo" else "other",
+                "group": _table_group(store_id, name),
             })
         groups: dict[str, list[dict]] = {}
         if store_id == "demo":
             for g in ("sql", "hive", "meta", "other"):
+                items = [t for t in tables if t["group"] == g]
+                if items:
+                    groups[g] = items
+        elif store_id == "warehouse":
+            for g in ("ods", "dim", "dwd", "dws", "ads", "other"):
                 items = [t for t in tables if t["group"] == g]
                 if items:
                     groups[g] = items
@@ -479,7 +532,7 @@ async def database_table(
             "types": types,
             "sample": sample,
             "limit": limit,
-            "group": _demo_group(table_name) if store == "demo" else "other",
+            "group": _table_group(store, table_name),
         }
     finally:
         conn.close()

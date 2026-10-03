@@ -243,11 +243,12 @@ class StreamingRunner:
             t_sql = time.time()
             task_label = (
                 "按引擎列出表" if (ask_sql and ask_hive)
-                else ("列出 Hive 表" if ask_hive else "列出 SQL 表")
+                else ("列出 Olist 数仓表" if ask_hive else "列出 SQL 表")
             )
             await queue.put(("step_start", SSEEvent.step_start("sql", task_label)))
             try:
-                from harness.tools.schema import HIVE_SIM_TABLES, list_hive_tables, list_tables
+                from harness.tools.schema import HIVE_SIM_TABLES, list_tables
+                from harness.tools.warehouse import list_warehouse_tables
 
                 parts: list[str] = []
                 plan = []
@@ -262,13 +263,13 @@ class StreamingRunner:
                         parts.append(f"【SQLite / SQL 业务表】\n{body}")
                     plan.append({"agent": "sql", "task": "列出 SQL 表"})
                 if ask_hive:
-                    hive_payload = list_hive_tables()
+                    hive_payload = list_warehouse_tables()
                     if hive_payload.get("error"):
                         parts.append(str(hive_payload.get("message") or "无权列出 Hive 表"))
                     else:
                         hive_tables = hive_payload.get("tables") or []
                         body = "\n".join(f"- {t}" for t in hive_tables) if hive_tables else "- （无）"
-                        parts.append(f"【Hive 模拟表】\n{body}")
+                        parts.append(f"【Olist Hive/warehouse 表】\n{body}")
                     plan.append({"agent": "hive", "task": "列出 Hive 表"})
                 answer = "\n\n".join(parts)
             except Exception as e:

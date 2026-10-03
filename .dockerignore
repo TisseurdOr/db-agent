@@ -13,3 +13,24 @@ tests/
 docs/
 *.md
 !README.md
+
+# 敏感：真实 key 不进镜像（运行时用 -e / HF Secrets 注入）
+.env
+.env.*
+!.env.example
+
+# 前端：build 在镜像内完成，node_modules / dist 不进 context
+frontend/node_modules/
+frontend/dist/
+
+# 本地运行 / 个人内容
+.dev-logs/
+.dev-pids/
+.cursor/
+Asu/
+blog-draft/
+learn/
+skills/
+templates/
+db/turns/
+db/conversation_*.json

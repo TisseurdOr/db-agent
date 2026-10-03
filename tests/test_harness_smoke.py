@@ -43,6 +43,7 @@ HARNESS_MODULES = [
     "harness.context.template_matcher",
     "harness.context.token_budget",
     "harness.context.hybrid_window_manager",
+    "harness.context.doc_ingest",
     "harness.tools.analysis",
     "harness.tools.chart",
     "harness.tools.hbase",
@@ -180,11 +181,11 @@ def test_hbase_agent_has_execution_tools():
     assert names >= {"run_hbase", "generate_hbase_query"}
 
 
-def test_hive_agent_has_query_tools():
-    """Hive agent 应有 list_tables / describe_table / run_query。"""
+def test_hive_agent_has_warehouse_query_tools():
+    """Hive agent 应查询独立 Olist 数仓。"""
     from harness.orchestration.multi.agents import hive_agent
     names = {t["name"] for t in hive_agent.tools}
-    assert names >= {"list_tables", "describe_table", "run_query"}
+    assert names >= {"list_warehouse_tables", "describe_warehouse_table", "query_warehouse"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

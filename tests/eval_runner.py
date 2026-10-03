@@ -4,7 +4,7 @@
     # 快速模式（不调 LLM，秒级跑完 6 条 guardrail 测试）
     python -m tests.eval_runner --fast
 
-    # 完整模式（调 LLM，跑全部 22 条用例）
+    # 完整模式（调 LLM，跑全部 41 条用例）
     python -m tests.eval_runner --full
 
     # LLM-as-Judge: 用 Kimi 对失败用例打分（准确性/完整性/简洁性），独立于被测模型

@@ -136,7 +136,7 @@ async def main():
     # 长期记忆：VectorMemory + Self-Query / RAG（CLI 与 Web 共用 ensure_memory_stack）
     # pre-turn recall → multi 注入 Router/SQL/Analysis；search_memory Tool 可中途再检索
     ensure_memory_stack(client)
-    # 知识库：_KNOWLEDGE_BASE 索引进向量库（search_knowledge_base 语义检索用）。
+    # 知识库：内置文档 + db/knowledge_inbox（OCR/表格清洗后切片）索引进向量库。
     # embedding 未配置时降级到关键词检索，不阻断启动。
     try:
         build_knowledge_base_index()

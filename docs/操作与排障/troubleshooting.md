@@ -45,6 +45,7 @@
 33. [样例库 ID 跨进程不稳定（自学习回流堆积）](#33-样例库-id-跨进程不稳定)
 34. [RedisSaver `Cannot create index on db != 0`](#34-redissaver-cannot-create-index-on-db--0)
 35. [docker pull Milvus 报 `failed size validation`](#35-docker-pull-milvus-报-failed-size-validation)
+36. [Web Agent「挂住」/ 空答案：`ainvoke` HITL 与 `_skip_confidence`](#36-web-agent挂住--空答案ainvoke-hitl-与-_skip_confidence)
 
 ---
 
@@ -1138,3 +1139,34 @@ Docker daemon 内容存储 blob 校验失败（常见于磁盘/缓存损坏，�
 
 **涉及文件**
 `pyproject.toml`（milvus-lite）、`harness/memory/vector_store.py`
+
+## 36. Web Agent「挂住」/ 空答案：`ainvoke` HITL 与 `_skip_confidence`
+
+**现象**
+- 网页提问后长时间只有心跳 / 思考停住，或突然 `done` 但答案为空。
+- 查薪资、带 analysis 的问句尤其容易复现。
+- 后端未必有 Traceback。
+
+**原因**
+1. **LangGraph ≥1.x 行为变了**：节点里 `interrupt()` 时，`graph.ainvoke(...)` **通常不再抛** `GraphInterrupt`，而是 **return**
+   `{...半截 state, "__interrupt__": (Interrupt, ...)}`。
+   旧代码只 `except GraphInterrupt` + 只看 `snapshot.interrupts`；若 checkpoint 侧 interrupts 为空，会把半截 result 当成功 → `final_answer=""`。
+2. **Web state 注释写「跳过置信度门」，实际 `_skip_confidence=False`**：
+   带 analysis 的 plan 会进 `confidence_gate`，分低就 HITL；弹窗没注意到时体感像挂死。
+
+**解决 / 方法**
+1. 统一用 `_interrupt_payload(result, snapshot)`：**同时**认
+   - `snapshot.interrupts[0].value`
+   - `result["__interrupt__"]`
+   任一命中即发 SSE `interrupt` 并 `return`，禁止当成功态继续。
+2. Web `StreamingRunner` 设 `_skip_confidence=True`、`_skip_reflection=True`（与注释一致，加速首答；CLI 仍可走完整门控）。
+3. 敏感列 / HBase 写等真正 HITL 仍走 `interrupt`，前端审批后 `POST /api/query/resume`。
+4. 排查时看 Network：应有 `event: interrupt` 或最终 `event: done`/`error`，不应无限无终态。
+
+**涉及文件**
+`server/runner_wrapper.py`（`_interrupt_payload`、Web state skip 标志）
+`harness/orchestration/multi/helpers.py`（`_skip_confidence` 短路）
+`tests/test_server.py`（raise 路径 + return `__interrupt__` 路径）
+
+**相关**
+[[Web操作手册]] §5 Web vs CLI · §7 HITL

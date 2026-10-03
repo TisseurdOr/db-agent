@@ -1,34 +1,46 @@
-# db-agent Dockerfile
-# Build: docker build -t db-agent .
-# Run:   docker compose run --rm db-agent
+# db-agent Web 部署镜像（本地验证 + Hugging Face Spaces Docker SDK 通用）
+#
+# 本地验证:
+#   docker build -t db-agent .
+#   docker run --rm -p 8100:7860 -e ANTHROPIC_API_KEY=... -e ANTHROPIC_BASE_URL=... db-agent
+#   open http://127.0.0.1:8100
+#
+# 说明: 前端 build 成静态文件，由 FastAPI 同源 serve（前端用相对 /api 调用，无需 CORS）。
 
+# ── 阶段 1：构建前端（React + Vite → 静态文件）────────────────────
+FROM node:24-alpine AS frontend
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# ── 阶段 2：后端运行（FastAPI 同源 serve 前端 dist）─────────────────
 FROM python:3.12-slim
-
 WORKDIR /app
 
-# Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# 依赖只认锁文件（uv.lock），不手写清单——pyproject 加新依赖不会在这里漂移
+# 依赖层：只 COPY 锁文件，源码变更不重装依赖（缓存友好）
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy source
+# 源码 + 前端构建产物
 COPY . .
+COPY --from=frontend /fe/dist /app/frontend/dist
 
-# 安装项目本体（生成 db-agent 命令）
 RUN uv sync --frozen --no-dev
-
-# 让 .venv 里的可执行文件进 PATH（db-agent 命令在这里）
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Create data directories
 RUN mkdir -p /app/db /app/harness/memory/chroma_db
 
-# 健康检查：验证 db-agent CLI 入口可用。
-# --help 在 argparse 阶段退出，不触发 LLM 调用、不需要 API key，安全。
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD db-agent --help >/dev/null 2>&1 || exit 1
+# 观测默认关（生产用环境变量打开）；Redis checkpointer 连不上会自动降级 SQLite
+ENV OPIK_ENABLED=0 LANGFUSE_ENABLED=0
 
-ENTRYPOINT ["db-agent"]
-CMD ["--mode", "single", "--user", "viewer"]
+EXPOSE 7860
+
+# HF Spaces 注入 PORT（默认 7860）；本地 docker run 可用 -e PORT=8100 覆盖
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${PORT:-7860}/api/health')" || exit 1
+
+CMD ["sh", "-c", "exec uvicorn server.main:app --host 0.0.0.0 --port ${PORT:-7860}"]

@@ -15,7 +15,8 @@ from harness.orchestration.multi.agents import (
     strategy_agent,
 )
 from harness.orchestration.multi.orchestrator import MultiAgentRunner, _next_step
-from harness.tools.schema import HIVE_SIM_TABLES, discover_relevant_schema, list_hive_tables
+from harness.tools.schema import HIVE_SIM_TABLES, discover_relevant_schema
+from harness.tools.warehouse import list_warehouse_tables
 
 # ═══ 1. _next_step 调度 ═══
 
@@ -135,22 +136,22 @@ def test_discover_schema_counts_fields(monkeypatch):
 
 # ═══ 4. Agent 装配 ═══
 
-def test_hive_agent_uses_isolated_list_tables():
-    """Hive Agent 的 list_tables 必须是隔离版——只返回 ods_/dwd_/dim_ 模拟表，
-    否则会把业务表 departments/orders 当成 Hive 表。"""
-    assert hive_agent.handlers["list_tables"] is list_hive_tables
-    # sql Agent 用的仍是全量版
-    assert sql_agent.handlers["list_tables"] is not list_hive_tables
+def test_hive_agent_uses_olist_warehouse_tools():
+    """Hive Agent 默认查询独立 Olist 数仓，不再使用 demo 模拟表。"""
+    assert hive_agent.handlers["list_warehouse_tables"] is list_warehouse_tables
+    assert "query_warehouse" in hive_agent.handlers
+    assert "list_tables" not in hive_agent.handlers
 
 
-def test_hive_prompt_forbids_business_tables():
-    """prompt 里明确禁止把业务表当 Hive 表（硬约束的软化层）。"""
+def test_hive_prompt_uses_olist_warehouse():
+    """prompt 明确以 Olist warehouse 为默认数据源，并排除 demo 模拟表。"""
+    assert "warehouse.db" in HIVE_AGENT_PROMPT
+    assert "ods_orders_hive" in HIVE_AGENT_PROMPT
     assert "禁止" in HIVE_AGENT_PROMPT
-    assert "departments" in HIVE_AGENT_PROMPT
 
 
 def test_hive_sim_tables_are_warehouse_style():
-    """隔离白名单只含 ods_/dwd_/dim_ 风格表名。"""
+    """隔离白名单只含传统 Hive 模拟分层表名。"""
     assert all(t.startswith(("ods_", "dwd_", "dim_")) for t in HIVE_SIM_TABLES)
 
 
@@ -160,6 +161,15 @@ def test_sql_agent_has_schema_discovery_tool():
     assert "discover_relevant_schema" in tool_names
     assert sql_agent.handlers["discover_relevant_schema"] is discover_relevant_schema
     assert "discover_relevant_schema" in sql_agent.system_prompt
+
+
+def test_sql_agent_has_period_comparison_tool():
+    """SQL Agent 可以直接消费 Olist ADS 两期对比结果。"""
+    tool_names = [t["name"] for t in sql_agent.tools]
+    assert "query_period_comparison" in tool_names
+    assert "query_period_comparison" in sql_agent.handlers
+    assert "query_warehouse" in tool_names
+    assert "query_warehouse" in sql_agent.handlers
 
 
 def test_strategy_agent_has_lookup_metric():

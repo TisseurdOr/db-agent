@@ -28,15 +28,11 @@
 
 这不是一个「让模型写 SQL」的玩具，而是一套 **让模型写 SQL 不出事** 的工程系统：工具真执行、权限硬拦截、失败可自愈、结果可评测。换 DeepSeek / Claude 只改 API，不改这套骨架。对照见 [`HARNESS.md`](HARNESS.md)。
 
-> **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端）；当前数据源与部署形态仍是本地演示，**不是已上线业务环境**。
+> **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端），已上线。
 > SQLite 为真实本地库；**HBase / Hive 是本地内存模拟器**（API 对齐，无真实集群）——接真实集群只需换连接器。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **435** 条）。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **527** 条）。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
-
-web页面
-![Uploading image.png…]()
-
 
 ---
 
@@ -236,7 +232,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
 | **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
-| **五 · 工程化** | demo → 产品 | `db-agent` CLI；435 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；527 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
 
 ### 设计取舍（为什么这样）
@@ -413,7 +409,7 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 ### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例（435）
+pytest tests/ -v                               # 全量离线用例（527）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）
 python tests/eval_runner.py --full             # 全量评测（需 API key）
 ```
@@ -458,3 +454,15 @@ pyright
 </sub>
 
 </div>
+
+### Olist 公共数仓
+
+仓库包含一套可复现的 Olist 公共电商五层数仓：ODS → DIM → DWD → DWS → ADS。
+
+```bash
+.venv/bin/python scripts/build_olist_warehouse.py
+.venv/bin/python scripts/build_olist_warehouse.py --validate-only
+```
+
+原始数据会下载到 `data/raw/olist/`，数仓落在独立的 `db/warehouse.db`。建模和查询说明见 [`docs/warehouse/olist.md`](docs/warehouse/olist.md)。
+这是公共测试数据，不代表真实用户反馈或商业增长。

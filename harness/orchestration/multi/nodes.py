@@ -71,6 +71,15 @@ from harness.orchestration.multi.state import MultiAgentState, agent_config
 # 开发用 SQLite；生产可换 PostgresSaver。
 
 
+# 闲聊统一回复：不查库、不走 LLM，0 token 秒回。
+CHITCHAT_RESPONSE = (
+    "你好！我是 db-agent，一个企业级自然语言数据库分析助手。"
+    "你可以直接问我订单、销售、员工、产品这些数据的问题，"
+    "比如「上个月销售额是多少」「各部门有多少人」，也可以让我做趋势分析、数据对比。"
+    "有什么想查的？"
+)
+
+
 async def node_router(state: MultiAgentState, config: RunnableConfig) -> dict:
     """Router: 分析用户 query，输出 JSON 执行计划。
 
@@ -132,7 +141,6 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     route_latency = time.time() - t0
     router_usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
     cached_plan = None
-    route_source_fallback = False
     plan_data = {}  # 硬规则路径不经 LLM，后续读 confidence 前必须有默认值
 
     # 硬规则兜底：route_override 未兜住且查询明显不完整/含糊 → 直接进 clarify，不花 LLM
@@ -157,7 +165,12 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
             trace.finish_span(span, router_usage)
             print(trace.print_progress(span))
             _annotate_route("rule", [], router_cache)
-            return {"plan": [], "next": "done", "_stats": {"elapsed": route_latency, "nodes": ["router(硬规则)"]}}
+            return {
+                "plan": [],
+                "next": "done",
+                "final_answer": CHITCHAT_RESPONSE,
+                "_stats": {"elapsed": route_latency, "nodes": ["router(硬规则)"]},
+            }
     else:
         # 查缓存：同样 query 之前解析过，直接复用 plan，省一次 LLM 调用（~250t）
         # 重规划时不读缓存——缓存里存的正是刚失败的 plan
@@ -226,7 +239,7 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
                 trace.finish_span(span, router_usage)
                 print(trace.print_progress(span))
                 _annotate_route("llm", [], router_cache)
-                return {"plan": [], "next": "done"}
+                return {"plan": [], "next": "done", "final_answer": CHITCHAT_RESPONSE}
             # 明显不完整/含糊 → 澄清，不猜、不派 SQL
             fallback_reason = incomplete_query_reason(query_text)
             if fallback_reason:
@@ -239,10 +252,17 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
                     "next": "clarify",
                     "_stats": {"elapsed": router_usage.get("elapsed", 0), "nodes": ["router(兜底澄清)"]},
                 }
-            # 判不了 → 最后兜底 sql（避免空白回复；数据安全由工具层 RBAC/护栏保证，不靠 Router）
-            plan = [{"agent": AGENT_SQL, "task": query_text}]
-            span.task = "空 plan → 兜底 sql"
-            route_source_fallback = True
+            # 判不了 → 直接说清楚，不猜 SQL（猜 SQL 会把制度/流程类问题误派去查库）
+            span.task = "无法判断 → 请补充"
+            trace.finish_span(span, router_usage)
+            print(trace.print_progress(span))
+            _annotate_route("llm_unclear", [], router_cache)
+            return {
+                "plan": [],
+                "next": "done",
+                "final_answer": "抱歉，我没太理解你的问题，能再具体说明一下吗？比如想查什么数据，或问哪方面制度/流程。",
+                "_stats": {"elapsed": router_usage.get("elapsed", 0), "nodes": ["router(无法判断)"]},
+            }
 
     # 缓存写入：仅 LLM 路径；硬规则不写缓存（避免污染）；
     # 重规划出的 plan 也不写——它是针对本次失败的补救计划，不是该 query 的通用答案
@@ -267,9 +287,6 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
         assert router_cache is not None
         route_source = "cache"
         print(f"   💾 缓存命中 ({router_cache.hit_rate})")
-    elif route_source_fallback:
-        route_source = "fallback_sql"
-        print(f"   🤖 LLM 路由 ({router_usage.get('elapsed', 0):.1f}s · {router_usage.get('input_tokens', 0)}+{router_usage.get('output_tokens', 0)}t) [兜底 sql]")
     else:
         route_source = "llm"
         print(f"   🤖 LLM 路由 ({router_usage.get('elapsed', 0):.1f}s · {router_usage.get('input_tokens', 0)}+{router_usage.get('output_tokens', 0)}t)")

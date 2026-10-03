@@ -62,6 +62,14 @@ async def _lifespan(app: FastAPI):
         ensure_memory_stack(get_client())
     except Exception:
         pass
+    # KB_INDEX_AUTOBUILD=0 跳过启动建索引（测试/离线场景），避免在共享持久化
+    # 向量库里建集合：无 key 会留空集合，有 key 会在测试里真调 embedding 烧钱。
+    if os.getenv("KB_INDEX_AUTOBUILD", "1") != "0":
+        try:
+            from harness.tools.knowledge import build_knowledge_base_index
+            build_knowledge_base_index()
+        except Exception:
+            pass
     try:
         from server.runner_wrapper import runner_registry
         await runner_registry.get_or_create(

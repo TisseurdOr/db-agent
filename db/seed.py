@@ -435,8 +435,8 @@ def init_db(reset: bool = False):
             channel_id = random.choices([1, 2, 3, 4], weights=channel_weights)[0]
 
             price = price_by_id[product_id]
-            total = round(price * random.uniform(0.7, 1.4), -2)
             quantity = random.choices([1, 2, 3, 5], weights=[0.4, 0.3, 0.2, 0.1])[0]
+            total = round(price * quantity * random.uniform(0.7, 1.4), -2)
             status = random.choices(statuses, weights=status_weights)[0]
 
             conn.execute(

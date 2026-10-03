@@ -21,6 +21,7 @@ _vector_memory = None
 _llm_client = None
 _rag_pipeline = None
 _kb_memory = None        # 知识库向量索引（VectorMemory，collection=knowledge_base）
+_runtime_docs = None     # inbox 入库切片；None=尚未扫描
 
 
 def set_vector_memory(vm):
@@ -47,31 +48,92 @@ def set_knowledge_base_memory(vm):
     _kb_memory = vm
 
 
-def build_knowledge_base_index(embed_fn=None):
-    """把 _KNOWLEDGE_BASE 索引进向量库（collection=knowledge_base）。
+def reset_runtime_docs():
+    """测试用：丢掉已扫描的 inbox 缓存，下次检索会重新读盘。"""
+    global _runtime_docs
+    _runtime_docs = None
+
+
+def _chunk_to_doc(chunk) -> dict:
+    chunk_id = f"{chunk.source}#{chunk.chunk_index}"
+    return {
+        "title": chunk.title,
+        "content": chunk.text,
+        "category": chunk.category or "",
+        "source": chunk.source,
+        "kind": chunk.kind,
+        "chunk_id": chunk_id,
+    }
+
+
+def load_runtime_docs(ocr_fn=None, inbox=None, *, force: bool = False) -> list[dict]:
+    """扫描 db/knowledge_inbox（OCR + 表格清洗 + 切分），结果缓存到 _runtime_docs。"""
+    global _runtime_docs
+    if _runtime_docs is not None and not force and inbox is None:
+        return _runtime_docs
+    from harness.context.doc_ingest import ingest_inbox
+    try:
+        docs = [_chunk_to_doc(c) for c in ingest_inbox(inbox, ocr_fn=ocr_fn)]
+    except Exception:
+        docs = []
+    if inbox is None:
+        _runtime_docs = docs
+    return docs
+
+
+def _iter_knowledge_docs(ocr_fn=None, inbox=None):
+    """内置制度 + inbox 入库切片。静态篇的 chunk_id 就是 title，兼容旧索引。"""
+    for title, content in _KNOWLEDGE_BASE.items():
+        yield {
+            "title": title,
+            "content": content,
+            "category": _DOC_CATEGORIES.get(title, ""),
+            "chunk_id": title,
+            "kind": "prose",
+            "source": title,
+        }
+    yield from load_runtime_docs(ocr_fn=ocr_fn, inbox=inbox)
+
+
+def build_knowledge_base_index(embed_fn=None, ocr_fn=None, inbox=None,
+                               persist_dir=None, collection_name="knowledge_base"):
+    """把内置文档和 inbox 切片索引进向量库（collection=knowledge_base）。
 
     embed_fn 用于测试注入离线 embedding；为 None 时走环境变量 EMBEDDING_API_KEY。
     embedding 不可用会抛异常，由调用方（main.py）捕获降级到关键词检索。
-    已有索引时按 title 补缺失篇，避免扩文档后旧 collection 停在旧篇数。
+    已有索引时按 chunk_id（旧库回退 title）补缺失篇，避免扩文档后旧 collection 停在旧篇数。
+
+    persist_dir / collection_name 可覆盖默认落盘位置：测试传入 tmp 目录即可隔离，
+    避免复用（甚至 drop）生产环境的持久化向量索引。
     """
     global _kb_memory
     from harness.memory.vector_store import VectorMemory
-    vm = VectorMemory(collection_name="knowledge_base", embed_fn=embed_fn)
+    load_runtime_docs(ocr_fn=ocr_fn, inbox=inbox, force=inbox is not None)
+    vm_kwargs = {"collection_name": collection_name, "embed_fn": embed_fn}
+    if persist_dir is not None:
+        vm_kwargs["persist_dir"] = persist_dir
+    vm = VectorMemory(**vm_kwargs)
     existing: set[str] = set()
     if vm.count() > 0:
         try:
             for row in vm.backend.get(where={"memory_type": "knowledge"}):
-                title = (row.get("metadata") or {}).get("title")
-                if title:
-                    existing.add(title)
+                meta = row.get("metadata") or {}
+                existing.add(meta.get("chunk_id") or meta.get("title") or "")
         except Exception:
             existing = set()
-    for title, content in _KNOWLEDGE_BASE.items():
-        if title in existing:
+    for doc in _iter_knowledge_docs(ocr_fn=ocr_fn, inbox=inbox):
+        cid = doc.get("chunk_id") or doc["title"]
+        if cid in existing:
             continue
         vm.remember(
-            content, memory_type="knowledge",
-            metadata={"title": title, "category": _DOC_CATEGORIES.get(title, "")},
+            doc["content"], memory_type="knowledge",
+            metadata={
+                "title": doc["title"],
+                "category": doc.get("category", ""),
+                "chunk_id": cid,
+                "kind": doc.get("kind", "prose"),
+                "source": doc.get("source", ""),
+            },
         )
     _kb_memory = vm
     return vm
@@ -387,12 +449,13 @@ def _keyword_search(query: str, top_k: int) -> list[dict]:
         return hits / max(len(q.split()), 1) * 5
 
     scored = []
-    for title, content in _KNOWLEDGE_BASE.items():
+    for doc in _iter_knowledge_docs():
+        title, content = doc["title"], doc["content"]
         s = score(title) * 1.5 + score(content)
         if s > 0:
             scored.append({
                 "title": title, "content": content,
-                "category": _DOC_CATEGORIES.get(title, ""),
+                "category": doc.get("category", ""),
                 "score": round(s, 1),
             })
     scored.sort(key=lambda x: x["score"], reverse=True)

@@ -33,6 +33,13 @@ dependencies = [
     "langfuse>=4.15.2",
 ]
 
+[project.optional-dependencies]
+ocr = [
+    "pytesseract>=0.3.13",
+    "pillow>=11.0.0",
+    "pypdf>=5.0.0",
+]
+
 [dependency-groups]
 dev = [
     "pre-commit>=4.6.2",

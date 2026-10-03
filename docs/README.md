@@ -1,36 +1,108 @@
 # docs/ 索引
 
-按主题只保留一份主文档；操作手册与 ADR 独立。
+> 按**类别**分目录存放。操作手册已写：见 [`新手手册/Web操作手册.md`](新手手册/Web操作手册.md)（含 §1.1 端口 3000 vs 8000、RBAC/Database/Dashboard）。
 
-## 日常使用（db-agent）
+库外总览：[`../README.md`](../README.md) · Harness：[`../HARNESS.md`](../HARNESS.md)
+
+## 目录一览
+
+| 目录 | 放什么 |
+|------|--------|
+| [`新手手册/`](新手手册/) | 上手、用户/Web 手册、API、工具清单、BA 说明、新手 PPT |
+| [`操作与排障/`](操作与排障/) | 排障、错误恢复、自学习闭环、专题笔记 |
+| [`项目介绍/`](项目介绍/) | 产品介绍、WWH、复盘、工程机制、评分表 |
+| [`面试/`](面试/) | 题库、话术、六维、模拟面；子公司面经 |
+| [`面试/公司面经/`](面试/公司面经/) | 平安、携程等公司专项 |
+| [`简历与经历/`](简历与经历/) | 简历 STAR、工作经历讲解、项目讲解 PPT、转型计划 |
+| [`其他项目/`](其他项目/) | fin-agent / fraud-agent 等旁路项目 |
+| [`adr/`](adr/) | 架构决策记录 |
+| [`diagrams/`](diagrams/) | 架构图 / drawio / png |
+| [`ai/`](ai/) | Agent 知识库工作流与草稿 |
+| [`00-inbox/`](00-inbox/) | 待整理素材 |
+| [`30-沉淀/`](30-沉淀/) | 审核后的正式沉淀 |
+
+维护规则：[`AGENTS.md`](AGENTS.md)
+
+---
+
+## 新手手册
 
 | 文件 | 用途 |
 |------|------|
-| [`../README.md`](../README.md) | 项目总览与快速开始（库外） |
-| [`../HARNESS.md`](../HARNESS.md) | Harness 工程架构（库外） |
-| [[troubleshooting]] | 排障手册 |
-| [[Web操作手册]] | Web（FastAPI + React）启动 / HITL / 表列举 / 常见故障 |
-| [[2026-08-05_错误恢复操作手册]] | 三层自愈 |
-| [[2026-08-06_自学习闭环操作手册]] | SQL 回流 |
-| [[2026-08-06_项目复盘报告]] | 成长轨迹复盘 |
-| [`adr/`](adr/) | 架构决策记录（目录） |
+| [用户手册.md](新手手册/用户手册.md) | 产品向使用说明 |
+| [Web操作手册.md](新手手册/Web操作手册.md) | **Web 启动 / RBAC / Database·Dashboard / 常见故障（必读）** |
+| [API.md](新手手册/API.md) | HTTP API 速查 |
+| [TOOLS.md](新手手册/TOOLS.md) | 工具清单 |
+| [BA版项目说明.md](新手手册/BA版项目说明.md) | 非技术向项目说明 |
+| [db-agent新手全解.pptx](新手手册/db-agent新手全解.pptx) | 新手讲解幻灯片 |
+
+## 操作与排障（含错误手册）
+
+| 文件 | 用途 |
+|------|------|
+| [troubleshooting.md](操作与排障/troubleshooting.md) | 工程排障总手册 |
+| [2026-08-05_错误恢复操作手册.md](操作与排障/2026-08-05_错误恢复操作手册.md) | 三层自愈 |
+| [2026-08-06_自学习闭环操作手册.md](操作与排障/2026-08-06_自学习闭环操作手册.md) | SQL 回流 / 自学习 |
+| [图表大屏功能-2026-08-30.md](操作与排障/图表大屏功能-2026-08-30.md) | Dashboard 大屏说明 |
+| [存储问题.md](操作与排障/存储问题.md) | 存储相关笔记 |
+
+## 项目介绍
+
+| 文件 | 用途 |
+|------|------|
+| [产品介绍讲稿.md](项目介绍/产品介绍讲稿.md) | 配合产品介绍 PPT |
+| [db-agent-产品介绍.pptx](项目介绍/db-agent-产品介绍.pptx) | 产品介绍幻灯片 |
+| [db-agent-WWH讲解.pptx](项目介绍/db-agent-WWH讲解.pptx) | Why / What / How |
+| [项目详细拆解.md](项目介绍/项目详细拆解.md) | 功能拆解 |
+| [项目案例.md](项目介绍/项目案例.md) | 案例口径 |
+| [项目复盘-可复用模块库.md](项目介绍/项目复盘-可复用模块库.md) · [Agent可复用模块库.pptx](项目介绍/Agent可复用模块库.pptx) | 可复用模块 |
+| [2026-08-06_项目复盘报告.md](项目介绍/2026-08-06_项目复盘报告.md) | 成长轨迹复盘 |
+| [engineering-mechanisms.md](项目介绍/engineering-mechanisms.md) | 工程机制说明 |
+| [curriculum-mapping.md](项目介绍/curriculum-mapping.md) | 课程 ↔ 代码 |
+| [功能点评分表.md](项目介绍/功能点评分表.md) | 功能点自评 |
 
 ## 面试
 
 | 文件 | 用途 |
 |------|------|
-| [[面试准备]] | **唯一** db-agent 面试合集（开场稿 / 题库 / 六维 / 系统设计） |
-| [`interview-quiz.html`](interview-quiz.html) | 交互刷题 |
-| [`interview-script.html`](interview-script.html) | 交互话术 |
-| [[知识归纳]] | 概念速查 |
-| [[fraud-agent-面试]] | fraud-agent 项目面试 |
-| [[fin-agent]] | fin-agent 改进日志 + 面试 |
-| [`2026-06-24_rag-vs-no-rag-评测结果.json`](2026-06-24_rag-vs-no-rag-评测结果.json) | fin-agent RAG 评测原始数据 |
+| [面试准备.md](面试/面试准备.md) | **主合集**（开场 / 题库 / 六维 / 系统设计） |
+| [面试话术.md](面试/面试话术.md) | 口播话术 |
+| [面试-六维详解.md](面试/面试-六维详解.md) | Harness 六维 |
+| [面试题库-2026-08-14.md](面试/面试题库-2026-08-14.md) | 题库 |
+| [大模型高频面试题.md](面试/大模型高频面试题.md) | 通用大模型题 |
+| [初创面试题收集.md](面试/初创面试题收集.md) | 初创公司题 |
+| [第一次模拟面试.md](面试/第一次模拟面试.md) · [面试拷打记录-2026-08-17.md](面试/面试拷打记录-2026-08-17.md) | 模拟 / 拷打 |
+| [知识归纳.md](面试/知识归纳.md) | 概念速查 |
+| [interview-quiz.html](面试/interview-quiz.html) · [interview-script.html](面试/interview-script.html) | 交互刷题 / 话术 |
+| [db-agent-面试六维学习笔记.html](面试/db-agent-面试六维学习笔记.html) | 六维学习笔记 |
+| [db-agent-六维深度探索.pptx](面试/db-agent-六维深度探索.pptx) | **六维深度探索 PPT**（生成：`scripts/generate_six_dimensions_deck.py`） |
 
-## 其他
+
+### 公司面经
 
 | 文件 | 用途 |
 |------|------|
-| [[2026-07-11_AI-Agent-转型作战手册]] | 求职 / 转型计划（含技术补课附录） |
-| [[curriculum-mapping]] | 课程 ↔ 代码对照 |
-| [[resume-projects]] | 简历项目 STAR 草稿 |
+| [平安背稿.md](面试/公司面经/平安背稿.md) | 平安口述主稿 |
+| [平安科技面试准备.md](面试/公司面经/平安科技面试准备.md) · [平安面经.md](面试/公司面经/平安面经.md) · [平安.md](面试/公司面经/平安.md) | 平安专项 |
+| [携程.md](面试/公司面经/携程.md) | 携程 |
+
+## 简历与经历
+
+| 文件 | 用途 |
+|------|------|
+| [resume-projects.md](简历与经历/resume-projects.md) | 简历项目 STAR |
+| [工作经历与项目讲解.pptx](简历与经历/工作经历与项目讲解.pptx) · [.html](简历与经历/工作经历与项目讲解.html) | 经历讲解 |
+| [db-agent-项目讲解.pptx](简历与经历/db-agent-项目讲解.pptx) · [Citi模板](简历与经历/db-agent-项目讲解-Citi模板.pptx) | 项目讲解 PPT |
+| [2026-07-11_AI-Agent-转型作战手册.md](简历与经历/2026-07-11_AI-Agent-转型作战手册.md) | 转型计划 |
+
+## 其他项目
+
+| 文件 | 用途 |
+|------|------|
+| [fin-agent.md](其他项目/fin-agent.md) | fin-agent |
+| [fraud-agent-面试.md](其他项目/fraud-agent-面试.md) | fraud-agent 面试 |
+| [2026-06-24_rag-vs-no-rag-评测结果.json](其他项目/2026-06-24_rag-vs-no-rag-评测结果.json) | RAG 评测原始数据 |
+
+## 生成脚本输出路径
+
+改 PPT / 讲稿后，对应脚本已指向新目录（见 `scripts/generate_*.py`）。新建文档请放入上表对应类别，并更新本索引。
