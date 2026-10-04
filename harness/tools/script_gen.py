@@ -25,7 +25,8 @@ SCRIPT_DIR = Path(__file__).resolve().parents[2] / "output" / "scripts"
 def _slug(name: str) -> str:
     """文件名安全化：去掉路径分隔符等危险字符，**保留中文**（macOS/Linux 支持 UTF-8 文件名）。"""
     s = re.sub(r"[^\w-]+", "_", (name or "").strip()).strip("_")
-    return s[:60] or "script"
+    # 截断后再去一次尾部下划线，保证 _slug 幂等——否则 _write 二次 slug 会改文件名。
+    return s[:60].rstrip("_") or "script"
 
 
 def _check_sql(sql: str) -> str | None:

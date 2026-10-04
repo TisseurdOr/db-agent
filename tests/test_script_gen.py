@@ -120,3 +120,14 @@ def test_generate_insert_script_docstring_cannot_escape(tmp_path, monkeypatch):
     )
     assert r["ok"] is True
     compile(open(r["path"], encoding="utf-8").read(), r["path"], "exec")
+
+
+def test_insert_long_description_filename_is_stable(tmp_path, monkeypatch):
+    """长说明会触发 60 字截断；截断后文件名必须稳定，usage 里的文件名要和真实路径一致。"""
+    monkeypatch.setattr(script_gen, "SCRIPT_DIR", tmp_path)
+    r = script_gen.generate_insert_script(
+        "items", {"id": 1}, description="很长的配置说明" * 20,
+    )
+    assert r["ok"] is True, r
+    content = open(r["path"], encoding="utf-8").read()
+    assert r["path"].rsplit("/", 1)[-1] in content
