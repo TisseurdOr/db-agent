@@ -66,3 +66,53 @@ def test_extract_probability(payload, expected):
 ])
 def test_extract_choice(payload, expected):
     assert jev_client.extract_choice(payload, "a") == expected
+
+
+# ── OpenRouter 通道（让 Jev 走 OpenRouter，不动主 LLM）──
+
+def test_openrouter_takes_priority(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("JEV_API_KEY", "native-test")
+    assert jev_client._provider() == "openrouter"
+
+
+def test_openrouter_posts_chat_completions(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.delenv("JEV_API_KEY", raising=False)
+    captured = {}
+
+    def fake_post(url, payload, headers, timeout):
+        captured.update(url=url, payload=payload, headers=headers)
+        return {"choices": [{"message": {"content": '{"answers":[{"id":"next_agent","choice":"hive","probability":0.77}]}'}}]}
+
+    monkeypatch.setattr(jev_client, "_post_json", fake_post)
+    result = asyncio.run(jev_client.decide("Hive 语法怎么写", [
+        {"id": "next_agent", "type": "choice", "options": ["sql", "hive"]},
+    ]))
+
+    assert captured["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert captured["payload"]["model"] == "typesafe/jev-router"
+    assert captured["payload"]["response_format"] == {"type": "json_object"}
+    assert captured["headers"]["Authorization"] == "Bearer sk-or-test"
+    assert jev_client.extract_choice(result, "next_agent") == "hive"
+    assert jev_client.extract_probability(result, "next_agent") == 0.77
+
+
+def test_openrouter_model_overridable(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setenv("JEV_MODEL", "typesafe/jev-latest")
+    captured = {}
+
+    def fake_post(url, payload, headers, timeout):
+        captured.update(payload=payload)
+        return {"choices": [{"message": {"content": "{}"}}]}
+
+    monkeypatch.setattr(jev_client, "_post_json", fake_post)
+    asyncio.run(jev_client.decide("x", [{"id": "a", "type": "boolean", "prompt": "?"}]))
+    assert captured["payload"]["model"] == "typesafe/jev-latest"
+
+
+def test_openrouter_malformed_response_returns_none(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    monkeypatch.setattr(jev_client, "_post_json", lambda *a, **k: {"choices": []})
+    assert asyncio.run(jev_client.decide("x", [])) is None

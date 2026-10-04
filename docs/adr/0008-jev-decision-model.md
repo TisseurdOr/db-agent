@@ -13,4 +13,6 @@
 3. **零侵入降级**：未配置 `JEV_API_KEY` → `is_enabled()=False`，完全走原 LLM 路径；调用失败/超时 → 返回 None 回退。**永不因 Jev 不可用而打断主流程**
 4. **可测**：HTTP 出口抽成 `_post_json`，测试 monkeypatch 即可，不联网
 
+**接入通道**：优先 OpenRouter（`OPENROUTER_API_KEY` + `typesafe/jev-router`，一个 key 即可）；也可用 TypeSafe 原生 `/decide`。两条通道对调用方完全透明，`decide()` 内部按环境变量分派。
+
 **取舍**：Jev 尚未完全开源、需申请 Key，是外部依赖；换来的是判断节点更快更便宜，且**概率是校准的**（LLM 自评分数并不校准）。因此它是「增强」，不是「替换模型」。
