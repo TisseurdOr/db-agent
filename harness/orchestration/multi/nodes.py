@@ -793,32 +793,64 @@ async def node_reflection(state: MultiAgentState, config: RunnableConfig) -> dic
     # 拼接上游数据作为审查依据
     context = "\n".join(str(v)[:1000] for v in state.get("results", {}).values() if v)
 
-    prompt = REFLECTION_PROMPT.format(
-        query=state["query"],
-        answer=answer[:2000],
-        context=context[:2000],
-    )
+    review = None
+    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
 
-    resp = await acall_with_retry(
-        client.messages.create,
-        model=model,
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = extract_text(resp, context="reflection")
-    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
-    resp_usage = getattr(resp, "usage", None)
-    if resp_usage:
-        usage["input_tokens"] = resp_usage.input_tokens or 0
-        usage["output_tokens"] = resp_usage.output_tokens or 0
-
-    # 解析审查结果
-    import json as _json
+    # 优先 Jev：只问「是否需要重做」（noul 校准概率）。
+    # 明确合格（重做概率很低）→ 直接放行，省掉一次 LLM 审查；
+    # 否则再调 LLM 拿具体 issues/suggestion（重写建议必须是可执行的文字）。
     try:
-        match = re.search(r'\{[\s\S]*\}', text)
-        review = _json.loads(match.group()) if match else {"pass": True, "issues": [], "suggestion": ""}
-    except (_json.JSONDecodeError, KeyError):
-        review = {"pass": True, "issues": [], "suggestion": ""}
+        from harness.jev_client import decide as jev_decide
+        from harness.jev_client import extract_probability
+        from harness.jev_client import is_enabled as jev_enabled
+
+        if jev_enabled():
+            jr = await jev_decide(
+                (
+                    f"用户问题：{state['query']}\n\n"
+                    f"Agent 回答：\n{answer[:2000]}\n\n"
+                    f"上游数据：\n{context[:2000]}"
+                ),
+                [{
+                    "id": "needs_redo",
+                    "type": "boolean",
+                    "prompt": "这个回答是否需要重做？（编造数据 / 答非所问 / 不可用 = 是）",
+                }],
+            )
+            p_redo = extract_probability(jr, "needs_redo")
+            # 阈值 0.5：实测「合格答案」约 0.36、「编造/答非所问」约 0.97，区分清晰
+            if p_redo is not None and p_redo < 0.5:
+                review = {"pass": True, "issues": [], "suggestion": ""}
+    except Exception:
+        review = None
+
+    if review is None:
+        prompt = REFLECTION_PROMPT.format(
+            query=state["query"],
+            answer=answer[:2000],
+            context=context[:2000],
+        )
+
+        resp = await acall_with_retry(
+            client.messages.create,
+            model=model,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = extract_text(resp, context="reflection")
+        usage = {"input_tokens": 0, "output_tokens": 0, "turns": 1}
+        resp_usage = getattr(resp, "usage", None)
+        if resp_usage:
+            usage["input_tokens"] = resp_usage.input_tokens or 0
+            usage["output_tokens"] = resp_usage.output_tokens or 0
+
+        # 解析审查结果
+        import json as _json
+        try:
+            match = re.search(r'\{[\s\S]*\}', text)
+            review = _json.loads(match.group()) if match else {"pass": True, "issues": [], "suggestion": ""}
+        except (_json.JSONDecodeError, KeyError):
+            review = {"pass": True, "issues": [], "suggestion": ""}
 
     trace.finish_span(span, usage)
 

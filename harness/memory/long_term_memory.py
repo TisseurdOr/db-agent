@@ -236,9 +236,46 @@ class RAGPipeline:
         return extract_text(resp, context="hyde")
 
     async def _rerank(self, query: str, candidates: list, top_k: int) -> list:
-        """用 LLM 给候选打分并重排；解析失败退回向量粗排顺序。"""
+        """给候选打分并重排。
+
+        优先 **Jev**（每个候选一个 noul 问题 → 校准概率，一次调用并行打分）；
+        未配置/失败则回退原 LLM 打分路径；解析失败退回向量粗排顺序。
+        """
         logger.info("rerank 触发: %d 个候选 -> 取 top_k=%d", len(candidates), top_k)
-        # 生产环境用 Cohere Rerank API
+
+        # 1) 优先 Jev：把"文档与查询相关吗"作为每个候选的 noul 问题
+        try:
+            from harness.jev_client import decide as jev_decide
+            from harness.jev_client import extract_probability
+            from harness.jev_client import is_enabled as jev_enabled
+
+            if jev_enabled() and candidates:
+                jr = await jev_decide(
+                    f"查询：{query}",
+                    [
+                        {
+                            "id": f"c{i}",
+                            "type": "boolean",
+                            "prompt": (
+                                "下面这段内容与查询相关吗？\n"
+                                f"内容：{str(c.get('text', ''))[:300]}"
+                            ),
+                        }
+                        for i, c in enumerate(candidates)
+                    ],
+                )
+                if jr:
+                    scored = [
+                        (i, extract_probability(jr, f"c{i}") or 0.0)
+                        for i in range(len(candidates))
+                    ]
+                    if any(s for _, s in scored):
+                        scored.sort(key=lambda x: x[1], reverse=True)
+                        return [candidates[i] for i, _ in scored[:top_k]]
+        except Exception as e:  # noqa: BLE001
+            logger.warning("rerank: Jev 打分失败，回退 LLM: %s", e)
+
+        # 2) 回退：原 LLM 打分路径
         pairs = "\n".join([
             f"[{i}] {c['text'][:300]}" for i, c in enumerate(candidates)
         ])

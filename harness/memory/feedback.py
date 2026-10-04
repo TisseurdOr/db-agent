@@ -135,14 +135,33 @@ def _parse_semantic_verdict(text: str) -> bool | None:
 
 
 def semantic_verify(question: str, sql: str) -> bool:
-    """语义门（可选）：用独立模型（Kimi）判断 SQL 是否真的回答了问题。
+    """语义门（可选）：判断 SQL 是否真的回答了问题。
 
-    跨模型 judge 的原因：同一家模型会偏袒自己的错误（六维线 5.3），用 Kimi
-    评 DeepSeek 才像外部评审。
-
-    降级：没配 KIMI_API_KEY 或调用失败时返回 True（跳过语义门，退回形式-only
-    质量门）——语义门是"更严"，不是"替代"，没了它不更糟。
+    优先级：
+    1. **Jev**（若配置）——noul 返回**校准概率**，比"让生成模型给个是/否"更稳且更省；
+    2. Kimi 跨模型 judge（原路径，规避同源偏袒，六维线 5.3）；
+    3. 都没配 / 失败 → 返回 True（跳过语义门，退回形式-only 质量门）。
     """
+    # 1) 优先 Jev：用校准概率判断"这条 SQL 是否回答了用户问题"
+    try:
+        from harness.jev_client import decide_sync, extract_probability
+        from harness.jev_client import is_enabled as jev_enabled
+
+        if jev_enabled():
+            jr = decide_sync(
+                f"用户问题：{question}\n生成的 SQL：\n{sql}",
+                [{
+                    "id": "answers_question",
+                    "type": "boolean",
+                    "prompt": "这条 SQL 是否真的回答了用户的问题？（答非所问=否）",
+                }],
+            )
+            prob = extract_probability(jr, "answers_question")
+            if prob is not None:
+                return prob >= 0.5
+    except Exception:
+        pass  # Jev 失败 → 继续走 Kimi
+
     api_key = os.getenv("KIMI_API_KEY", "")
     if not api_key:
         return True

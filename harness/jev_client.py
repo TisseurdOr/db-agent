@@ -181,6 +181,29 @@ async def decide(
         return None
 
 
+def decide_sync(
+    state: str,
+    questions: list[dict],
+    *,
+    timeout: float = 10.0,
+) -> dict | None:
+    """同步版 :func:`decide`——给同步调用链用（如 feedback.semantic_verify）。
+
+    注意：会阻塞当前线程（与它替换掉的同步 LLM/Kimi 调用行为一致）。
+    在 async 语境里请用 ``await decide(...)``。
+    """
+    provider = _provider()
+    if provider == "none":
+        return None
+    try:
+        if provider == "openrouter":
+            return _decide_openrouter(state, questions, timeout)
+        return _decide_native(state, questions, timeout)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("jev[%s]: 同步决策失败，回退: %s: %s", provider, type(e).__name__, e)
+        return None
+
+
 def extract_probability(result: dict | None, question_id: str) -> float | None:
     """取某个问题的概率（0~1）。兼容 decisions 的 answers 记录与其它形态。"""
     if not isinstance(result, dict):

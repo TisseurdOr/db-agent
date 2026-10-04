@@ -7,8 +7,12 @@
 **决策**：把 Jev 作为**可选决策 provider** 接入，遵守现有 provider 约定（可换、可降级）：
 
 1. **接入点（只接判断节点，不接生成）**
-   - Router 的 Agent 选择（`_route_via_jev`）——options = sql/hbase/hive/strategy/clarify/none
-   - 置信度门（`_assess_sql_confidence`）——scale 问题，直接取校准概率，可退休 `parse_confidence_result`
+   - Router 的 Agent 选择（`_route_via_jev`）——每个 Agent 一个 noul 问题 + 相对阈值
+   - 置信度门（`_assess_sql_confidence`）——noul 校准概率，可退休 `parse_confidence_result`
+   - 语义门（`feedback.semantic_verify`）——替代 Kimi judge（没 key 就放行的软门）
+   - 检索重排（`long_term_memory._rerank`）——每个候选一个 noul 概率，并行打分
+   - Reflection 快速门（`node_reflection`）——合格就跳过 LLM 审查（省一次调用），
+     不合格才调 LLM 拿具体改写建议（建议必须是可执行文字，Jev 生成不了）
 2. **不接**：SQL 生成、分析结论、知识库回答、HITL 文案——Jev 不生成文本
 3. **零侵入降级**：未配置 `JEV_API_KEY` → `is_enabled()=False`，完全走原 LLM 路径；调用失败/超时 → 返回 None 回退。**永不因 Jev 不可用而打断主流程**
 4. **可测**：HTTP 出口抽成 `_post_json`，测试 monkeypatch 即可，不联网
