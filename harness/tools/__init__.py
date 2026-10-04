@@ -19,6 +19,7 @@
 
 import functools
 import inspect
+import types
 from typing import get_type_hints
 
 
@@ -32,15 +33,27 @@ def tool(description: str):
       4. 函数名 → Tool name
     """
 
+    def _unwrap_optional(py_type):
+        """``list | None`` / ``Optional[list]`` → ``list``，让 Optional 参数拿到正确 JSON 类型。"""
+        origin = getattr(py_type, "__origin__", None)
+        if origin is None and not isinstance(py_type, types.UnionType):
+            return py_type
+        args = [a for a in getattr(py_type, "__args__", ()) if a is not type(None)]
+        return args[0] if len(args) == 1 else py_type
+
     def _python_type_to_json(py_type) -> str:
+        py_type = _unwrap_optional(py_type)
         origin = getattr(py_type, "__origin__", None)
         if origin is list or py_type is list:
             return "array"
+        if origin is dict or py_type is dict:
+            return "object"
         mapping = {str: "string", int: "integer", float: "number", bool: "boolean", dict: "object"}
         return mapping.get(py_type, "string") if py_type else "string"
 
     def _array_item_schema(py_type) -> dict:
         """list[str] / list[float] → JSON Schema items；裸 list 默认 string。"""
+        py_type = _unwrap_optional(py_type)
         args = getattr(py_type, "__args__", None)
         if args:
             return {"type": _python_type_to_json(args[0])}

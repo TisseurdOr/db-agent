@@ -30,7 +30,11 @@ from harness.tools.schema import (
     get_schema_summary,
     list_tables,
 )
-from harness.tools.script_gen import generate_python_script, generate_sql_script
+from harness.tools.script_gen import (
+    generate_insert_script,
+    generate_python_script,
+    generate_sql_script,
+)
 from harness.tools.warehouse import (
     DESCRIBE_WAREHOUSE_TABLE_TOOL,
     LIST_WAREHOUSE_TABLES_TOOL,
@@ -41,6 +45,7 @@ from harness.tools.warehouse import (
     query_period_comparison,
     query_warehouse,
 )
+from harness.tools.write import run_insert
 
 TOOLS = [
     LIST_TABLES_TOOL,
@@ -60,6 +65,8 @@ TOOLS = [
     match_sql_template.tool_schema,
     generate_sql_script.tool_schema,
     generate_python_script.tool_schema,
+    generate_insert_script.tool_schema,
+    run_insert.tool_schema,
     DISCOVER_SCHEMA_TOOL,
     LIST_WAREHOUSE_TABLES_TOOL,
     DESCRIBE_WAREHOUSE_TABLE_TOOL,
@@ -85,6 +92,8 @@ TOOL_HANDLERS = {
     "match_sql_template": match_sql_template,
     "generate_sql_script": generate_sql_script,
     "generate_python_script": generate_python_script,
+    "generate_insert_script": generate_insert_script,
+    "run_insert": run_insert,
     "discover_relevant_schema": discover_relevant_schema,
     "list_warehouse_tables": list_warehouse_tables,
     "describe_warehouse_table": describe_warehouse_table,

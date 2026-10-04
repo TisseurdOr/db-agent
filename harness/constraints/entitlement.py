@@ -42,7 +42,7 @@ _DEFAULT_ROLES: dict[str, dict] = {
         "name": "研发DBA",
         "allowed_tools": ["run_query", "list_tables", "describe_table",
                           "discover_relevant_schema",
-                          "search_knowledge_base", "read_document", "write_query",
+                          "search_knowledge_base", "read_document", "run_insert",
                           "run_hbase", "generate_hbase_query"],
         "db_tables": None,
         "db_row_filter": None,
@@ -316,6 +316,15 @@ def check_entitlement(
     if tool_name == "describe_table":
         if not table:
             return _deny("缺少表名。", "请先 list_tables，再 describe_table。")
+        table_check = check_table_access(user, table)
+        if not table_check.passed:
+            return table_check
+        return _ok()
+
+    if tool_name == "run_insert":
+        # 写操作的表级授权与读操作共用同一套白名单；dba 的 db_tables=None 表示全部表。
+        if not table:
+            return _deny("缺少目标表名。", "请提供要写入的表名。")
         table_check = check_table_access(user, table)
         if not table_check.passed:
             return table_check

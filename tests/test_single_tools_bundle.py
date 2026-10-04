@@ -21,6 +21,10 @@ def test_single_mode_covers_schema_linking_and_warehouse():
         "describe_warehouse_table",
         "query_warehouse",
         "query_period_comparison",
+        "generate_sql_script",
+        "generate_python_script",
+        "generate_insert_script",
+        "run_insert",
     }
     assert required <= names, f"single 模式缺少: {required - names}"
 

@@ -34,7 +34,11 @@ from harness.tools.schema import (
     discover_relevant_schema,
     list_tables,
 )
-from harness.tools.script_gen import generate_python_script, generate_sql_script
+from harness.tools.script_gen import (
+    generate_insert_script,
+    generate_python_script,
+    generate_sql_script,
+)
 from harness.tools.semantic_layer import QUERY_METRIC_TOOL, query_metric
 from harness.tools.warehouse import (
     DESCRIBE_WAREHOUSE_TABLE_TOOL,
@@ -46,10 +50,12 @@ from harness.tools.warehouse import (
     query_period_comparison,
     query_warehouse,
 )
+from harness.tools.write import run_insert
 
-# ── SQL Agent: 只查数据 ──
+# ── SQL Agent: 查数 + 生成变更脚本 ──
 
-SQL_AGENT_PROMPT = """你是 SQL Agent。你主要做七件事：
+SQL_AGENT_PROMPT = """你是 SQL Agent。你负责查询数据，以及把自然语言需求落成可 review 的配置脚本。
+你可用 12 类工具：
 1. discover_relevant_schema — 根据查询意图智能检索相关表和字段（优先调用）
 2. list_tables — 列出所有表名
 3. describe_table — 查看表结构（列名、类型）
@@ -59,6 +65,9 @@ SQL_AGENT_PROMPT = """你是 SQL Agent。你主要做七件事：
 7. list_warehouse_tables / describe_warehouse_table / query_warehouse — 查看并查询独立 Olist 数仓
 8. query_period_comparison — 直接查询 Olist ADS 两期对比；用户给出明确 period_key 时优先使用
 9. search_memory — 检索长期对话记忆（Self-Query）；当任务含「上次/之前/刚才」或上下文口径不足时调用
+10. generate_sql_script / generate_python_script — 把已确认的 SELECT 存成可重复运行的脚本
+11. generate_insert_script — 为 INSERT 生成默认 dry-run 的 Python 脚本（只生成，不执行）
+12. run_insert — 真正插入 1 行，会暂停等待人工审批（HITL）；仅 dba 角色可用
 
 取数优先级：
 1. 指标聚合（「XX 按 YY 分组」，如「每个区域的销售额」「各品类订单量」）→ 用 query_metric，代码沿外键拼多表 JOIN，不会写错
@@ -70,7 +79,8 @@ query_metric 可用指标：销售额/GMV/净GMV/订单量/客单价/毛利率�
 Olist 数仓在独立 warehouse.db 中，包含 ODS/DIM/DWD/DWS/ADS 五层。遇到 Olist、电商、数仓分层或两期对比问题，先用 list_warehouse_tables 查看表，再用 query_warehouse；明确的双期指标优先调用 query_period_comparison。业务查询优先 ADS，下钻 DWS，再查 DWD，不直接查 ODS。指标名使用 gross_sales / net_sales / order_count / item_count，period_key 示例为 2018-H1、2018-Q2、2018-07、2018。
 
 你不会做数据分析、不会解释趋势、不会给业务建议。
-你的唯一职责：准确理解查询意图，写出正确的 SQL，返回查询结果。
+你的职责：准确理解查询意图，查询数据；用户要做配置变更时，先生成可 review 的脚本。
+只有用户明确要求「直接写库」时才调用 run_insert——它会暂停等人工批准，失败或拒绝都不改数据。
 
 操作顺序：
 - 若上下文已有 [历史口径/指代消解]，优先按其中的地区/状态/时间口径写 SQL
@@ -79,6 +89,12 @@ Olist 数仓在独立 warehouse.db 中，包含 ODS/DIM/DWD/DWS/ADS 五层。遇
 - 如果 schema 不够，再调 describe_table 补充
 - 指代不清或需要跨会话口径时调 search_memory，再写 SQL
 - 最后调 run_query 执行
+
+写入/配置开发流程（必须按这个顺序）：
+1. 先用 SELECT 验证目标表、列名和业务键；确认结果符合用户描述
+2. 调 generate_insert_script 生成插入脚本，脚本默认 dry-run（事务试插后回滚）
+3. 用户看完脚本、明确要求直接执行时，才调 run_insert；批准前不写库
+4. 不要生成或执行 UPDATE / DELETE / DROP / ALTER；不要编造用户没给的字段值
 
 如果上下文里有 [相似问题的已验证 SQL 参考]：优先模仿其中的表连接方式、
 字段名和枚举值写法——它们来自同一个库，已验证正确。
@@ -101,6 +117,7 @@ sql_agent = ConfiguredAgent(
         LIST_WAREHOUSE_TABLES_TOOL, DESCRIBE_WAREHOUSE_TABLE_TOOL, QUERY_WAREHOUSE_TOOL,
         QUERY_PERIOD_COMPARISON_TOOL, search_memory.tool_schema,
         generate_sql_script.tool_schema, generate_python_script.tool_schema,
+        generate_insert_script.tool_schema, run_insert.tool_schema,
     ],
     handlers={
         "discover_relevant_schema": discover_relevant_schema,
@@ -116,6 +133,8 @@ sql_agent = ConfiguredAgent(
         "search_memory": search_memory,
         "generate_sql_script": generate_sql_script,
         "generate_python_script": generate_python_script,
+        "generate_insert_script": generate_insert_script,
+        "run_insert": run_insert,
     },
 )
 

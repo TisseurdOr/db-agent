@@ -18,7 +18,7 @@ import os
 import time
 
 # 写/副作用类工具名——只有这些才做幂等去重
-DEFAULT_WRITE_TOOLS = ("save_to_memory", "run_hbase")
+DEFAULT_WRITE_TOOLS = ("save_to_memory", "run_hbase", "run_insert")
 
 
 class IdempotencyGuard:

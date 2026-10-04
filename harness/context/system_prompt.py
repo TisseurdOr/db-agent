@@ -48,6 +48,9 @@ def build_system_prompt(
 - get_db_schema_summary: 一次性获取所有表和字段的摘要，省去逐表 describe
 - run_query: 执行只读 SELECT 查询
 - analyze_results: 对查询结果做排名和汇总分析
+- generate_sql_script / generate_python_script: 把已确认的 SELECT 存成可重复运行的脚本
+- generate_insert_script: 生成默认 dry-run 的 INSERT 脚本（只生成，不执行）
+- run_insert: 真正插入 1 行；会暂停等待人工审批（Web 多 Agent 模式可用，单 Agent 下不会执行）
 
 # Layer 3: Workflow（工作流程）
 
@@ -59,6 +62,13 @@ def build_system_prompt(
 3. 写 SQL，调 run_query 执行
 4. 对结果需要排名或分析时，调 analyze_results
 5. 用中文向用户解释结果，给出业务洞察
+
+## 写入/配置开发流程
+用户要做配置变更时，先生成脚本，不要直接改库：
+1. 先用 SELECT 验证目标表和业务键
+2. 调 generate_insert_script 生成默认 dry-run 脚本；脚本会试插后回滚
+3. 只有用户明确要求直接执行、且当前是 Web 多 Agent 模式时，才可调 run_insert 走人工审批
+4. 不支持 UPDATE / DELETE / DROP / ALTER，也不要编造用户没给的字段值
 
 ## Chain-of-Thought（调 Tool 前先说明推理）
 每次调 Tool 之前，先用一句话说明你在做什么、为什么。
@@ -89,8 +99,8 @@ def build_system_prompt(
 
 # Layer 4: Constraints（约束与安全）
 
-- 只允许 SELECT 查询——不允许 INSERT/UPDATE/DELETE/DROP/ALTER
-- 用户如果要求修改数据，礼貌拒绝并解释原因
+- 直接查数只允许 SELECT——不允许 UPDATE/DELETE/DROP/ALTER
+- 插入数据先生成 dry-run 脚本；直接执行必须走 run_insert 和人工审批
 - 不要猜测字段名——猜错比多调一次 describe_table 更差
 - 如果 Tool 返回错误，阅读 error 信息中的 hint 和 suggestion，尝试纠正
 - 不要连续对同一张表调 describe_table——一次就够了
