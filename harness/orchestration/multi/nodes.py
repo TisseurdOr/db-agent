@@ -140,6 +140,7 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
     override = None if replan_feedback else route_override(state["query"], prev_agents=prev_agents)
     route_latency = time.time() - t0
     router_usage: dict[str, float] = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
+    used_jev = False          # 本次路由是否由 Jev 决策（供日志/统计标注）
     cached_plan = None
     plan_data = {}  # 硬规则路径不经 LLM，后续读 confidence 前必须有默认值
 
@@ -206,8 +207,15 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
                 router_system = f"{ROUTER_PROMPT}\n\n{mem_block}"
 
             # 优先 Jev 做 Agent 选择（校准概率、快/便宜两个量级）
+            t_jev = time.time()
             plan_data = await _route_via_jev(state["query"], mem_block)
-            router_usage: dict[str, float] = {"input_tokens": 0, "output_tokens": 0, "turns": 0, "elapsed": 0.0}
+            used_jev = bool(plan_data)
+            router_usage: dict[str, float] = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "turns": 0,
+                "elapsed": time.time() - t_jev if used_jev else 0.0,
+            }
 
             if not plan_data:
                 # 未配置 Jev / 取不到决策 → 原 LLM 规划路径
@@ -293,6 +301,10 @@ async def _node_router_body(state: MultiAgentState, config: RunnableConfig) -> d
         assert router_cache is not None
         route_source = "cache"
         print(f"   💾 缓存命中 ({router_cache.hit_rate})")
+    elif used_jev:
+        # Jev 决策（不消耗 LLM token，tokens 恒为 0）
+        route_source = "jev"
+        print(f"   🧠 Jev 路由 ({router_usage.get('elapsed', 0):.2f}s · 0t)")
     else:
         route_source = "llm"
         print(f"   🤖 LLM 路由 ({router_usage.get('elapsed', 0):.1f}s · {router_usage.get('input_tokens', 0)}+{router_usage.get('output_tokens', 0)}t)")
