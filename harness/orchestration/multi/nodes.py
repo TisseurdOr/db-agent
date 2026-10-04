@@ -445,7 +445,27 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
 
     from harness.memory.preturn_recall import format_memory_for_sql
     mem_ctx = format_memory_for_sql(state.get("_recalled_memories") or "")
-    context = "\n\n".join(p for p in (schema_ctx, fewshot, mem_ctx) if p)
+
+    # 模板预注入：命中指标模板就把现成 SQL 交给 Agent（确定性优先，省一轮思考）。
+    # 此前只有 single 模式（main.py）做了这件事，multi 模式漏了。
+    template_ctx = ""
+    try:
+        from harness.context.template_matcher import get_template_matcher
+
+        tr = get_template_matcher().match(state.get("query", "") or task)
+        if tr.matched:
+            template_ctx = (
+                f"[SQL 模板命中] 指标「{tr.metric_name}」\n"
+                f"预填 SQL: {tr.sql}\n"
+                "可直接执行此 SQL，或按具体情况微调后执行（不必重新探索表结构）。"
+            )
+            if tr.caveats:
+                template_ctx += f"\n注意事项: {tr.caveats}"
+            print(f"   🧩 模板命中: {tr.metric_name}")
+    except Exception:
+        pass
+
+    context = "\n\n".join(p for p in (template_ctx, schema_ctx, fewshot, mem_ctx) if p)
     result, usage = await _run_agent_with_timeout(sql_agent, client, task, model, span, "SQL", context=context, config=config)
     trace.finish_span(span, usage, error=span.error)
     print(f"✅ SQL Agent ({_fmt_time(span.elapsed)} · {span.total_tokens}t · {usage['turns']}轮)")
