@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_NATIVE_BASE = "https://api.typesafe.ai/v1"
 _DEFAULT_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-_DEFAULT_OPENROUTER_MODEL = "typesafe/jev-router"
+_DEFAULT_OPENROUTER_MODEL = "typesafe/jev-1.13"
+_DEFAULT_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 
 _JSON_SYSTEM_PROMPT = (
     "你是决策模型 Jev，只做判断、不写文章。"
@@ -79,6 +80,22 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+def _to_jev_questions(questions: list[dict]) -> dict:
+    """把调用方的 [{id,type,prompt}] 转成 Jev decisions 的形状。
+
+    Jev 的 questions 是 **record**（不是数组），每种问题必填 instructions；
+    判别字段 type 取 noul / choice / score。本项目用的是**概率判断**，
+    所以 boolean 与 scale 都映射为 noul（返回 0~1 校准概率）。
+    """
+    out: dict[str, dict] = {}
+    for q in questions:
+        qid = str(q.get("id", ""))
+        if not qid:
+            continue
+        out[qid] = {"type": "noul", "instructions": q.get("prompt", "")}
+    return out
+
+
 def _build_prompt(state: str, questions: list[dict]) -> str:
     """把「状态 + 类型化问题」拼成给 chat 模型的 prompt。"""
     lines = ["# 状态", state, "", "# 问题"]
@@ -101,42 +118,26 @@ def _build_prompt(state: str, questions: list[dict]) -> str:
 
 
 def _decide_openrouter(state: str, questions: list[dict], timeout: float) -> dict | None:
-    """走 OpenRouter 的 OpenAI 兼容 chat/completions。"""
+    """走 OpenRouter 的 Jev **decisions** 端点（不是 chat/completions）。
+
+    ⚠️ 决策模型必须用 /api/alpha/decisions：用 chat/completions 会报
+    "is a decisions model and cannot be used with the chat/completions endpoint"。
+    """
     key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    base = (
-        os.getenv("OPENROUTER_BASE_URL", "").strip() or _DEFAULT_OPENROUTER_BASE
-    ).rstrip("/")
+    url = (
+        os.getenv("OPENROUTER_DECISIONS_URL", "").strip() or _DEFAULT_DECISIONS_URL
+    )
     model = os.getenv("JEV_MODEL", "").strip() or _DEFAULT_OPENROUTER_MODEL
 
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    # OpenRouter 建议带上来源标识（可选，利于排行榜统计）
     if os.getenv("OPENROUTER_SITE_URL", "").strip():
         headers["HTTP-Referer"] = os.getenv("OPENROUTER_SITE_URL", "").strip()
     if os.getenv("OPENROUTER_SITE_NAME", "").strip():
         headers["X-Title"] = os.getenv("OPENROUTER_SITE_NAME", "").strip()
 
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _JSON_SYSTEM_PROMPT},
-            {"role": "user", "content": _build_prompt(state, questions)},
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0,
-    }
-    data = _post_json(f"{base}/chat/completions", payload, headers, timeout)
-    content = ""
-    try:
-        content = data["choices"][0]["message"]["content"] or ""
-    except (KeyError, IndexError, TypeError):
-        return None
-    parsed = _extract_json(content)
-    if parsed is None:
-        return None
-    # 统一成与原生通道一致的 {answers: [...]} 形态
-    if "answers" not in parsed:
-        parsed = {"answers": [parsed]}
-    return parsed
+    payload = {"model": model, "state": state, "questions": _to_jev_questions(questions)}
+    data = _post_json(url, payload, headers, timeout)
+    return data if isinstance(data, dict) else None
 
 
 def _decide_native(state: str, questions: list[dict], timeout: float) -> dict | None:
@@ -181,18 +182,24 @@ async def decide(
 
 
 def extract_probability(result: dict | None, question_id: str) -> float | None:
-    """从 Jev 返回里取出某个问题的概率（0~1）。取不到返回 None。"""
+    """取某个问题的概率（0~1）。兼容 decisions 的 answers 记录与其它形态。"""
     if not isinstance(result, dict):
         return None
 
     def _num(node: dict) -> float | None:
-        p = node.get("probability", node.get("confidence", node.get("score")))
-        if isinstance(p, (int, float)):
-            return max(0.0, min(1.0, float(p)))
+        for k in ("noul", "probability", "confidence", "score", "value"):
+            v = node.get(k)
+            if isinstance(v, (int, float)):
+                return max(0.0, min(1.0, float(v)))
         return None
 
     answers = result.get("answers")
-    if isinstance(answers, list):
+    if isinstance(answers, dict):  # decisions 端点：{qid: {"type":"noul","noul":0.7}}
+        node = answers.get(question_id)
+        if isinstance(node, dict):
+            return _num(node)
+        return None
+    if isinstance(answers, list):  # 兼容形如 [{"id":...,"probability":...}]
         for a in answers:
             if isinstance(a, dict) and a.get("id") == question_id:
                 return _num(a)

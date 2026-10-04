@@ -29,10 +29,7 @@ async def test_router_maps_jev_decision_to_plan(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
     async def fake_decide(state, questions, **kw):
-        return {"answers": [
-            {"id": "need_hbase", "choice": "true"},
-            {"id": "route_confidence", "probability": 0.92},
-        ]}
+        return {"answers": {"need_hbase": {"type": "noul", "noul": 0.92}}}
 
     monkeypatch.setattr(jev_client, "decide", fake_decide)
     from harness.orchestration.multi.nodes import _route_via_jev
@@ -47,11 +44,10 @@ async def test_router_supports_multiple_agents(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
     async def fake_decide(state, questions, **kw):
-        return {"answers": [
-            {"id": "need_sql", "choice": "true"},
-            {"id": "need_analysis", "choice": "true"},
-            {"id": "route_confidence", "probability": 0.9},
-        ]}
+        return {"answers": {
+            "need_sql": {"type": "noul", "noul": 0.62},
+            "need_analysis": {"type": "noul", "noul": 0.60},
+        }}
 
     monkeypatch.setattr(jev_client, "decide", fake_decide)
     from harness.orchestration.multi.nodes import _route_via_jev
@@ -64,14 +60,11 @@ async def test_router_low_confidence_marks_low(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
     async def fake_decide(state, questions, **kw):
-        return {"answers": [
-            {"id": "need_sql", "choice": "true"},
-            {"id": "route_confidence", "probability": 0.2},
-        ]}
+        return {"answers": {"need_sql": {"type": "noul", "noul": 0.9}}}
 
     monkeypatch.setattr(jev_client, "decide", fake_decide)
     from harness.orchestration.multi.nodes import _route_via_jev
-    out = await _route_via_jev("那个东西怎么样")
+    out = await _route_via_jev("帮我看看数据")
     assert out["confidence"] == "low"
 
 
@@ -80,7 +73,7 @@ async def test_router_chitchat_gives_empty_plan(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
     async def fake_decide(state, questions, **kw):
-        return {"answers": [{"id": "is_chitchat", "choice": "true"}]}
+        return {"answers": {"need_sql": {"type": "noul", "noul": 0.02}}}
 
     monkeypatch.setattr(jev_client, "decide", fake_decide)
     from harness.orchestration.multi.nodes import _route_via_jev

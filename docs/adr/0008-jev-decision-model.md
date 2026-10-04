@@ -13,6 +13,8 @@
 3. **零侵入降级**：未配置 `JEV_API_KEY` → `is_enabled()=False`，完全走原 LLM 路径；调用失败/超时 → 返回 None 回退。**永不因 Jev 不可用而打断主流程**
 4. **可测**：HTTP 出口抽成 `_post_json`，测试 monkeypatch 即可，不联网
 
-**接入通道**：优先 OpenRouter（`OPENROUTER_API_KEY` + `typesafe/jev-router`，一个 key 即可）；也可用 TypeSafe 原生 `/decide`。两条通道对调用方完全透明，`decide()` 内部按环境变量分派。
+**接入通道**：优先 OpenRouter（`OPENROUTER_API_KEY` + `typesafe/jev-1.13`）；也可用 TypeSafe 原生 `/decide`。两条通道对调用方透明。
+
+**踩坑记录**：① OpenRouter 上 `typesafe/jev-router` 是**模型路由器**（把请求转发给下游 LLM），给不了校准概率；真正要的是 **`typesafe/jev-1.13`**（decisions 模型，`provider: TypeSafe`）。② decisions 模型**不能**用 `/chat/completions`，必须走 `/api/alpha/decisions`。③ 请求体：`{model, state, questions}`，其中 `questions` 是 **record**（不是数组），每题 `{type, instructions}`，`type ∈ {noul, choice, score}`；`noul` 返回 0~1 概率。④ `noul` 概率**绝对值偏低**，用固定 0.5 阈值会大面积漏选，改用**相对阈值**（≥0.65×最高分 且 ≥0.15）。
 
 **取舍**：Jev 尚未完全开源、需申请 Key，是外部依赖；换来的是判断节点更快更便宜，且**概率是校准的**（LLM 自评分数并不校准）。因此它是「增强」，不是「替换模型」。

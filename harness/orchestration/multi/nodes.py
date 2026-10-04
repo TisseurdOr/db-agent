@@ -459,25 +459,34 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
         return replan
     # SQL 生成后先过置信度门，再决定下一步
     return _next_step_after_sql(state, results)
-# 各专职 Agent 的职责（拼进 Jev 的"是非题"，让它有依据地判断）
+# 各专职 Agent 的职责（拼进 Jev 的 noul 问题）。描述要能互相区分，
+# 否则 Jev 会把「销售额」也判给 hive（Olist 数仓）——实测过。
 _ROUTE_AGENT_MENU: dict[str, str] = {
-    "sql": "结构化数据查询（订单/员工/部门/产品/客户）",
-    "analysis": "综合分析与建议、或对话历史/元问题（自己不查库）",
-    "strategy": "公司制度政策（提成/年假/考勤/定价/战略）",
-    "hbase": "HBase Shell 命令生成",
-    "hive": "Olist 数仓查询 / Hive 方言",
+    "sql": "查本地业务库 demo.db（部门/员工/订单/客户/产品等业务数据）",
+    "analysis": "综合分析、给建议、画图表；或回答对话历史元问题（自己不查库）",
+    "strategy": "查公司制度/政策文档（提成比例、年假天数、考勤、定价政策）",
+    "hbase": "生成 HBase Shell 命令（用户明确提到 HBase/scan/get/put）",
+    "hive": "查 Olist 公开电商数仓（用户明确提到 Olist/Hive/Impala/方言）",
 }
+
+# 相对阈值：Jev 的 noul 概率**绝对值偏低**（相关项常在 0.3~0.8），
+# 用固定 0.5 会大面积漏选。实测「≥ 0.65×最高分 且 ≥ 0.15」最稳。
+_JEV_KEEP_RATIO = 0.65
+_JEV_KEEP_FLOOR = 0.15
+_JEV_NONE_BELOW = 0.15
 
 
 async def _route_via_jev(query: str, mem_block: str = "") -> dict:
-    """用 Jev 做 Agent 选择。未启用/失败 → 返回 {} 走 LLM 回退。
+    """用 Jev（decisions 端点）做 Agent 选择。未启用/失败 → 返回 {} 走 LLM 回退。
 
-    关键设计：用**每个 Agent 一个是非题**，而不是"选一个"——因为一个请求可能需要
-    多个 Agent（如「SQL 查询 + analysis 画图」），单选表达不了多 Agent 计划。
-    plan 里的 task 用原始 query（各 Agent 本就按 query 工作），故不依赖生成能力。
+    设计要点：
+    - 用**每个 Agent 一个 noul 问题**（要 / 不要 + 概率），而不是"选一个"——
+      因为一个请求可能要多个 Agent（「画图展示销售额」= sql + analysis）。
+    - 用**相对阈值**挑 Agent，不用固定 0.5（noul 概率绝对值偏低，实测）。
+    - 模糊问题（缺对象/时间/维度）标记 confidence=low，交给下游澄清门。
     """
     from harness.jev_client import decide as jev_decide
-    from harness.jev_client import extract_bool, extract_probability
+    from harness.jev_client import extract_probability
     from harness.jev_client import is_enabled as jev_enabled
 
     if not jev_enabled():
@@ -487,7 +496,7 @@ async def _route_via_jev(query: str, mem_block: str = "") -> dict:
     if mem_block:
         state_text = f"{state_text}\n\n{mem_block}"
 
-    questions: list[dict] = [
+    questions = [
         {
             "id": f"need_{agent}",
             "type": "boolean",
@@ -495,39 +504,30 @@ async def _route_via_jev(query: str, mem_block: str = "") -> dict:
         }
         for agent, desc in _ROUTE_AGENT_MENU.items()
     ]
-    questions += [
-        {
-            "id": "is_chitchat",
-            "type": "boolean",
-            "prompt": "这是闲聊/能力介绍（如「你好」「你能做什么」），不需要任何数据查询吗？",
-        },
-        {
-            "id": "is_vague",
-            "type": "boolean",
-            "prompt": "问题太模糊、缺关键信息（对象/时间/指标不明），需要先向用户澄清吗？",
-        },
-        {
-            "id": "route_confidence",
-            "type": "scale",
-            "min": 0,
-            "max": 1,
-            "prompt": "你对以上判断的把握有多大？",
-        },
-    ]
 
     result = await jev_decide(state_text, questions)
     if not result:
         return {}
 
-    if extract_bool(result, "is_chitchat"):
+    probs = {
+        a: (extract_probability(result, f"need_{a}") or 0.0) for a in _ROUTE_AGENT_MENU
+    }
+    best = max(probs.values())
+
+    # 全部概率都很低 → 闲聊/无需查询（实测「你好呀」最高只有 0.06）
+    if best < _JEV_NONE_BELOW:
         return {"plan": [], "confidence": "high"}
 
-    agents = [a for a in _ROUTE_AGENT_MENU if extract_bool(result, f"need_{a}")]
-    prob = extract_probability(result, "route_confidence")
-    low = extract_bool(result, "is_vague") is True or (prob is not None and prob < 0.5)
+    agents = [
+        a for a, v in probs.items() if v >= max(_JEV_KEEP_RATIO * best, _JEV_KEEP_FLOOR)
+    ]
+    # 顺序按职责表（sql → analysis → …），保证 plan[0] 是主力 Agent
+    agents = [a for a in _ROUTE_AGENT_MENU if a in agents]
+
+    # 模糊问题 → low，交给下游 clarify（复用项目已有的硬规则判断）
+    low = incomplete_query_reason(query) is not None or best < 0.25
 
     if not agents:
-        # 没判出任何 Agent：模糊 → 给个最佳猜测 + low（节点会转澄清）；否则交回兜底链
         if low:
             return {"plan": [{"agent": "sql", "task": query}], "confidence": "low"}
         return {}
