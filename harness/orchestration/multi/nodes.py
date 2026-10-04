@@ -480,7 +480,16 @@ async def _route_via_jev(query: str, mem_block: str = "") -> dict:
             "id": "next_agent",
             "type": "choice",
             "options": ["sql", "hbase", "hive", "strategy", "clarify", "none"],
-            "prompt": "这条问题该交给哪个专职 Agent？none = 闲聊/无需查数据。",
+            "prompt": (
+                "这条问题该交给哪个 Agent？\n"
+                "sql=结构化数据查询（订单/员工/部门/产品/客户）；"
+                "strategy=公司制度政策（提成/年假/考勤/定价/战略）；"
+                "hbase=HBase Shell 命令；hive=Olist 数仓/Hive 方言；"
+                "analysis=对话历史元问题或纯分析；clarify=问题太模糊缺关键信息；"
+                "none=闲聊/能力介绍（无需查数据）。\n"
+                "注意：提到「制度/政策/提成/年假」选 strategy，别选 clarify；"
+                "「你好/你能做什么」选 none。"
+            ),
         },
         {
             "id": "route_confidence",

@@ -10,6 +10,13 @@ from harness import jev_client
 
 # ── Router：Agent 选择 ──
 
+@pytest.fixture(autouse=True)
+def _clear_jev_env(monkeypatch):
+    """每个用例先清空 Jev 相关环境变量，避免 .env 里的 key 影响断言。"""
+    for var in ("OPENROUTER_API_KEY", "JEV_API_KEY", "JEV_MODEL", "JEV_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
 @pytest.mark.asyncio
 async def test_router_disabled_returns_empty(monkeypatch):
     monkeypatch.delenv("JEV_API_KEY", raising=False)
