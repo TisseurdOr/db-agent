@@ -8,10 +8,10 @@
   <a href="README.en.md"><img src="https://img.shields.io/badge/lang-English-2e86de?style=for-the-badge" alt="English"></a>
 </p>
 
-### 自然语言数据库分析 Harness
+### 用中文问数 · 自动查库 · 给出结论
 
-问一句中文，查出 SQLite / HBase / Hive 的数，带权限、自愈和评测。
-**Agent = 模型 + Harness。** 本仓库做的是后者。
+**db-agent 是一个自然语言数据分析 Agent。** 你提出业务问题（比如「上个月哪个部门卖得最好？」），
+它自动写 SQL、在数据库上执行、检查数据质量，最后给出带图表的结论。
 
 [![Test](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml/badge.svg)](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
@@ -26,12 +26,28 @@
 
 ---
 
-这不是一个「让模型写 SQL」的玩具，而是一套 **让模型写 SQL 不出事** 的工程系统：工具真执行、权限硬拦截、失败可自愈、结果可评测。换 DeepSeek / Claude 只改 API，不改这套骨架。对照见 [`HARNESS.md`](HARNESS.md)。
+## 简介
+
+db-agent 接受中文自然语言提问，产出数据结论。一次查询的完整链路是：
+**理解意图 → 选数据源 → 写并执行 SQL → 检查数据质量 → 分析出结论**。
+
+- **数据源**：SQLite（本地真实库）、HBase（内存模拟器，API 对齐）、Olist 五层数仓（真实公开数据集，`db/warehouse.db`）
+- **编排**：LangGraph 上 6 个专职 Agent（路由 / SQL / 分析 / 制度 / HBase / 数仓），另提供单 Agent 模式
+- **权限**：5 角色 RBAC，收口在工具 / 表 / 行 / 文档四级；敏感列与 HBase 写操作需人工审批
+- **可靠性**：API 重试、SQL 自愈、失败重规划、熔断与幂等
+- **记忆**：短期对话摘要 + 长期向量记忆 + 成功 SQL 回流自学习
+- **可观测**：链路 Trace、token 计费、47 条评测用例 + 30 条 Golden Set
+- **入口**：CLI、Streamlit、FastAPI + React 三种
+
+**技术特点**：把「判断」和「写作」分开。路由选哪个 Agent、SQL 有多大把握、检索怎么排序这类**判断**，
+交给专用决策模型 **Jev**（输出校准概率）；写 SQL 和写结论仍由主 LLM 完成。换主模型只改环境变量。
+
+对照实现细节见 [`HARNESS.md`](HARNESS.md)。
 
 > **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端），已上线。
 > SQLite 为真实本地库；**HBase 是本地内存模拟器**（API 对齐，无真实集群）。
 > **Hive/数仓 agent 查的是真实的 Olist 五层数仓**（`db/warehouse.db`，由 `scripts/build_olist_warehouse.py` 从公开数据集构建），另提供 HiveQL 语法模板；接真实 Hive 集群只需换连接器。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **531** 条）。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **587** 条）。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
@@ -233,7 +249,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
 | **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
-| **五 · 工程化** | demo → 产品 | `db-agent` CLI；531 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；587 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
 
 ### 设计取舍（为什么这样）
@@ -409,7 +425,7 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 ### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例（531，默认不跑 live）
+pytest tests/ -v                               # 全量离线用例（587，默认不跑 live）
 pytest tests/ -m live                          # 真实 LLM 端到端 smoke（需 API key，默认排除）
 pytest tests/ --cov --cov-fail-under=60        # 带覆盖率门禁（CI 已接入）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）

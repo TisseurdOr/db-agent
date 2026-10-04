@@ -8,10 +8,10 @@
   <a href="README.en.md"><img src="https://img.shields.io/badge/lang-English-2e86de?style=for-the-badge" alt="English"></a>
 </p>
 
-### Natural-language database analytics harness
+### Ask in plain language · Get data answers with charts
 
-Ask in plain language, query SQLite / HBase / Hive — with permissions, self-healing, and evaluation.
-**Agent = Model + Harness.** This repo builds the latter.
+**db-agent is a natural-language data analysis agent.** Ask a business question (e.g. "Which department sold the most last month?"),
+and it writes the SQL, runs it against the database, checks data quality, and returns a conclusion with charts.
 
 [![Test](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml/badge.svg)](https://github.com/TisseurdOr/db-agent/actions/workflows/test.yml)
 [![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org)
@@ -26,12 +26,27 @@ Ask in plain language, query SQLite / HBase / Hive — with permissions, self-he
 
 ---
 
-This is not a toy that “lets a model write SQL.” It is an engineering system that **lets a model write SQL without going wrong**: real tool execution, hard permission checks, recoverable failures, and evaluable results. Swap DeepSeek / Claude by changing the API — the harness stays. See [`HARNESS.md`](HARNESS.md).
+## Overview
+
+db-agent takes a plain-language question and returns a data-backed answer. One query goes through:
+**understand intent → pick a data source → write & run SQL → check data quality → analyze and answer**.
+
+- **Data sources**: SQLite (real local DB), HBase (in-memory simulator, API-aligned), Olist 5-layer warehouse (real public dataset, `db/warehouse.db`)
+- **Orchestration**: 6 specialist agents on LangGraph (router / SQL / analysis / policy / HBase / warehouse), plus a single-agent mode
+- **Permissions**: 5-role RBAC enforced at tool / table / row / document level; sensitive columns and HBase writes require human approval
+- **Reliability**: API retries, SQL self-healing, replanning on failure, circuit breaker and idempotency
+- **Memory**: short-term conversation summaries, long-term vector memory, self-learning from successful SQL
+- **Observability**: traces, token cost accounting, 47 eval cases + a 30-case golden set
+- **Interfaces**: CLI, Streamlit, FastAPI + React
+
+**Technical note**: decisions and writing are separated. Picking the right agent, scoring SQL confidence and reranking retrieval go to a dedicated decision model **Jev** (calibrated probabilities); writing SQL and the final answer stay with the main LLM. Swapping the main model is an env-var change.
+
+See [`HARNESS.md`](HARNESS.md) for implementation details.
 
 > **Scope**: Engineering mechanisms follow a production mindset (permissions / HITL / self-healing / observability / swappable backends), and the project is deployed live.
 > SQLite is a real local DB; **HBase is an in-memory simulator** (API-aligned, no real cluster).
 > The **Hive/warehouse agent queries a real Olist 5-layer warehouse** (`db/warehouse.db`, built from the public dataset by `scripts/build_olist_warehouse.py`) plus HiveQL grammar templates; swap in a real Hive cluster when needed.
-> All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **531** cases).
+> All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **587** cases).
 > Web can demo the full path: optional `WEB_API_TOKEN` auth; sessions default to memory, or Redis when `REDIS_URL` is set.
 > Vector store supports ChromaDB / Milvus (`VECTOR_DB` switch); Redis / Milvus are “optional backends + auto fallback.”
 
@@ -233,7 +248,7 @@ Single-mode differences: no Router / DQ / Confidence Gate / Analysis / Reflectio
 | **2 · Multi Agent** | Multi-engine coordination | LangGraph 10 nodes / 6 agents; Router 4-layer short-circuit; failure replan | Multi-engine orchestration |
 | **3 · Security** | Prompts cannot stop privilege abuse | 5-role RBAC; row-level WHERE rewrite; three guardrails; HITL `interrupt()` | Permissions at the tool layer |
 | **4 · Reliability** | Survive hangs without burning money | Retry → SQL heal → replan → **circuit / idempotency / alerts**; SSE disconnect handling | Reliability loop |
-| **5 · Productization** | Demo → product | `db-agent` CLI; 531 offline tests; 47 evals + Golden Set; Redis / Milvus switch; quality gates | Demoable, CI-ready shape |
+| **5 · Productization** | Demo → product | `db-agent` CLI; 587 offline tests; 47 evals + Golden Set; Redis / Milvus switch; quality gates | Demoable, CI-ready shape |
 
 
 ### Design choices (why)
@@ -404,7 +419,7 @@ Permissions live in `agent_roles` / `agent_users` — edit tables to change beha
 ### Eval
 
 ```bash
-pytest tests/ -v                               # full offline suite (531; live excluded)
+pytest tests/ -v                               # full offline suite (587; live excluded)
 pytest tests/ -m live                          # real-LLM end-to-end smoke (needs API key)
 pytest tests/ --cov --cov-fail-under=60        # with coverage gate (wired into CI)
 python tests/eval_runner.py --fast             # guardrail cases (zero API, in CI)
