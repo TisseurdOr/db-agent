@@ -17,6 +17,7 @@ Jev **不生成文本**：输入「状态(state) + 类型化问题(questions)」
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -170,9 +171,10 @@ async def decide(
     if provider == "none":
         return None
     try:
+        # _post_json 是同步 httpx——丢到线程池，别阻塞事件循环（agent 是并发的）
         if provider == "openrouter":
-            return _decide_openrouter(state, questions, timeout)
-        return _decide_native(state, questions, timeout)
+            return await asyncio.to_thread(_decide_openrouter, state, questions, timeout)
+        return await asyncio.to_thread(_decide_native, state, questions, timeout)
     except Exception as e:  # noqa: BLE001 - 任何失败都回退，不打断主流程
         logger.warning("jev[%s]: 决策调用失败，回退到原路径: %s: %s", provider, type(e).__name__, e)
         return None
@@ -199,6 +201,28 @@ def extract_probability(result: dict | None, question_id: str) -> float | None:
     node = result.get(question_id)
     if isinstance(node, dict):
         return _num(node)
+    return None
+
+
+_TRUE_WORDS = {"true", "yes", "y", "1", "是", "需要", "有"}
+_FALSE_WORDS = {"false", "no", "n", "0", "否", "不需要", "无"}
+
+
+def extract_bool(result: dict | None, question_id: str) -> bool | None:
+    """从 Jev 返回里取某个"是非题"的答案。取不到返回 None。
+
+    兼容两种形态：choice 是 true/false（或 yes/no），或给了 probability（>=0.5 为真）。
+    """
+    ch = extract_choice(result, question_id)
+    if ch is not None:
+        low = ch.strip().lower()
+        if low in _TRUE_WORDS:
+            return True
+        if low in _FALSE_WORDS:
+            return False
+    prob = extract_probability(result, question_id)
+    if prob is not None:
+        return prob >= 0.5
     return None
 
 

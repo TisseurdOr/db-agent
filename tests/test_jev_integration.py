@@ -25,12 +25,12 @@ async def test_router_disabled_returns_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_router_maps_jev_choice_to_plan(monkeypatch):
+async def test_router_maps_jev_decision_to_plan(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
     async def fake_decide(state, questions, **kw):
         return {"answers": [
-            {"id": "next_agent", "choice": "hbase"},
+            {"id": "need_hbase", "choice": "true"},
             {"id": "route_confidence", "probability": 0.92},
         ]}
 
@@ -42,12 +42,30 @@ async def test_router_maps_jev_choice_to_plan(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_router_supports_multiple_agents(monkeypatch):
+    """关键回归：原先"选一个"的问法表达不了多 Agent，必须能同时选 sql + analysis。"""
+    monkeypatch.setenv("JEV_API_KEY", "k")
+
+    async def fake_decide(state, questions, **kw):
+        return {"answers": [
+            {"id": "need_sql", "choice": "true"},
+            {"id": "need_analysis", "choice": "true"},
+            {"id": "route_confidence", "probability": 0.9},
+        ]}
+
+    monkeypatch.setattr(jev_client, "decide", fake_decide)
+    from harness.orchestration.multi.nodes import _route_via_jev
+    out = await _route_via_jev("用图表展示各部门销售额")
+    assert [s["agent"] for s in out["plan"]] == ["sql", "analysis"]
+
+
+@pytest.mark.asyncio
 async def test_router_low_confidence_marks_low(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
     async def fake_decide(state, questions, **kw):
         return {"answers": [
-            {"id": "next_agent", "choice": "sql"},
+            {"id": "need_sql", "choice": "true"},
             {"id": "route_confidence", "probability": 0.2},
         ]}
 
@@ -58,16 +76,16 @@ async def test_router_low_confidence_marks_low(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_router_jev_failure_falls_back(monkeypatch):
-    """Jev 启用但返回空 → {} 让调用方走 LLM（不回退到"瞎派"）。"""
+async def test_router_chitchat_gives_empty_plan(monkeypatch):
     monkeypatch.setenv("JEV_API_KEY", "k")
 
-    async def empty_decide(state, questions, **kw):
-        return None
+    async def fake_decide(state, questions, **kw):
+        return {"answers": [{"id": "is_chitchat", "choice": "true"}]}
 
-    monkeypatch.setattr(jev_client, "decide", empty_decide)
+    monkeypatch.setattr(jev_client, "decide", fake_decide)
     from harness.orchestration.multi.nodes import _route_via_jev
-    assert await _route_via_jev("随便问问") == {}
+    out = await _route_via_jev("你好")
+    assert out["plan"] == []
 
 
 # ── 置信度门 ──

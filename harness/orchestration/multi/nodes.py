@@ -459,14 +459,25 @@ async def node_sql(state: MultiAgentState, config: RunnableConfig) -> dict:
         return replan
     # SQL 生成后先过置信度门，再决定下一步
     return _next_step_after_sql(state, results)
-async def _route_via_jev(query: str, mem_block: str = "") -> dict:
-    """用 Jev 做 Agent 选择（限定选项分类）。未启用/失败 → 返回 {} 走 LLM 回退。
+# 各专职 Agent 的职责（拼进 Jev 的"是非题"，让它有依据地判断）
+_ROUTE_AGENT_MENU: dict[str, str] = {
+    "sql": "结构化数据查询（订单/员工/部门/产品/客户）",
+    "analysis": "综合分析与建议、或对话历史/元问题（自己不查库）",
+    "strategy": "公司制度政策（提成/年假/考勤/定价/战略）",
+    "hbase": "HBase Shell 命令生成",
+    "hive": "Olist 数仓查询 / Hive 方言",
+}
 
-    Jev 只负责"选哪个 Agent + 把握多大"；plan 里的 task 描述用原始 query
-    （SQL/其它 Agent 本就按 query 工作），因此不依赖生成能力。
+
+async def _route_via_jev(query: str, mem_block: str = "") -> dict:
+    """用 Jev 做 Agent 选择。未启用/失败 → 返回 {} 走 LLM 回退。
+
+    关键设计：用**每个 Agent 一个是非题**，而不是"选一个"——因为一个请求可能需要
+    多个 Agent（如「SQL 查询 + analysis 画图」），单选表达不了多 Agent 计划。
+    plan 里的 task 用原始 query（各 Agent 本就按 query 工作），故不依赖生成能力。
     """
     from harness.jev_client import decide as jev_decide
-    from harness.jev_client import extract_choice, extract_probability
+    from harness.jev_client import extract_bool, extract_probability
     from harness.jev_client import is_enabled as jev_enabled
 
     if not jev_enabled():
@@ -475,40 +486,54 @@ async def _route_via_jev(query: str, mem_block: str = "") -> dict:
     state_text = f"用户问题：{query}"
     if mem_block:
         state_text = f"{state_text}\n\n{mem_block}"
-    result = await jev_decide(state_text, [
+
+    questions: list[dict] = [
         {
-            "id": "next_agent",
-            "type": "choice",
-            "options": ["sql", "hbase", "hive", "strategy", "clarify", "none"],
-            "prompt": (
-                "这条问题该交给哪个 Agent？\n"
-                "sql=结构化数据查询（订单/员工/部门/产品/客户）；"
-                "strategy=公司制度政策（提成/年假/考勤/定价/战略）；"
-                "hbase=HBase Shell 命令；hive=Olist 数仓/Hive 方言；"
-                "analysis=对话历史元问题或纯分析；clarify=问题太模糊缺关键信息；"
-                "none=闲聊/能力介绍（无需查数据）。\n"
-                "注意：提到「制度/政策/提成/年假」选 strategy，别选 clarify；"
-                "「你好/你能做什么」选 none。"
-            ),
+            "id": f"need_{agent}",
+            "type": "boolean",
+            "prompt": f"这个请求需要「{agent}」Agent 吗？它的职责是：{desc}",
+        }
+        for agent, desc in _ROUTE_AGENT_MENU.items()
+    ]
+    questions += [
+        {
+            "id": "is_chitchat",
+            "type": "boolean",
+            "prompt": "这是闲聊/能力介绍（如「你好」「你能做什么」），不需要任何数据查询吗？",
+        },
+        {
+            "id": "is_vague",
+            "type": "boolean",
+            "prompt": "问题太模糊、缺关键信息（对象/时间/指标不明），需要先向用户澄清吗？",
         },
         {
             "id": "route_confidence",
             "type": "scale",
             "min": 0,
             "max": 1,
-            "prompt": "你对这个分派的把握有多大？",
+            "prompt": "你对以上判断的把握有多大？",
         },
-    ])
-    choice = extract_choice(result, "next_agent")
-    if not choice:
+    ]
+
+    result = await jev_decide(state_text, questions)
+    if not result:
         return {}
 
+    if extract_bool(result, "is_chitchat"):
+        return {"plan": [], "confidence": "high"}
+
+    agents = [a for a in _ROUTE_AGENT_MENU if extract_bool(result, f"need_{a}")]
     prob = extract_probability(result, "route_confidence")
-    low = prob is not None and prob < 0.5
-    if choice == "none":
-        return {"plan": [], "confidence": "low" if low else "high"}
+    low = extract_bool(result, "is_vague") is True or (prob is not None and prob < 0.5)
+
+    if not agents:
+        # 没判出任何 Agent：模糊 → 给个最佳猜测 + low（节点会转澄清）；否则交回兜底链
+        if low:
+            return {"plan": [{"agent": "sql", "task": query}], "confidence": "low"}
+        return {}
+
     return {
-        "plan": [{"agent": choice, "task": query}],
+        "plan": [{"agent": a, "task": query} for a in agents],
         "combine": True,
         "confidence": "low" if low else "high",
     }
