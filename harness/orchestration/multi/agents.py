@@ -34,6 +34,7 @@ from harness.tools.schema import (
     discover_relevant_schema,
     list_tables,
 )
+from harness.tools.script_gen import generate_python_script, generate_sql_script
 from harness.tools.semantic_layer import QUERY_METRIC_TOOL, query_metric
 from harness.tools.warehouse import (
     DESCRIBE_WAREHOUSE_TABLE_TOOL,
@@ -99,6 +100,7 @@ sql_agent = ConfiguredAgent(
         DISCOVER_SCHEMA_TOOL, LIST_TABLES_TOOL, DESCRIBE_TABLE_TOOL, QUERY_METRIC_TOOL, QUERY_TABLE_TOOL, RUN_QUERY_TOOL,
         LIST_WAREHOUSE_TABLES_TOOL, DESCRIBE_WAREHOUSE_TABLE_TOOL, QUERY_WAREHOUSE_TOOL,
         QUERY_PERIOD_COMPARISON_TOOL, search_memory.tool_schema,
+        generate_sql_script.tool_schema, generate_python_script.tool_schema,
     ],
     handlers={
         "discover_relevant_schema": discover_relevant_schema,
@@ -112,6 +114,8 @@ sql_agent = ConfiguredAgent(
         "query_warehouse": query_warehouse,
         "query_period_comparison": query_period_comparison,
         "search_memory": search_memory,
+        "generate_sql_script": generate_sql_script,
+        "generate_python_script": generate_python_script,
     },
 )
 

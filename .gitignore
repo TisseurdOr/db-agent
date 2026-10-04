@@ -135,3 +135,6 @@ db/*.db-journal
 
 # 旧 embedding 维度的向量库备份（不入库）
 harness/memory/chroma_db.bak*/
+
+# 生成的脚本产物（由 generate_*_script 工具产出）
+output/

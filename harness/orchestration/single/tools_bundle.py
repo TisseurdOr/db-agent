@@ -30,6 +30,7 @@ from harness.tools.schema import (
     get_schema_summary,
     list_tables,
 )
+from harness.tools.script_gen import generate_python_script, generate_sql_script
 from harness.tools.warehouse import (
     DESCRIBE_WAREHOUSE_TABLE_TOOL,
     LIST_WAREHOUSE_TABLES_TOOL,
@@ -57,6 +58,8 @@ TOOLS = [
     search_hive_syntax.tool_schema,
     run_hbase.tool_schema,
     match_sql_template.tool_schema,
+    generate_sql_script.tool_schema,
+    generate_python_script.tool_schema,
     DISCOVER_SCHEMA_TOOL,
     LIST_WAREHOUSE_TABLES_TOOL,
     DESCRIBE_WAREHOUSE_TABLE_TOOL,
@@ -80,6 +83,8 @@ TOOL_HANDLERS = {
     "search_hive_syntax": search_hive_syntax,
     "run_hbase": run_hbase,
     "match_sql_template": match_sql_template,
+    "generate_sql_script": generate_sql_script,
+    "generate_python_script": generate_python_script,
     "discover_relevant_schema": discover_relevant_schema,
     "list_warehouse_tables": list_warehouse_tables,
     "describe_warehouse_table": describe_warehouse_table,
