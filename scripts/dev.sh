@@ -95,6 +95,9 @@ cmd_start() {
   echo "▶ 启动后端 :$BACKEND_PORT …"
   nohup "$ROOT/.venv/bin/python" -m uvicorn server.main:app \
     --host 127.0.0.1 --port "$BACKEND_PORT" --reload \
+    --reload-dir "$ROOT/harness" \
+    --reload-dir "$ROOT/server" \
+    --reload-dir "$ROOT/db" \
     >"$BACKEND_LOG" 2>&1 &
   echo $! >"$BACKEND_PID_FILE"
 

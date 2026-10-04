@@ -248,7 +248,8 @@ def generate_insert_script(
     from db.seed import DB_PATH
 
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-    filename = f"{_slug(description or table)}_insert.py"
+    stem = _slug(f"{description or table}_insert")
+    filename = f"{stem}.py"
     content = _INSERT_PY_TMPL.format(
         description=_doc_safe(description or f"向 {table} 插入一行"),
         ts=ts,
@@ -258,7 +259,9 @@ def generate_insert_script(
         row=repr(norm_values),
         keys=repr(keys),
     )
-    path = _write("py", f"{description or table}_insert", content)
+    path = _write("py", stem, content)
+    if path.name != filename:
+        return {"ok": False, "error": f"脚本文件名生成不一致: {path.name} != {filename}"}
     return {
         "ok": True,
         "path": str(path),

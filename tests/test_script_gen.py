@@ -79,6 +79,8 @@ def test_generate_insert_script_dry_run_then_commit(tmp_path, monkeypatch):
     )
     assert r["ok"] is True, r
     assert r["columns"] == ["id", "name"]
+    content = open(r["path"], encoding="utf-8").read()
+    assert r["path"].rsplit("/", 1)[-1] in content, "脚本里的 --commit 用法文件名必须和真实文件名一致"
 
     dry = subprocess.run(
         [sys.executable, r["path"]], capture_output=True, text=True, check=False,
