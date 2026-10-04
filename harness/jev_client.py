@@ -57,11 +57,24 @@ def is_enabled() -> bool:
     return _provider() != "none"
 
 
-def _post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
-    """独立的 HTTP 出口——便于测试 monkeypatch，不真的联网。"""
-    import httpx
+# 复用一个连接：httpx.post() 每次都新建连接，会为**每次** Jev 调用重做一次
+# TLS 握手（实测到 openrouter.ai 的握手动辄 0.6~1.9s）。改用常驻 Client 复用
+# 连接后，除首次外的调用省掉整个握手。
+_http_client = None
 
-    resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
+
+def _get_http_client():
+    global _http_client
+    if _http_client is None:
+        import httpx
+
+        _http_client = httpx.Client(http2=False)
+    return _http_client
+
+
+def _post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
+    """HTTP 出口（复用连接）——便于测试 monkeypatch，不真的联网。"""
+    resp = _get_http_client().post(url, json=payload, headers=headers, timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 
@@ -141,12 +154,23 @@ def _decide_openrouter(state: str, questions: list[dict], timeout: float) -> dic
 
 
 def _decide_native(state: str, questions: list[dict], timeout: float) -> dict | None:
-    """走 TypeSafe 原生 /decide 接口。"""
+    """走 TypeSafe **原生** decisions 接口（不经 OpenRouter，少一跳）。
+
+    ⚠️ 与 OpenRouter 通道用**完全相同的协议形态**（model + state + questions 对象 +
+    noul），只是 URL/凭证不同——因为 OpenRouter 的 /alpha/decisions 就是代理它。
+    原生端点路径以 TypeSafe 官方文档为准，可用 JEV_DECISIONS_URL 覆盖。
+    """
     key = os.getenv("JEV_API_KEY", "").strip()
     base = (os.getenv("JEV_BASE_URL", "").strip() or _DEFAULT_NATIVE_BASE).rstrip("/")
+    url = os.getenv("JEV_DECISIONS_URL", "").strip() or f"{base}/decide"
+    model = os.getenv("JEV_MODEL", "").strip() or _DEFAULT_OPENROUTER_MODEL
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload: dict[str, Any] = {"state": state, "questions": questions}
-    return _post_json(f"{base}/decide", payload, headers, timeout)
+    payload: dict[str, Any] = {
+        "model": model,
+        "state": state,
+        "questions": _to_jev_questions(questions),
+    }
+    return _post_json(url, payload, headers, timeout)
 
 
 async def decide(
