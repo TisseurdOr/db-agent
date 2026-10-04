@@ -172,6 +172,16 @@ async def recall_for_turn(
     if is_chitchat(q):
         return RecallBundle(source="empty")
 
+    # 记忆库为空 → 没有任何东西可召回。此前这里仍会走 Self-Query（一次 LLM 调用）
+    # + HyDE，实测每次白花 ~5 秒且命中 0 条。空库直接返回。
+    if vm is None:
+        return RecallBundle(source="empty")
+    try:
+        if vm.count() == 0:
+            return RecallBundle(source="empty")
+    except Exception:
+        pass
+
     memories: list[dict] = []
     parsed: dict = {}
     source = "empty"
