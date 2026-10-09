@@ -6,7 +6,26 @@
 """
 
 
+import os
+
 import pytest
+
+# ── 必须在任何 test 模块被 import 之前执行 ──────────────────────────────
+# 入口模块（server/main.py、main.py、app.py）在 import 时就会 load_dotenv()，
+# 会把开发机 .env 的真实配置灌进测试进程，破坏"离线可重复"：
+#   - OPENROUTER_API_KEY / JEV_API_KEY → Router 改走 Jev，跳过测试里 mock 的 LLM
+#   - EMBEDDING_API_KEY / EMBEDDING_BASE_URL → 启动时 bootstrap 真去建向量索引
+# python-dotenv 默认不覆盖已存在的 key，所以这里先占位成空串把它们挡在门外。
+# 想跑真链路请用 tests/eval_*.py（那些脚本自己 load_dotenv），或显式设
+# DB_AGENT_TEST_USE_DOTENV=1 把这层挡板关掉。
+if not os.getenv("DB_AGENT_TEST_USE_DOTENV"):
+    for _env_guard in (
+        "OPENROUTER_API_KEY",
+        "JEV_API_KEY",
+        "EMBEDDING_API_KEY",
+        "EMBEDDING_BASE_URL",
+    ):
+        os.environ[_env_guard] = ""
 
 
 @pytest.fixture(autouse=True)
