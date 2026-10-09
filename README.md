@@ -400,6 +400,26 @@ Web Runner：按 `session_id` 管理并带空闲 TTL 回收（默认 30 分钟�
 
 ---
 
+## MCP Server（把 agent 接给 Claude Desktop / Cursor）
+
+`mcp_server/db_agent_mcp.py` 把**整个 agent** 包成 MCP 工具：外部 host 用自然语言就能调用
+完整的多 Agent 编排 / SQL 生成 / 只读查询 / INSERT 脚本生成 + HITL 审批，agent 在服务端跑完，
+host 不需要自带 prompt。
+
+```bash
+uv run python mcp_server/db_agent_mcp.py             # stdio（Claude Desktop / Cursor / Claude Code）
+uv run python mcp_server/db_agent_mcp.py --transport streamable-http --port 8765   # 远程 / 多客户端
+```
+
+暴露 4 个工具：`ask_db_agent`（跑一轮）/ `resume_db_agent`（HITL 审批后继续）/
+`db_agent_sessions` / `db_agent_tools`。写操作仍走 HITL —— `ask_db_agent` 先返回
+`status=needs_approval`，必须显式 `resume_db_agent(approved=true)` 才执行，护栏在 MCP 路径上没被绕过。
+
+权限沿用 db-agent 自己的 RBAC：默认用户取 `DB_AGENT_MCP_USER` → `AGENT_USER` → `viewer`。
+配置示例与已知限制见 **[`mcp_server/README.md`](mcp_server/README.md)**。
+
+---
+
 ## 两种运行模式 · 安全 · Eval（速查）
 
 ### Single vs Multi

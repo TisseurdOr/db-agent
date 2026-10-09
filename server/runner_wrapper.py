@@ -111,6 +111,20 @@ class RunnerRegistry:
     def get_active(self) -> MultiAgentRunner | None:
         return self._active
 
+    def list_sessions(self) -> list[dict]:
+        """列出当前活跃会话（含等待 HITL 审批的），供 MCP / 运维面读取。"""
+        now = time.monotonic()
+        out = []
+        for sid, (runner, ts) in self._runners.items():
+            out.append({
+                "session_id": sid,
+                "thread_id": getattr(runner, "thread_id", ""),
+                "user_id": getattr(runner, "_web_user_id", None),
+                "idle_seconds": round(now - ts, 1),
+            })
+        out.sort(key=lambda item: item["idle_seconds"])
+        return out
+
     async def _sweep(self, now: float | None = None) -> None:
         """关闭并移除空闲超过 TTL 的 runner。"""
         now = now or time.monotonic()
