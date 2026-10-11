@@ -645,3 +645,36 @@ async def test_reflection_respects_max_attempts(monkeypatch):
     }
     update = await node_reflection(state, config)
     assert update["next"] == "done"
+
+
+# ═══ Router 硬规则：销售额 + 出图诉求（回归） ═══
+# 背景：route_override 里曾有一条 _FUZZY_SALES_RE 的提前 return，它与后面的
+# `has_sql_kw and not has_strategy` 条件等价（has_sql_kw 本就包含该正则），
+# 却抢在 needs_analysis 之前返回 —— 导致「销售额…用图表展示」永远只派 sql、不出图。
+
+def _route_agents(q: str) -> list[str]:
+    from harness.orchestration.multi.router import route_override
+
+    return [p["agent"] for p in (route_override(q) or [])]
+
+
+def test_sales_amount_with_chart_request_gets_analysis():
+    """含「销售额」+ 出图诉求 → 必须带上 analysis，否则前端没图。"""
+    assert _route_agents("各个部门的销售额分别是多少，用图表展示") == ["sql", "analysis"]
+    assert _route_agents("各个部门的销售额分别是多少，给建议") == ["sql", "analysis"]
+
+
+def test_fuzzy_sales_typo_still_routes_to_sql_only():
+    """错别字容错不能被破坏：没有解读/出图诉求时仍只派 sql。"""
+    assert _route_agents("查询销shou 额是多少") == ["sql"]
+
+
+def test_plain_sales_query_stays_sql_only():
+    """纯查数不加 analysis —— 避免每次查数都白跑一轮模型。"""
+    assert _route_agents("各个部门的销售额分别是多少") == ["sql"]
+
+
+def test_sales_with_strategy_and_advice_gets_three_agents():
+    """销售额 + 制度 + 建议 → sql + strategy + analysis（组合路由不被影响）。"""
+    agents = _route_agents("销售额有多少，结合提成制度给出建议")
+    assert agents == ["sql", "strategy", "analysis"]

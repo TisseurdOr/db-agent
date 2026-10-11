@@ -310,12 +310,12 @@ def route_override(query: str, prev_agents: list[str] | None = None) -> list[dic
             })
         return plan
 
-    # 拼音/错别字数据查询：「查询销shou 额」→ sql（策略类已在上面拦截）
-    if _FUZZY_SALES_RE.search(q) and not has_strategy:
-        return [{"agent": AGENT_SQL, "task": q}]
-
     # 纯数据查询硬规则：跳过 Router LLM（「有多少员工」「销售额最高的部门」）
     # 只有明确要解读/出图时才附带 analysis
+    #
+    # 注：历史上这里还有一条 _FUZZY_SALES_RE 的提前 return，但它与下面的分支条件等价
+    # （has_sql_kw 本身就包含 _FUZZY_SALES_RE），却会**抢在 needs_analysis 之前返回**，
+    # 导致「销售额…用图表展示」永远只派 sql、不出图。已删除，统一由下面这条兜。
     if has_sql_kw and not has_strategy:
         if needs_analysis:
             return [
