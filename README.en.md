@@ -46,7 +46,7 @@ See [`HARNESS.md`](HARNESS.md) for implementation details.
 > **Scope**: Engineering mechanisms follow a production mindset (permissions / HITL / self-healing / observability / swappable backends), and the project is deployed live.
 > SQLite is a real local DB; **HBase is an in-memory simulator** (API-aligned, no real cluster).
 > The **Hive/warehouse agent queries a real Olist 5-layer warehouse** (`db/warehouse.db`, built from the public dataset by `scripts/build_olist_warehouse.py`) plus HiveQL grammar templates; swap in a real Hive cluster when needed.
-> All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **587** cases).
+> All tests run offline: LLM / Embedding are scripted fakes in tests (`pytest tests/` stays green — currently **612** cases).
 > Web can demo the full path: optional `WEB_API_TOKEN` auth; sessions default to memory, or Redis when `REDIS_URL` is set.
 > Vector store supports ChromaDB / Milvus (`VECTOR_DB` switch); Redis / Milvus are “optional backends + auto fallback.”
 
@@ -248,7 +248,7 @@ Single-mode differences: no Router / DQ / Confidence Gate / Analysis / Reflectio
 | **2 · Multi Agent** | Multi-engine coordination | LangGraph 10 nodes / 6 agents; Router 4-layer short-circuit; failure replan | Multi-engine orchestration |
 | **3 · Security** | Prompts cannot stop privilege abuse | 5-role RBAC; row-level WHERE rewrite; three guardrails; HITL `interrupt()` | Permissions at the tool layer |
 | **4 · Reliability** | Survive hangs without burning money | Retry → SQL heal → replan → **circuit / idempotency / alerts**; SSE disconnect handling | Reliability loop |
-| **5 · Productization** | Demo → product | `db-agent` CLI; 587 offline tests; 47 evals + Golden Set; Redis / Milvus switch; quality gates | Demoable, CI-ready shape |
+| **5 · Productization** | Demo → product | `db-agent` CLI; 612 offline tests; 47 evals + Golden Set; Redis / Milvus switch; quality gates | Demoable, CI-ready shape |
 
 
 ### Design choices (why)
@@ -419,7 +419,7 @@ Permissions live in `agent_roles` / `agent_users` — edit tables to change beha
 ### Eval
 
 ```bash
-pytest tests/ -v                               # full offline suite (587; live excluded)
+pytest tests/ -v                               # full offline suite (612; live excluded)
 pytest tests/ -m live                          # real-LLM end-to-end smoke (needs API key)
 pytest tests/ --cov --cov-fail-under=60        # with coverage gate (wired into CI)
 python tests/eval_runner.py --fast             # guardrail cases (zero API, in CI)

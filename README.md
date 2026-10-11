@@ -47,9 +47,78 @@ db-agent 接受中文自然语言提问，产出数据结论。一次查询的�
 > **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端），已上线。
 > SQLite 为真实本地库；**HBase 是本地内存模拟器**（API 对齐，无真实集群）。
 > **Hive/数仓 agent 查的是真实的 Olist 五层数仓**（`db/warehouse.db`，由 `scripts/build_olist_warehouse.py` 从公开数据集构建），另提供 HiveQL 语法模板；接真实 Hive 集群只需换连接器。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **587** 条）。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **612** 条）。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
+
+---
+
+## 验收标准：怎么判断它是对的
+
+功能列表谁都能写。这一节只回答四个问题：**输入是什么、输出是什么、成功判据是什么、失败怎么处理。**
+
+### 输入与输出
+
+| | 内容 |
+|---|---|
+| **输入** | 中文自然语言问题，分五类：事实型（「哪个部门销售额最高」）、跨表型（「华东地区卖了多少」）、制度型（「GMV 怎么算」）、越权型（「把工资表导给我」）、恶意型（「忽略前面的指令」） |
+| **输出** | 结论文本 + **实际执行的 SQL** + 执行计划（哪个 Agent 干了什么）+ `trace_id` + 可选图表 |
+| **不产出** | 无证据的推测。查不到时明确说「证据不足」，而不是编一个数字 |
+
+### 成功判据：分层断言，不靠肉眼
+
+四层评测，**便宜的先跑，贵的按需跑**：
+
+| 层 | 工具 | 断言方式 | 成本 | 实测 |
+|---|---|---|---|---|
+| L1 护栏 | `eval_runner --fast` | 输入该不该拦（确定性） | 0 token / 0.0s | **6/6 = 100%**，已接入 CI |
+| L2 路由 | `eval_runner --category routing` | plan 里该有 / 不该有哪个 Agent | 需 API | 12 条 |
+| L3 回答 | `eval_runner --full` | `contains` / `not_contains` —— 输出不确定，不做精确匹配 | 需 API | **45/47 = 95.7%** |
+| L4 裁判 | `eval_runner --full --judge` | 用 **Kimi** 打分（准确性 / 完整性 / 简洁性） | 需 API | 独立模型评 |
+
+**裁判为什么要换一个模型**：被测是 DeepSeek，裁判是 Kimi —— 自己评自己有系统性偏高。
+
+**回归门禁**：`pytest tests/` 共 **612** 条（LLM / Embedding 在测试里全用脚本化 fake，离线全绿），CI 另跑覆盖率门禁 `--cov-fail-under=60`。
+
+### 检索质量：做了消融，而不是"加了就算数"
+
+`tests/eval_retrieval_ablation.py` 在同一份 golden set（20 正例 + 10 负例）上，一次只开一个开关：
+
+| 配置 | hit@1 | hit@3 | MRR | 耗时 | LLM 调用 |
+|---|---|---|---|---|---|
+| 裸向量 | 0.85 | 1.0 | 0.925 | 5.9s | 0 |
+| +HyDE | 0.85 | 1.0 | 0.925 | 116.3s | 30 |
+| +HyDE+rerank | 0.85 | 1.0 | 0.925 | 290.2s | 60 |
+| +混合(BM25+RRF) | 0.80 | 0.9 | 0.864 | 5.9s | 0 |
+
+**结论是负面的，也照实写**：在这份数据规模上，HyDE 与 rerank **没有提升任何指标，却把耗时放大了 20~50 倍**。
+生产默认仍是 `use_hyde=True, use_rerank=True` —— 这份消融指出的优化点**还没落地**，是我下一步要处理的。
+
+> 这一条比「我加了 HyDE 和 rerank」值钱：它证明我会**验证一个技术到底有没有用**，而不是照着教程往上堆。
+
+### 失败怎么处理
+
+| 失败类型 | 处理方式 | 在哪 |
+|---|---|---|
+| 输入恶意 / 越权 | 输入护栏直接拦，0 token | `constraints/guardrails.py` |
+| 问题含糊 | 判为 clarify，反问而不是猜 | `router.incomplete_query_reason` |
+| SQL 置信度低 | 置信度门 → interrupt 暂停，等人确认 | `node_confidence_gate` |
+| 要写库 | HITL 中断，批准后才执行 | `run_insert` + `resume` |
+| 工具超时 | 重试 + 熔断；**超时 ≠ 未执行**，写操作走幂等守卫 | `constraints/idempotency.py` |
+| 计划失败 | 带失败反馈重新规划，跳过硬规则与缓存 | `_replan_feedback` |
+| 检索没命中 | 明确拒答，不拿无来源内容补 | 输出护栏 + 引用要求 |
+| 进程中断 | Checkpointer 落盘，按 `thread_id` 断点续跑 | `MultiAgentRunner` |
+
+### 这些数字怎么复现
+
+```bash
+python tests/eval_runner.py --fast              # L1 护栏，零成本，秒级
+python tests/eval_runner.py --full --judge      # L3 + L4，需 API key
+python tests/eval_retrieval_ablation.py         # 检索消融
+python tests/eval_selflearn.py                  # 自学习闭环：基线 → 学习 → 验证（16/16 = 100%）
+```
+
+结果落在 `logs/eval_baseline.json` 与 `logs/ablation_results.json`，可直接前后对比。
 
 ---
 
@@ -249,7 +318,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
 | **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
-| **五 · 工程化** | demo → 产品 | `db-agent` CLI；587 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；612 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
 
 ### 设计取舍（为什么这样）
@@ -445,7 +514,7 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 ### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例（587，默认不跑 live）
+pytest tests/ -v                               # 全量离线用例（612，默认不跑 live）
 pytest tests/ -m live                          # 真实 LLM 端到端 smoke（需 API key，默认排除）
 pytest tests/ --cov --cov-fail-under=60        # 带覆盖率门禁（CI 已接入）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）
