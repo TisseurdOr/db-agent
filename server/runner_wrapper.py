@@ -179,13 +179,39 @@ class StreamingRunner:
         except Exception:
             return ""
 
-    async def _commit_short_term(self, query: str, answer: str, trace_id: str = "") -> None:
-        """写入会话列表（Memory UI）+ ConversationManager 滑动窗口（下一轮注入）。"""
+    async def _commit_short_term(
+        self,
+        query: str,
+        answer: str,
+        trace_id: str = "",
+        *,
+        sql: str = "",
+        charts: list | None = None,
+        plan: list | None = None,
+        tokens: int = 0,
+        elapsed: float = 0.0,
+    ) -> None:
+        """写入会话列表（Memory UI）+ ConversationManager 滑动窗口（下一轮注入）。
+
+        assistant 那条带上 sql / charts / plan / tokens / elapsed ——
+        这样在会话列表里点回旧对话时，前端能恢复成当时的样子（含步骤与图表），
+        而不是只剩一段纯文本。
+        """
         sid = getattr(self.runner, "_session_id", None) or "default"
         try:
             from server.endpoints.sessions import record_message
             await record_message(sid, "user", query or "", trace_id=trace_id)
-            await record_message(sid, "assistant", answer or "", trace_id=trace_id)
+            await record_message(
+                sid,
+                "assistant",
+                answer or "",
+                trace_id=trace_id,
+                sql=sql,
+                charts=charts,
+                plan=plan,
+                tokens=tokens,
+                elapsed=elapsed,
+            )
         except Exception:
             pass
         conv = getattr(self.runner, "_conversation", None)
@@ -424,7 +450,16 @@ class StreamingRunner:
                 tokens=int(exec_info.get("tokens", 0) or 0),
             ),
         ))
-        await self._commit_short_term(query, answer, trace_id=tid)
+        await self._commit_short_term(
+            query,
+            answer,
+            trace_id=tid,
+            sql=exec_info.get("sql", ""),
+            charts=charts,
+            plan=exec_info.get("plan", []),
+            tokens=int(exec_info.get("tokens", 0) or 0),
+            elapsed=time.time() - t_total,
+        )
 
     async def resume_streaming(self, approved: bool, queue: asyncio.Queue, clarified_query: str = "") -> None:
         """Resume after HITL pause, emitting remaining events to queue."""
@@ -491,7 +526,16 @@ class StreamingRunner:
             ),
         ))
         query = getattr(self.runner, "_last_query", "") or ""
-        await self._commit_short_term(query, answer, trace_id=tid)
+        await self._commit_short_term(
+            query,
+            answer,
+            trace_id=tid,
+            sql=exec_info.get("sql", ""),
+            charts=charts,
+            plan=exec_info.get("plan", []),
+            tokens=int(exec_info.get("tokens", 0) or 0),
+            elapsed=time.time() - t_total,
+        )
 
 
 def _extract_chart_data(result: dict) -> list[dict]:

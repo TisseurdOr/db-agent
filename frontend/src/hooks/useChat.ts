@@ -1,6 +1,6 @@
 import { useReducer, useCallback } from "react";
 import { loadPersistedUserId, persistUserId } from "../rbacStorage";
-import type { ChatState, Message, SSEEvent, InterruptData, ChartConfig } from "../types";
+import type { ChatState, Message, SSEEvent, InterruptData, ChartConfig, StoredMessage } from "../types";
 
 type Action =
   | { type: "ADD_USER_MESSAGE"; content: string }
@@ -18,7 +18,8 @@ type Action =
   | { type: "SET_DATASOURCE"; datasource: string }
   | { type: "SET_USER_ID"; userId: string }
   | { type: "SET_ENABLE_DQ"; enableDq: boolean }
-  | { type: "NEW_CHAT"; sessionId: string };
+  | { type: "NEW_CHAT"; sessionId: string }
+  | { type: "LOAD_SESSION"; sessionId: string; messages: Message[] };
 
 function newId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -241,6 +242,18 @@ function chatReducer(state: ChatState, action: Action): ChatState {
       };
     }
 
+    case "LOAD_SESSION": {
+      // 切到历史会话：整段替换消息，并停掉任何进行中的流式状态
+      return {
+        ...state,
+        messages: action.messages,
+        isStreaming: false,
+        sessionId: action.sessionId,
+        hitlActive: false,
+        hitlData: null,
+      };
+    }
+
     default:
       return state;
   }
@@ -265,6 +278,31 @@ function createInitialState(): ChatState {
     hitlActive: false,
     hitlData: null,
   };
+}
+
+/** 后端存的历史消息 → 前端 Message。
+ *
+ * 服务端存了 sql / charts / plan / tokens / elapsed，但**没存逐步的 step 事件**，
+ * 所以这里用 plan 重建一个"执行计划"步骤列表 —— 点回旧对话时仍能看到它当时派了哪些 Agent。
+ */
+export function storedToMessages(stored: StoredMessage[]): Message[] {
+  return stored.map((m, i) => ({
+    id: `hist-${i}`,
+    role: m.role,
+    content: m.content || "",
+    isStreaming: false,
+    steps: (m.plan || []).map((p) => ({
+      node: p.agent,
+      task: p.task,
+      status: "done" as const,
+    })),
+    traceId: m.trace_id || "",
+    sql: m.sql || "",
+    charts: m.charts || [],
+    feedbackGiven: false,
+    totalTokens: m.tokens || 0,
+    totalElapsed: m.elapsed || 0,
+  }));
 }
 
 export function useChat() {
@@ -367,6 +405,11 @@ export function useChat() {
     dispatch({ type: "NEW_CHAT", sessionId: newSessionId() });
   }, []);
 
+  /** 切到历史会话：把后端存的消息灌回状态机。 */
+  const loadSession = useCallback((sessionId: string, stored: StoredMessage[]) => {
+    dispatch({ type: "LOAD_SESSION", sessionId, messages: storedToMessages(stored) });
+  }, []);
+
   return {
     state,
     handleSSEEvent,
@@ -380,5 +423,6 @@ export function useChat() {
     setUserId,
     setEnableDq,
     newChat,
+    loadSession,
   };
 }

@@ -6,6 +6,7 @@ import MainTabs from "./components/MainTabs";
 import ChatDock from "./components/ChatDock";
 import HITLDialog from "./components/HITLDialog";
 import type { LiveActivity } from "./components/Overview";
+import type { SessionSummary, StoredMessage } from "./types";
 import "./App.css";
 
 const UI_THEME_KEY = "db-agent-ui-theme";
@@ -38,6 +39,7 @@ export default function App() {
     setDatasource,
     setUserId,
     setEnableDq,
+    loadSession,
     newChat,
   } = useChat();
 
@@ -47,6 +49,63 @@ export default function App() {
   const [queryPulse, setQueryPulse] = useState(0);
   const [mainTab, setMainTab] = useState<MainTabId>("arch");
   const [chatOpen, setChatOpen] = useState(true);
+
+  /* ── 会话列表（历史对话）────────────────────────────────────────── */
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      setSessionsLoading(true);
+      const res = await fetch("/api/sessions");
+      if (!res.ok) return;
+      const data = (await res.json()) as { sessions: SessionSummary[] };
+      setSessions(data.sessions || []);
+    } catch {
+      /* 列表拿不到不影响主流程 */
+    } finally {
+      setSessionsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSessions();
+  }, [refreshSessions]);
+
+  // 一轮问答结束后刷新列表（新会话/新消息才会出现）
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    if (wasStreaming.current && !state.isStreaming) void refreshSessions();
+    wasStreaming.current = state.isStreaming;
+  }, [state.isStreaming, refreshSessions]);
+
+  /** 切到历史会话：拉完整消息 → 灌回状态机 */
+  const handleSelectSession = useCallback(
+    async (id: string) => {
+      if (state.isStreaming) return;
+      try {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(id)}/messages`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { messages: StoredMessage[] };
+        loadSession(id, data.messages || []);
+      } catch {
+        /* ignore */
+      }
+    },
+    [state.isStreaming, loadSession]
+  );
+
+  const handleDeleteSession = useCallback(
+    async (id: string) => {
+      try {
+        await fetch(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+        await refreshSessions();
+      } catch {
+        /* ignore */
+      }
+    },
+    [refreshSessions]
+  );
   const [theme, setTheme] = useState<UiTheme>(() => readUiTheme());
 
   useEffect(() => {
@@ -234,6 +293,10 @@ export default function App() {
           onFeedback={handleFeedback}
           onNewChat={handleNewChat}
           onHide={() => setChatOpen(false)}
+          sessions={sessions}
+          sessionsLoading={sessionsLoading}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={handleDeleteSession}
         />
       )}
       {state.hitlActive && state.hitlData && (

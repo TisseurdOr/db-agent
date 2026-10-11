@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { IconChevronRight } from "./NavIcons";
 import MessageBubble from "./MessageBubble";
+import SessionList from "./SessionList";
 import ChatInput from "./ChatInput";
-import type { Message } from "../types";
+import type { Message, SessionSummary } from "../types";
 import type { LiveActivity } from "./Overview";
 
 interface Props {
@@ -13,6 +15,11 @@ interface Props {
   onFeedback: (id: string, rating: "up" | "down") => void;
   onNewChat: () => void;
   onHide: () => void;
+  /* 会话列表（历史对话） */
+  sessions: SessionSummary[];
+  sessionsLoading: boolean;
+  onSelectSession: (id: string) => void;
+  onDeleteSession: (id: string) => void;
 }
 
 /** 节点 → 简短动作文案（与 Overview STAGE 对应） */
@@ -43,7 +50,12 @@ export default function ChatDock({
   onFeedback,
   onNewChat,
   onHide,
+  sessions,
+  sessionsLoading,
+  onSelectSession,
+  onDeleteSession,
 }: Props) {
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const latest = liveActivity.length > 0 ? liveActivity[liveActivity.length - 1] : null;
   const statusText = latest
     ? `${ACTION[latest.node] ?? latest.node}${
@@ -53,7 +65,43 @@ export default function ChatDock({
 
   return (
     <aside className="chat-dock">
+      {sessionsOpen && (
+        <SessionList
+          sessions={sessions}
+          currentId={sessionId}
+          loading={sessionsLoading}
+          onSelect={(id) => {
+            onSelectSession(id);
+            setSessionsOpen(false);
+          }}
+          onDelete={onDeleteSession}
+          onNew={() => {
+            onNewChat();
+            setSessionsOpen(false);
+          }}
+        />
+      )}
+
       <div className="chat-dock-header">
+        <button
+          type="button"
+          className={`chat-dock-history${sessionsOpen ? " open" : ""}`}
+          onClick={() => setSessionsOpen((v) => !v)}
+          title={sessionsOpen ? "Hide history" : "Show history"}
+          aria-label={sessionsOpen ? "Hide history" : "Show history"}
+          aria-expanded={sessionsOpen}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path
+              d="M8 3.2a4.8 4.8 0 1 1-4.55 3.28M3.2 3.2v3.2h3.2"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
         <span className="chat-dock-title-text">Chat</span>
         {statusText && (
           <span className={`chat-dock-status ${latest?.status ?? ""}`} title={latest?.task}>

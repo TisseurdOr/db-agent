@@ -98,3 +98,26 @@ export interface ChatState {
   hitlActive: boolean;
   hitlData: InterruptData | null;
 }
+
+/* ── 会话列表 / 历史对话 ──────────────────────────────────────────── */
+
+/** GET /api/sessions 返回的一条会话摘要 */
+export interface SessionSummary {
+  id: string;
+  title: string;
+  message_count: number;
+  updated_at?: string | null;
+}
+
+/** 后端存的一条历史消息（assistant 那条带完整字段） */
+export interface StoredMessage {
+  role: "user" | "assistant";
+  content: string;
+  trace_id?: string;
+  sql?: string;
+  charts?: ChartConfig[];
+  plan?: { agent: string; task: string }[];
+  tokens?: number;
+  elapsed?: number;
+  created_at?: string | null;
+}

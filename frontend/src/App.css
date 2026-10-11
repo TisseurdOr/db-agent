@@ -717,3 +717,136 @@ body[data-theme="light"] {
 .app-layout[data-theme="light"] .chat-dock-empty div { color: #64748b !important; }
 
 .app-layout[data-theme="light"] .main-tab-panel { background: #f8f9fb; color: #0f172a; }
+
+/* ── 会话列表（历史对话）：挂在右侧对话框上，点箭头展开 ────────────── */
+.chat-dock {
+  position: relative;   /* 会话列表绝对定位的参照 */
+}
+.chat-dock-history {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  border-radius: 6px;
+  width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 0;
+}
+.chat-dock-history:hover { background: #334155; color: #cbd5e1; }
+.chat-dock-history.open {
+  background: #1d3a5c;
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+.session-list {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;                 /* 贴在对话框左侧，不遮住聊天 */
+  width: 268px;
+  background: #10101f;
+  border-left: 1px solid #26263d;
+  border-right: 1px solid #26263d;
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+  box-shadow: -12px 0 28px rgba(0, 0, 0, 0.35);
+  animation: session-slide-in 0.16s ease-out;
+}
+@keyframes session-slide-in {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.session-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px;
+  border-bottom: 1px solid #26263d;
+  flex-shrink: 0;
+}
+.session-list-title {
+  flex: 1;
+  font-weight: 700;
+  font-size: 12.5px;
+  color: #ddd;
+}
+.session-list-new {
+  background: #1e293b;
+  border: 1px solid #3b4f6b;
+  color: #93c5fd;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.session-list-new:hover { background: #334155; color: #cbd5e1; }
+.session-list-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px;
+}
+.session-list-empty {
+  color: #666;
+  font-size: 11.5px;
+  line-height: 1.7;
+  text-align: center;
+  padding: 28px 10px;
+}
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.session-item:hover { background: #1a1a2e; }
+.session-item.active {
+  background: #1d2b45;
+  border-color: #3b82f6;
+}
+.session-item-main { flex: 1; min-width: 0; }
+.session-item-title {
+  font-size: 12.5px;
+  color: #ddd;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-item-meta {
+  font-size: 10.5px;
+  color: #64748b;
+  margin-top: 2px;
+}
+.session-item-del {
+  background: transparent;
+  border: 0;
+  color: #475569;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.session-item-del:hover { background: #3a1d22; color: #f87171; }
+
+/* 浅色主题 */
+.app-layout[data-theme="light"] .session-list {
+  background: #fff;
+  border-color: #d8d8e0;
+  box-shadow: -10px 0 24px rgba(0, 0, 0, 0.10);
+}
+.app-layout[data-theme="light"] .session-list-head { border-color: #e6e6ee; }
+.app-layout[data-theme="light"] .session-list-title { color: #222; }
+.app-layout[data-theme="light"] .session-item:hover { background: #f2f4f8; }
+.app-layout[data-theme="light"] .session-item.active { background: #e8f0fe; }
+.app-layout[data-theme="light"] .session-item-title { color: #222; }

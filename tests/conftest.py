@@ -34,6 +34,8 @@ def _hermetic_env(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_USER", "dba")
     # 向量库落盘到用例临时目录：不写共享的生产 chroma_db
     monkeypatch.setenv("VECTOR_PERSIST_DIR", str(tmp_path / "vector_store"))
+    # 聊天会话也落临时文件：默认是 db/chat_sessions.db，测试里不能污染它
+    monkeypatch.setenv("CHAT_DB_PATH", str(tmp_path / "chat_sessions.db"))
     # 测试默认不走 Redis（保持离线可跑）；Redis 专项测试自己 setenv
     monkeypatch.delenv("REDIS_URL", raising=False)
     # 别在测试里触发启动建索引：会写共享持久化向量库（无 key 留空集合，
@@ -52,6 +54,7 @@ def _reset_global_guards():
     reset_alert_notifier()
     import server.endpoints.sessions as sessions_mod
     sessions_mod._redis_client = None
+    sessions_mod._redis_available = None
     sessions_mod.clear_sessions()
     from harness.observation.ops_metrics import reset_metrics
     reset_metrics()

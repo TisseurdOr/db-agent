@@ -408,3 +408,63 @@ def test_dashboard_ok_for_analyst(client):
 def test_dashboard_forbidden_without_user(client):
     resp = client.get("/api/dashboard/latest")
     assert resp.status_code == 403
+
+
+# ═══ 会话列表：完整消息 + 删除（历史对话功能） ═══════════════════════════
+# 契约：assistant 消息要能带着 sql / charts / plan / tokens / elapsed 存取，
+# 这样前端点回旧会话才能恢复成当时的样子，而不是只剩纯文本。
+
+@pytest.mark.asyncio
+async def test_session_stores_full_assistant_payload(client):
+    import server.endpoints.sessions as sessions_mod
+
+    await sessions_mod.record_message("s-full", "user", "各部门销售额是多少")
+    await sessions_mod.record_message(
+        "s-full",
+        "assistant",
+        "研发部最高",
+        trace_id="t-full",
+        sql="SELECT dept, SUM(total) FROM orders GROUP BY dept",
+        charts=[{"type": "bar", "title": "各部门销售额", "labels": ["研发"], "values": [100]}],
+        plan=[{"agent": "sql", "task": "查销售额"}],
+        tokens=123,
+        elapsed=4.5,
+    )
+
+    resp = client.get("/api/sessions/s-full/messages")
+    assert resp.status_code == 200
+    msgs = resp.json()["messages"]
+    assert len(msgs) == 2
+
+    assistant = msgs[1]
+    assert assistant["trace_id"] == "t-full"
+    assert "GROUP BY dept" in assistant["sql"]
+    assert assistant["charts"][0]["type"] == "bar"
+    assert assistant["plan"][0]["agent"] == "sql"
+    assert assistant["tokens"] == 123
+    assert assistant["elapsed"] == 4.5
+
+
+@pytest.mark.asyncio
+async def test_session_list_has_title_and_ordering(client):
+    import server.endpoints.sessions as sessions_mod
+
+    await sessions_mod.record_message("s-title-1", "user", "第一个会话的问题")
+    await sessions_mod.record_message("s-title-2", "user", "第二个会话的问题")
+
+    resp = client.get("/api/sessions")
+    assert resp.status_code == 200
+    sessions = {s["id"]: s for s in resp.json()["sessions"]}
+    assert sessions["s-title-1"]["title"] == "第一个会话的问题"
+    assert sessions["s-title-2"]["title"] == "第二个会话的问题"
+
+
+@pytest.mark.asyncio
+async def test_session_delete_endpoint(client):
+    import server.endpoints.sessions as sessions_mod
+
+    await sessions_mod.record_message("s-del", "user", "待删除")
+    assert client.delete("/api/sessions/s-del").status_code == 200
+    assert all(s["id"] != "s-del" for s in client.get("/api/sessions").json()["sessions"])
+    # 再删一次 → 404
+    assert client.delete("/api/sessions/s-del").status_code == 404
