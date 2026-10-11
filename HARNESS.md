@@ -360,25 +360,31 @@ db-agent/
 
 ---
 
-## Harness 覆盖对照 (learn-claude-code)
+## Harness 能力对照
 
-| 课程 | 机制 | db-agent 落点 |
-|------|------|----------------|
-| s01 Agent Loop | while + stop_reason | `orchestration/single/agent.py` + multi graph |
-| s02 Tool Use | dispatch map | `tools/` + `@tool` |
-| s03 Permission | 审批 | `constraints/entitlement.py` |
-| s04 Hooks | 前后拦截 | `constraints/guardrails.py` L1/L2/L3 |
-| s05 TodoWrite | 计划后执行 | `orchestration/multi/task_system.py` |
-| s06 Subagent | 上下文隔离 | 6× `ConfiguredAgent` |
-| s07 Skill / Prompt | 按需组装 | `context/system_prompt.py` |
-| s08 Compact | 压缩 | `context/hybrid_window_manager.py` + `token_budget.py` |
-| s09 Memory | 筛选整理 | `memory/` + controller |
-| s11 Recovery | 重试换路 | `constraints/retry.py` + SQL 自愈 + replan≤1 |
-| s12 Task / Checkpoint | 持久化 | Task board + `db/agent_state.db` |
-| s15 Teams | 多 Agent | Router → 专业 Agent → Analysis → Reflection |
-| — | 动态上下文 | schema_discovery + sql_examples + template_matcher |
-| — | 自学习 | `memory/feedback.py` → sql_examples |
-| — | 观测/评估 | observation/* + tests/eval_runner |
+> 对齐 [learn-claude-code](https://github.com/shareAI-lab/learn-claude-code) 的课程体系。
+> **面试时讲「机制名」，不要念 `s01` / `s15`** —— 对方听不懂课程编号。
+> 每个机制都指到可查证的函数或文件，被问「具体在哪」可以当场打开。
+
+| 机制 | 课程 | 作用 | 代码落点 |
+|------|------|------|-----------|
+| **Agent Loop** | s01 | 模型提议 → 系统执行 → 结果回灌 → 继续，直到停止条件 | `orchestration/single/agent.py: agent_loop()` + multi graph |
+| **Tool Use** | s02 | 工具注册表 + 从函数签名生成 JSON Schema + dispatch | `tools/__init__.py: @tool`（24 个工具）|
+| **Permission** | s03 | 5 角色 RBAC，收口到表 / 行 / 文档级 | `constraints/entitlement.py` |
+| **Hooks** | s04 | 三层护栏：输入注入 / SQL 写操作 / 输出 PII | `constraints/guardrails.py: guard_input / guard_sql / guard_output` |
+| **TodoWrite** | s05 | 计划后执行，进度与状态可查 | `orchestration/multi/task_system.py: TaskManager` |
+| **Subagent** | s06 | 6 个专职 Agent，各自独立上下文 | `orchestration/multi/agents.py`（`ConfiguredAgent` ×6）|
+| **Skill / Prompt** | s07 | 按角色按需组装 System Prompt | `context/system_prompt.py: build_system_prompt()` |
+| **Compact** | s08 | Token 预算 + 窗口压缩，长会话不炸 | `context/token_budget.py` + `hybrid_window_manager.py` |
+| **Memory** | s09 | 短期摘要 / 长期向量 / 自学习回流 | `memory/`（`feedback.py` → `context/sql_examples.py`）|
+| **Recovery** | s11 | 重试 + 熔断 + 幂等 + SQL 自愈 + 失败重规划 | `constraints/retry.py` + `idempotency.py` |
+| **Task / Checkpoint** | s12 | 状态落盘，进程重启可断点续跑 | Task board + `db/agent_state.db` |
+| **Teams** | s15 | Router → 专业 Agent → Analysis → Reflection | `orchestration/multi/` |
+| **动态上下文** | — | Schema Linking + SQL few-shot + 模板匹配 | `context/schema_discovery.py` · `sql_examples.py` · `template_matcher.py` |
+| **观测 / 评估** | — | Trace、成本、Opik、47 Eval + 30 Golden | `observation/*` + `tests/eval_runner.py` |
+
+**没覆盖的（属于 Agent Platform，不是 Harness）**：任务队列与 Worker Pool、分布式状态一致性（Lease / Heartbeat）、Agent Sandbox。
+这三条是「让很多个 Agent 同时跑起来」要解决的问题，与 Harness 是两个岗位。
 
 ---
 
