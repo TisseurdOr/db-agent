@@ -48,6 +48,8 @@
 | [db-agent-产品介绍.pptx](项目介绍/db-agent-产品介绍.pptx) | 产品介绍幻灯片 |
 | [db-agent-WWH讲解.pptx](项目介绍/db-agent-WWH讲解.pptx) | Why / What / How |
 | [项目案例.md](项目介绍/项目案例.md) | 案例口径 |
+| [prompt-迭代记录.md](项目介绍/prompt-迭代记录.md) | **4 组提示词改动的前后对比 + 实测数据** |
+| [失败案例复盘.md](项目介绍/失败案例复盘.md) | **4 个真实失败：现象 / 根因 / 修法 / 防回归** |
 | [项目复盘-可复用模块库.md](项目介绍/项目复盘-可复用模块库.md) · [Agent可复用模块库.pptx](项目介绍/Agent可复用模块库.pptx) | 可复用模块 |
 | [2026-08-06_项目复盘报告.md](项目介绍/2026-08-06_项目复盘报告.md) | 成长轨迹复盘 |
 | [engineering-mechanisms.md](项目介绍/engineering-mechanisms.md) | 工程机制说明 |
