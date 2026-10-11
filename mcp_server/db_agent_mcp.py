@@ -147,6 +147,11 @@ async def _drive(runner, *, mode: str, question: str = "", approved: bool = True
                 "answer": data.get("answer", ""),
                 "sql": data.get("sql") or info.get("sql", ""),
                 "plan": data.get("plan") or info.get("plan", []),
+                # 图表以 ECharts 配置（结构化 JSON）返回，不是图片：
+                # MCP 工具结果是文本/JSON，host 想画就自己拿这份 config 画，
+                # 不画也不至于像之前那样直接丢数据。
+                "charts": data.get("charts") or [],
+                "stats": data.get("stats") or info.get("stats", {}),
                 "tokens": data.get("tokens") or info.get("tokens", 0),
                 "elapsed": data.get("total_elapsed"),
                 "trace_id": data.get("trace_id", ""),
@@ -177,6 +182,9 @@ async def ask_db_agent(
     可以问：查数 / 对账 / 看表结构 / 生成只读 SQL / 生成 INSERT 脚本。
     如果问题需要写库，会返回 status=needs_approval，此时把 SQL 交给用户确认，
     再用 resume_db_agent 传 approved=true 继续执行。
+
+    注意可视化：MCP 结果是文本，画不出图。需要图表时用返回值里的 charts
+    （ECharts 配置 + 数据），在 host 侧渲染；web 控制台那条路才直接出图。
 
     参数:
         question: 自然语言问题，例如「华东区上个月销售额 top10 门店」
