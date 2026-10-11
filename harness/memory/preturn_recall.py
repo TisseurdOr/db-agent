@@ -220,7 +220,7 @@ async def recall_for_turn(
                 source = "self_query"
             elif rag is not None:
                 memories = await rag.retrieve(
-                    q, top_k=top_k, use_hyde=True, use_rerank=True,
+                    q, top_k=top_k,
                 )
                 memories = [
                     m for m in memories

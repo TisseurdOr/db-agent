@@ -47,7 +47,7 @@ db-agent 接受中文自然语言提问，产出数据结论。一次查询的�
 > **范围说明**：工程机制按生产思路实现（权限 / HITL / 自愈 / 观测 / 可切换后端），已上线。
 > SQLite 为真实本地库；**HBase 是本地内存模拟器**（API 对齐，无真实集群）。
 > **Hive/数仓 agent 查的是真实的 Olist 五层数仓**（`db/warehouse.db`，由 `scripts/build_olist_warehouse.py` 从公开数据集构建），另提供 HiveQL 语法模板；接真实 Hive 集群只需换连接器。
-> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **612** 条）。
+> 测试全部离线可跑：LLM / Embedding 在测试里用脚本化 fake（`pytest tests/` 直接全绿，当前 **614** 条（613 通过 + 1 条 live 跳过））。
 > Web 可演示完整链路：可选 `WEB_API_TOKEN` 鉴权；会话默认内存、配置 `REDIS_URL` 后存 Redis。
 > 向量库支持 ChromaDB / Milvus 双后端（`VECTOR_DB` 切换），Redis / Milvus 均「可选后端 + 自动降级」。
 
@@ -78,7 +78,7 @@ db-agent 接受中文自然语言提问，产出数据结论。一次查询的�
 
 **裁判为什么要换一个模型**：被测是 DeepSeek，裁判是 Kimi —— 自己评自己有系统性偏高。
 
-**回归门禁**：`pytest tests/` 共 **612** 条（LLM / Embedding 在测试里全用脚本化 fake，离线全绿），CI 另跑覆盖率门禁 `--cov-fail-under=60`。
+**回归门禁**：`pytest tests/` 共 **614** 条（LLM / Embedding 在测试里全用脚本化 fake，离线全绿），CI 另跑覆盖率门禁 `--cov-fail-under=60`。
 
 ### 检索质量：做了消融，而不是"加了就算数"
 
@@ -92,7 +92,10 @@ db-agent 接受中文自然语言提问，产出数据结论。一次查询的�
 | +混合(BM25+RRF) | 0.80 | 0.9 | 0.864 | 5.9s | 0 |
 
 **结论是负面的，也照实写**：在这份数据规模上，HyDE 与 rerank **没有提升任何指标，却把耗时放大了 20~50 倍**。
-生产默认仍是 `use_hyde=True, use_rerank=True` —— 这份消融指出的优化点**还没落地**，是我下一步要处理的。
+
+**已经据此改掉默认值**：生产默认走裸向量（`use_hyde=False, use_rerank=False`）。
+需要时按需打开 —— `RAG_USE_HYDE=1` / `RAG_USE_RERANK=1`（文档量大、提问用词与文档差异大时再试）。
+即 **发现 → 决策 → 落地 → 可回退**，而不是只在文档里留一句结论。
 
 > 这一条比「我加了 HyDE 和 rerank」值钱：它证明我会**验证一个技术到底有没有用**，而不是照着教程往上堆。
 
@@ -318,7 +321,7 @@ Single 模式差异：不经 Router / DQ / Confidence Gate / Analysis / Reflecti
 | **二 · 多 Agent** | 多引擎协同 | LangGraph 10 节点 / 6 Agent；Router 四层短路；失败重规划 | 多引擎协同编排 |
 | **三 · 权限安全** | Prompt 拦不住越权 | 5 角色 RBAC；行级 WHERE 改写；三层护栏；HITL `interrupt()` | 权限下沉工具层 |
 | **四 · 可靠性** | 挂了也不崩 | 重试 → SQL 自愈 → 重规划 → **熔断 / 幂等 / 告警**；SSE 断流 | 可靠性闭环 |
-| **五 · 工程化** | demo → 产品 | `db-agent` CLI；612 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
+| **五 · 工程化** | demo → 产品 | `db-agent` CLI；614 离线测试；47 Eval + Golden Set；Redis / Milvus 可切换；质量门禁 | 可演示、可 CI 的产品形态 |
 
 
 ### 设计取舍（为什么这样）
@@ -514,7 +517,7 @@ Multi:   用户 → Router → [DQ?] → sql|hbase|hive|strategy
 ### Eval
 
 ```bash
-pytest tests/ -v                               # 全量离线用例（612，默认不跑 live）
+pytest tests/ -v                               # 全量离线用例（614，默认不跑 live）
 pytest tests/ -m live                          # 真实 LLM 端到端 smoke（需 API key，默认排除）
 pytest tests/ --cov --cov-fail-under=60        # 带覆盖率门禁（CI 已接入）
 python tests/eval_runner.py --fast             # 护栏用例（零 API，已接入 CI）

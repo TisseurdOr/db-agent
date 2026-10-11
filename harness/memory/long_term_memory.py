@@ -17,6 +17,20 @@ from harness.config import DEFAULT_MODEL
 from harness.constraints.retry import acall_with_retry
 from harness.observation.llm import extract_text, logger  # 安全取文字 + 共享日志器
 
+
+# ── 检索增强开关：默认关闭 ───────────────────────────────────────────────
+# 依据 tests/eval_retrieval_ablation.py 的消融（结果见 logs/ablation_results.json）：
+# 在本项目的数据规模上，HyDE 与 rerank 对 hit@1 / hit@3 / MRR 零提升，
+# 却把一次检索从 5.9s 拉到 290s（LLM 调用 0 → 60 次）。
+# 需要时按需打开——文档量大、query 与文档用词差异大的场景再试。
+def _flag(name: str) -> bool:
+    return os.getenv(name, "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def retrieval_flags() -> tuple[bool, bool]:
+    """返回 (use_hyde, use_rerank)。默认都关，用环境变量可打开。"""
+    return _flag("RAG_USE_HYDE"), _flag("RAG_USE_RERANK")
+
 RERANK_PROMPT = """你是检索排序器。根据查询与文档片段的相关性，给每个编号打分（0-1）。
 只输出 JSON 数组，按相关性从高到低排序，例如：
 [{{"index": 3, "score": 0.95}}, {{"index": 7, "score": 0.61}}]
@@ -172,10 +186,18 @@ class RAGPipeline:
         return vecs
     async def retrieve(self, query: str, top_k: int = 5,
                        filters: dict | None = None,
-                       use_hyde: bool = True,
-                       use_rerank: bool = True,
+                       use_hyde: bool | None = None,
+                       use_rerank: bool | None = None,
                        use_hybrid: bool = False) -> list[dict]:
-        """检索 + 可选 HyDE + 可选 rerank + 可选混合(BM25+RRF)。开关独立，便于消融。"""
+        """检索 + 可选 HyDE + 可选 rerank + 可选混合(BM25+RRF)。开关独立，便于消融。
+
+        传 None 时取 retrieval_flags()——默认关闭，理由见文件顶部注释。
+        """
+        default_hyde, default_rerank = retrieval_flags()
+        if use_hyde is None:
+            use_hyde = default_hyde
+        if use_rerank is None:
+            use_rerank = default_rerank
         logger.info(
             "retrieve 开始: query=%r, top_k=%d, HyDE=%s, rerank=%s, hybrid=%s",
             query, top_k, use_hyde, use_rerank, use_hybrid,

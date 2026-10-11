@@ -225,7 +225,6 @@ async def self_query_retrieve(
         try:
             results = await reranker.retrieve(
                 semantic, top_k=top_k, filters=where,
-                use_hyde=True, use_rerank=True,
             )
         except Exception as e:
             logger.info("self_query: reranker 检索失败 (%s)，降级纯向量", e)
@@ -252,7 +251,6 @@ async def self_query_retrieve(
             try:
                 results = await reranker.retrieve(
                     semantic, top_k=top_k, filters=_build_where({}, user_id),
-                    use_hyde=True, use_rerank=True,
                 )
             except Exception as e:
                 logger.info("self_query: reranker 降级检索也失败 (%s)", e)
